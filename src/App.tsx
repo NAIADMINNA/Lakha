@@ -802,12 +802,19 @@ export default function App() {
       setLineLogs(nextLogs);
       setTasks(nextTasks);
 
-      showNotice(
-        'success',
-        deliveryChannel === 'line_messaging_api'
-          ? apiNotice || `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าแอป LINE OA สำเร็จ!`
-          : `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว`
-      );
+      if (deliveryChannel === 'line_messaging_api') {
+        showNotice(
+          'success',
+          apiNotice || `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าแอป LINE OA สำเร็จ!`
+        );
+      } else if (lineSettings.channelAccessToken.trim() && apiNotice) {
+        showNotice('error', apiNotice);
+      } else {
+        showNotice(
+          'success',
+          `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว`
+        );
+      }
     },
     [categories, lineLogs, lineSettings, showNotice, tasks]
   );

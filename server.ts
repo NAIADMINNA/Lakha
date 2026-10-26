@@ -861,9 +861,9 @@ async function startServer() {
       }
 
       const appUrl =
-        originUrl && String(originUrl).startsWith('http')
+        originUrl && String(originUrl).startsWith('https://')
           ? String(originUrl)
-          : process.env.APP_URL && process.env.APP_URL.startsWith('http')
+          : process.env.APP_URL && process.env.APP_URL.startsWith('https://')
           ? process.env.APP_URL
           : 'https://calendar.google.com';
 
@@ -902,8 +902,18 @@ async function startServer() {
         };
       }
 
+      const fallbackTextMessage = {
+        type: 'text',
+        text:
+          text ||
+          (taskTitle
+            ? `🔔 แจ้งเตือนงาน: ${taskTitle}\n🗓️ วันที่: ${date || ''} เวลา ${time || ''} น.\n${description || ''}`
+            : 'ข้อความแจ้งเตือนจาก SheetCal LINE OA'),
+      };
+
       const messages = [flexMessage];
       const isValidLineTargetId = /^[UCR][0-9a-fA-F]{32}$/.test(targetUserId);
+      let pushErrorDetail = '';
 
       if (isValidLineTargetId) {
         const pushRes = await fetch('https://api.line.me/v2/bot/message/push', {
@@ -923,13 +933,39 @@ async function startServer() {
             ok: true,
             simulated: false,
             mode: 'push',
-            message: `ส่งการ์ดแจ้งเตือนดีไซน์ใหม่เข้าแอป LINE Official Account สำเร็จแล้ว!`,
+            message: `ส่งการ์ดแจ้งเตือนเข้าแอป LINE Official Account (Push ไปยัง ${targetUserId.slice(0, 8)}...) สำเร็จแล้ว!`,
+          });
+          return;
+        }
+
+        const pushErrJson = await pushRes.json().catch(() => ({}));
+        pushErrorDetail = pushErrJson?.message || `HTTP ${pushRes.status}`;
+
+        // Retry Push with plain text in case Flex JSON had any issue
+        const pushTextRes = await fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            to: targetUserId,
+            messages: [fallbackTextMessage],
+          }),
+        });
+
+        if (pushTextRes.ok) {
+          res.status(200).json({
+            ok: true,
+            simulated: false,
+            mode: 'push_text',
+            message: `ส่งข้อความแจ้งเตือนเข้าแอป LINE Official Account สำเร็จแล้ว!`,
           });
           return;
         }
       }
 
-      // Fallback to Broadcast API
+      // Fallback to Broadcast API (sends to all friends of the LINE OA)
       const broadcastRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
         method: 'POST',
         headers: {
@@ -943,12 +979,39 @@ async function startServer() {
 
       if (!broadcastRes.ok) {
         const errData = await broadcastRes.json().catch(() => ({}));
+        // Retry Broadcast with plain text fallback
+        const broadcastTextRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            messages: [fallbackTextMessage],
+          }),
+        });
+
+        if (broadcastTextRes.ok) {
+          res.status(200).json({
+            ok: true,
+            simulated: false,
+            mode: 'broadcast_text',
+            message: 'ส่งข้อความแจ้งเตือนเข้าแอป LINE (Broadcast) สำเร็จแล้ว!',
+          });
+          return;
+        }
+
+        const invalidIdHint =
+          targetUserId && !isValidLineTargetId
+            ? ` (หมายเหตุ: LINE User ID "${targetUserId}" ไม่ใช่รหัส 33 ตัวอักษรที่ขึ้นต้นด้วย U)`
+            : '';
+
         res.status(200).json({
           ok: false,
           simulated: true,
           message: `ไม่สามารถส่งผ่าน LINE API ได้ (${
-            errData?.message || `HTTP ${broadcastRes.status}`
-          }) — กรุณาตรวจสอบ Channel Access Token`,
+            pushErrorDetail || errData?.message || `HTTP ${broadcastRes.status}`
+          })${invalidIdHint} — กรุณากดปุ่ม "ตรวจสอบสถานะ Token & ทดสอบยิงเข้า LINE" ในแท็บตั้งค่า API`,
         });
         return;
       }
@@ -957,7 +1020,10 @@ async function startServer() {
         ok: true,
         simulated: false,
         mode: 'broadcast',
-        message: 'ส่งการ์ดแจ้งเตือน Flex Message ดีไซน์ใหม่เข้าแอป LINE ของคุณสำเร็จแล้ว!',
+        message:
+          targetUserId && !isValidLineTargetId
+            ? 'ส่งการ์ดแจ้งเตือนเข้าแอป LINE สำเร็จแล้ว (ส่งแบบ Broadcast เนื่องจาก LINE User ID ไม่ใช่รหัส U 33 ตัวอักษร)'
+            : 'ส่งการ์ดแจ้งเตือน Flex Message ดีไซน์ใหม่เข้าแอป LINE ของคุณสำเร็จแล้ว!',
       });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -965,6 +1031,199 @@ async function startServer() {
         ok: false,
         simulated: true,
         message: `บันทึกข้อความทดสอบในห้องแชทจำลองแล้ว (หมายเหตุการเชื่อมต่อ LINE API: ${msg})`,
+      });
+    }
+  });
+
+  /**
+   * Diagnose LINE Channel Access Token, Bot Info, User ID format/friendship, and test delivery
+   */
+  app.post('/api/line/diagnose', async (req, res) => {
+    try {
+      const { channelAccessToken, targetUserId, sendTest } = req.body || {};
+      const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
+      const rawUserId = String(targetUserId || '').trim();
+
+      const steps: {
+        step: string;
+        status: 'ok' | 'warn' | 'error';
+        detail: string;
+      }[] = [];
+
+      if (!token) {
+        res.status(200).json({
+          ok: false,
+          steps: [
+            {
+              step: '1. ตรวจสอบ LINE Channel Access Token',
+              status: 'error',
+              detail: 'ยังไม่ได้ระบุ LINE Channel Access Token กรุณานำ Token (Long-lived) จาก LINE Developers Console > Messaging API มาวาง',
+            },
+          ],
+        });
+        return;
+      }
+
+      // Step 1: Verify Bot Info via GET https://api.line.me/v2/bot/info
+      const botInfoRes = await fetch('https://api.line.me/v2/bot/info', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!botInfoRes.ok) {
+        const errBody = await botInfoRes.json().catch(() => ({}));
+        steps.push({
+          step: '1. ตรวจสอบ LINE Channel Access Token',
+          status: 'error',
+          detail: `Token ไม่ถูกต้องหรือหมดอายุ (${errBody?.message || `HTTP ${botInfoRes.status}`}) — กรุณาไปที่ LINE Developers Console > เลือก Channel แบบ Messaging API > ออก Channel access token (long-lived) ใหม่`,
+        });
+        res.status(200).json({ ok: false, steps });
+        return;
+      }
+
+      const botInfo = (await botInfoRes.json()) as {
+        displayName?: string;
+        basicId?: string;
+        userId?: string;
+      };
+
+      steps.push({
+        step: '1. ตรวจสอบ LINE Channel Access Token',
+        status: 'ok',
+        detail: `เชื่อมต่อสำเร็จ! ชื่อบอท LINE OA: "${botInfo.displayName || 'ไม่ระบุ'}" (LINE ID บอท: ${botInfo.basicId || '-'})`,
+      });
+
+      // Step 2: Check User ID format & profile
+      const isValidFormat = /^[UCR][0-9a-fA-F]{32}$/.test(rawUserId);
+      if (!rawUserId) {
+        steps.push({
+          step: '2. ตรวจสอบ LINE User ID (ผู้รับ)',
+          status: 'ok',
+          detail: `ไม่ได้ระบุ User ID เฉพาะเจาะจง — ระบบจะใช้โหมด Broadcast ส่งแจ้งเตือนหาทุกคนที่แอดบอท "${botInfo.displayName || ''}" (${botInfo.basicId || ''}) เป็นเพื่อน`,
+        });
+      } else if (!isValidFormat) {
+        steps.push({
+          step: '2. ตรวจสอบรูปแบบ LINE User ID',
+          status: 'warn',
+          detail: `ค่าที่กรอก ("${rawUserId}") ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร! รหัสที่ถูกต้องต้องขึ้นต้นด้วยตัว U ตามด้วยตัวเลข/ตัวอักษร 32 ตัว (เช่น U4af4980629...) ดูได้จาก LINE Developers Console > แท็บ Basic settings > Your user ID (ไม่ใช่ LINE ID ส่วนตัวที่ใช้แอดเพื่อน) — ระบบจะสลับไปส่งแบบ Broadcast แทนอัตโนมัติ`,
+        });
+      } else {
+        // Verify if the bot can access this user's profile (means user has added the bot as a friend and hasn't blocked it)
+        if (rawUserId.startsWith('U')) {
+          const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${rawUserId}`, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (profileRes.ok) {
+            const profileData = (await profileRes.json()) as { displayName?: string };
+            steps.push({
+              step: '2. ตรวจสอบ LINE User ID และการเป็นเพื่อนกับบอท',
+              status: 'ok',
+              detail: `รูปแบบ User ID ถูกต้อง และพบผู้ใช้ "${profileData.displayName || rawUserId}" เป็นเพื่อนกับบอท LINE OA เรียบร้อยแล้ว!`,
+            });
+          } else {
+            steps.push({
+              step: '2. ตรวจสอบ LINE User ID และการเป็นเพื่อนกับบอท',
+              status: 'warn',
+              detail: `รูปแบบรหัส U... ถูกต้อง แต่บอทไม่พบโปรไฟล์ผู้ใช้นี้ (สาเหตุ: คุณอาจยังไม่ได้สแกน QR Code แอดบอท ${botInfo.basicId || ''} เป็นเพื่อนในแอป LINE หรือบล็อกบอทไว้ หรือเป็น User ID คนละ Provider)`,
+            });
+          }
+        } else {
+          steps.push({
+            step: '2. ตรวจสอบรหัสกลุ่ม/ห้องแชท (Group / Room ID)',
+            status: 'ok',
+            detail: `รูปแบบรหัส ${rawUserId.slice(0, 8)}... ถูกต้อง (อย่าลืมเชิญบอท ${botInfo.basicId || ''} เข้ากลุ่ม LINE ก่อนส่งข้อความ)`,
+          });
+        }
+      }
+
+      // Step 3: Send actual test message if requested
+      if (sendTest) {
+        const testMsg = {
+          type: 'text',
+          text: `✅ [SheetCal LINE Diagnostic]\nทดสอบการเชื่อมต่อแจ้งเตือนสำเร็จ!\n🤖 บอท: ${botInfo.displayName || 'LINE OA'} (${botInfo.basicId || ''})\n⏰ เวลาทดสอบ: ${new Date().toLocaleTimeString('th-TH')} น.`,
+        };
+
+        let sentOk = false;
+        if (isValidFormat) {
+          const pushRes = await fetch('https://api.line.me/v2/bot/message/push', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              to: rawUserId,
+              messages: [testMsg],
+            }),
+          });
+
+          if (pushRes.ok) {
+            sentOk = true;
+            steps.push({
+              step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง (Push API)',
+              status: 'ok',
+              detail: `ส่งข้อความเข้าแอป LINE ของคุณสำเร็จแล้ว! กรุณาเช็กข้อความในแชทบอท "${botInfo.displayName || ''}" บนมือถือ`,
+            });
+          } else {
+            const pushErr = await pushRes.json().catch(() => ({}));
+            steps.push({
+              step: '3. ทดสอบส่งแบบ Push API',
+              status: 'warn',
+              detail: `ส่งแบบ Push ไปยัง ${rawUserId.slice(0, 10)}... ไม่สำเร็จ (${pushErr?.message || `HTTP ${pushRes.status}`}) — กำลังลองส่งแบบ Broadcast แทน...`,
+            });
+          }
+        }
+
+        if (!sentOk) {
+          const bcRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              messages: [testMsg],
+            }),
+          });
+
+          if (bcRes.ok) {
+            sentOk = true;
+            steps.push({
+              step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง (Broadcast API)',
+              status: 'ok',
+              detail: `ส่งข้อความแบบ Broadcast สำเร็จแล้ว! (หากคุณแอดบอท "${botInfo.displayName || ''}" ${botInfo.basicId || ''} เป็นเพื่อนใน LINE แล้ว ข้อความจะเด้งขึ้นทันที)`,
+            });
+          } else {
+            const bcErr = await bcRes.json().catch(() => ({}));
+            steps.push({
+              step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง',
+              status: 'error',
+              detail: `ส่งไม่สำเร็จ (${bcErr?.message || `HTTP ${bcRes.status}`}) กรุณาตรวจสอบโควต้าข้อความรายเดือนของ LINE OA หรือการตั้งค่า Messaging API`,
+            });
+          }
+        }
+
+        res.status(200).json({ ok: sentOk, botInfo, steps });
+        return;
+      }
+
+      res.status(200).json({ ok: true, botInfo, steps });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      res.status(200).json({
+        ok: false,
+        steps: [
+          {
+            step: 'ข้อผิดพลาดในการเชื่อมต่อกับ LINE API',
+            status: 'error',
+            detail: msg,
+          },
+        ],
       });
     }
   });

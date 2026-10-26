@@ -101,7 +101,141 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     ok: boolean;
     message: string;
   } | null>(null);
+  const [isDiagnosingLine, setIsDiagnosingLine] = useState(false);
+  const [lineDiagnosticResult, setLineDiagnosticResult] = useState<{
+    ok: boolean;
+    steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[];
+  } | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const handleDiagnoseLineApi = async (sendTest = true) => {
+    setIsDiagnosingLine(true);
+    setLineDiagnosticResult(null);
+    const token = lineSettings.channelAccessToken.trim();
+    const rawUserId = lineSettings.targetUserId.trim();
+    const isValidUserIdFormat = /^[UCR][0-9a-fA-F]{32}$/.test(rawUserId);
+
+    try {
+      // 1. Try server-side real LINE API diagnostic (/api/line/diagnose)
+      const res = await fetch('/api/line/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelAccessToken: token,
+          targetUserId: rawUserId,
+          sendTest,
+        }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        setLineDiagnosticResult({
+          ok: Boolean(data.ok),
+          steps: Array.isArray(data.steps) ? data.steps : [],
+        });
+        setIsDiagnosingLine(false);
+        return;
+      }
+    } catch {
+      // Fallback to static web / GitHub Pages diagnostic
+    }
+
+    // 2. Fallback diagnostic when running on GitHub Pages (Static Hosting)
+    const steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[] = [];
+    if (!token) {
+      steps.push({
+        step: '1. ตรวจสอบ LINE Channel Access Token',
+        status: 'error',
+        detail:
+          'ยังไม่ได้วาง LINE Channel Access Token กรุณาคัดลอกจาก LINE Developers Console > แท็บ Messaging API มาวาง',
+      });
+      setLineDiagnosticResult({ ok: false, steps });
+      setIsDiagnosingLine(false);
+      return;
+    }
+
+    if (token.length < 80) {
+      steps.push({
+        step: '1. ตรวจสอบรูปแบบ LINE Channel Access Token',
+        status: 'warn',
+        detail: `ความยาว Token สั้นผิดปกติ (${token.length} ตัวอักษร) — Channel Access Token (Long-lived) ของ LINE ปกติจะมีความยาวประมาณ 170+ ตัวอักษร (ไม่ใช่ Channel Secret หรือ Channel ID)`,
+      });
+    } else {
+      steps.push({
+        step: '1. ตรวจสอบรูปแบบ LINE Channel Access Token',
+        status: 'ok',
+        detail: `พบ Channel Access Token ความยาว ${token.length} ตัวอักษร รูปแบบถูกต้อง`,
+      });
+    }
+
+    if (!rawUserId) {
+      steps.push({
+        step: '2. ตรวจสอบ LINE User ID',
+        status: 'ok',
+        detail:
+          'เว้นว่างไว้ (โหมด Broadcast) — ระบบจะส่งแจ้งเตือนหาทุกคนที่แอด LINE OA นี้เป็นเพื่อนอัตโนมัติ',
+      });
+    } else if (!isValidUserIdFormat) {
+      steps.push({
+        step: '2. ตรวจสอบรูปแบบ LINE User ID',
+        status: 'error',
+        detail: `ค่าที่ระบุ ("${rawUserId}") ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร! รหัสที่ถูกต้องต้องขึ้นต้นด้วย U ตามด้วยรหัส 32 ตัวอักษร (เช่น U4af4980629...) ดูได้จาก LINE Developers Console > Basic settings > Your user ID (ไม่ใช่ LINE ID ส่วนตัวที่ใช้แอดเพื่อนครับ) แนะนำให้กดปุ่ม "ล้างค่าเพื่อส่งแบบ Broadcast" ด้านล่าง`,
+      });
+    } else {
+      steps.push({
+        step: '2. ตรวจสอบรูปแบบ LINE User ID',
+        status: 'ok',
+        detail: `รหัส ${rawUserId.slice(0, 10)}... ตรงตามรูปแบบ 33 ตัวอักษรของ LINE Messaging API`,
+      });
+    }
+
+    const trimmedGas = gasUrl.trim();
+    if (!trimmedGas.startsWith('https://script.google.com/macros/s/')) {
+      steps.push({
+        step: '3. ตรวจสอบตัวกลางส่ง LINE บน GitHub Pages (Google Apps Script)',
+        status: 'error',
+        detail:
+          'เนื่องจากเว็บที่รันบน GitHub Pages ไม่มี Backend Server เบราว์เซอร์จะถูก LINE บล็อก CORS หากยิงตรง — กรุณาวางลิงก์ Web App URL ของ Google Apps Script ด้านล่าง และอัปเดตโค้ด Apps Script เวอร์ชันล่าสุดเพื่อให้ช่วยส่งข้อความเข้า LINE',
+      });
+      setLineDiagnosticResult({ ok: false, steps });
+      setIsDiagnosingLine(false);
+      return;
+    }
+
+    if (sendTest) {
+      try {
+        await fetch(trimmedGas, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'push_line',
+            channelAccessToken: token,
+            to: isValidUserIdFormat ? rawUserId : '',
+            text: `✅ [SheetCal LINE Diagnostic]\nทดสอบส่งแจ้งเตือนผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
+          }),
+        });
+        steps.push({
+          step: '3. ทดสอบส่งข้อความเข้าแอป LINE ผ่าน Google Apps Script',
+          status: 'ok',
+          detail:
+            'ส่งคำสั่งแจ้งเตือนไปยัง Google Apps Script เรียบร้อยแล้ว! (ข้อสำคัญ: หากยังไม่มีข้อความเด้งใน LINE กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Apps Script แล้วกด Deploy > Manage deployments > แก้ไขเป็น New version)',
+        });
+        setLineDiagnosticResult({ ok: true, steps });
+      } catch {
+        steps.push({
+          step: '3. ทดสอบส่งข้อความเข้าแอป LINE ผ่าน Google Apps Script',
+          status: 'error',
+          detail:
+            'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น Anyone',
+        });
+        setLineDiagnosticResult({ ok: false, steps });
+      }
+    } else {
+      setLineDiagnosticResult({ ok: true, steps });
+    }
+    setIsDiagnosingLine(false);
+  };
 
   useEffect(() => {
     try {
@@ -1418,9 +1552,24 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             {activeSettingsTab === 'api' && (
               <div className="mt-4 space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    LINE Channel Access Token
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-slate-700">
+                      LINE Channel Access Token (Long-lived)
+                    </label>
+                    {lineSettings.channelAccessToken.trim() && (
+                      <span
+                        className={`text-[11px] font-semibold ${
+                          lineSettings.channelAccessToken.trim().length >= 80
+                            ? 'text-emerald-700'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {lineSettings.channelAccessToken.trim().length >= 80
+                          ? `✓ ความยาว ${lineSettings.channelAccessToken.trim().length} ตัวอักษร`
+                          : `⚠️ สั้นผิดปกติ (${lineSettings.channelAccessToken.trim().length} ตัวอักษร)`}
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="password"
                     value={lineSettings.channelAccessToken}
@@ -1436,9 +1585,25 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    LINE User ID (ไม่บังคับ)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-slate-700">
+                      LINE User ID (ไม่บังคับ — ต้องขึ้นต้นด้วย U ความยาว 33 ตัวอักษร)
+                    </label>
+                    {lineSettings.targetUserId.trim() && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateSettings({
+                            ...lineSettings,
+                            targetUserId: '',
+                          })
+                        }
+                        className="text-[11px] font-semibold text-indigo-600 hover:underline"
+                      >
+                        ล้างค่า (ใช้ Broadcast แทน)
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={lineSettings.targetUserId}
@@ -1448,9 +1613,82 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         targetUserId: e.target.value,
                       })
                     }
-                    placeholder="เว้นว่างไว้เพื่อส่งแบบ Broadcast"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-mono-tabular text-slate-900"
+                    placeholder="เว้นว่างไว้เพื่อส่งแบบ Broadcast หรือใส่รหัส U... 33 ตัวอักษร"
+                    className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono-tabular text-slate-900 ${
+                      lineSettings.targetUserId.trim() &&
+                      !/^[UCR][0-9a-fA-F]{32}$/.test(lineSettings.targetUserId.trim())
+                        ? 'border-amber-400 bg-amber-50/40'
+                        : 'border-slate-300'
+                    }`}
                   />
+                  {lineSettings.targetUserId.trim() &&
+                    !/^[UCR][0-9a-fA-F]{32}$/.test(lineSettings.targetUserId.trim()) && (
+                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 leading-relaxed">
+                        ⚠️ <strong>ข้อควรระวัง:</strong> รหัสที่กรอก (
+                        <code className="font-mono-tabular font-bold">
+                          {lineSettings.targetUserId.trim()}
+                        </code>
+                        ) ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร (ที่ขึ้นต้นด้วย{' '}
+                        <code className="font-bold">U</code> จากหน้า LINE Developers &gt; Basic
+                        settings &gt; Your user ID) แต่เป็นไอดีไลน์ทั่วไป — แนะนำให้กด{' '}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              targetUserId: '',
+                            })
+                          }
+                          className="font-bold text-indigo-700 underline"
+                        >
+                          ล้างค่าช่องนี้
+                        </button>{' '}
+                        เพื่อให้ระบบส่งแบบ <strong>Broadcast</strong> เข้าแชทบอทของคุณได้ทันทีครับ
+                      </div>
+                    )}
+                </div>
+
+                {/* Interactive LINE Connection Diagnostic Box */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    disabled={isDiagnosingLine}
+                    onClick={() => handleDiagnoseLineApi(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-semibold text-indigo-900 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 text-indigo-600" />
+                    <span>
+                      {isDiagnosingLine
+                        ? 'กำลังตรวจสอบ Token & ทดสอบยิงเข้า LINE...'
+                        : '🔍 ตรวจสอบสถานะ Token & ทดสอบยิงเข้า LINE จริง'}
+                    </span>
+                  </button>
+
+                  {lineDiagnosticResult && (
+                    <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
+                      <div className="text-xs font-bold text-slate-900">
+                        ผลการตรวจสอบการเชื่อมต่อ LINE Messaging API:
+                      </div>
+                      {lineDiagnosticResult.steps.map((s, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-2 rounded-md border text-xs leading-relaxed ${
+                            s.status === 'ok'
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                              : s.status === 'warn'
+                              ? 'bg-amber-50 border-amber-200 text-amber-950'
+                              : 'bg-red-50 border-red-200 text-red-900'
+                          }`}
+                        >
+                          <div className="font-bold">
+                            {s.status === 'ok' ? '✅ ' : s.status === 'warn' ? '⚠️ ' : '❌ '}
+                            {s.step}
+                          </div>
+                          <div className="mt-0.5 text-[11px]">{s.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

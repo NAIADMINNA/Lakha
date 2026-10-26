@@ -1057,22 +1057,43 @@ function doPost(e) {
 
     // รองรับการส่งแจ้งเตือน LINE Push / Broadcast จากหน้าเว็บโดยตรง (กรณีรันบน GitHub Pages)
     if (payload.action === 'push_line') {
-      var token = payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN;
-      var targetId = payload.to || '';
+      var token = String(payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
+      var targetId = String(payload.to || '').trim();
       var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
-      var endpoint = targetId ? 'https://api.line.me/v2/bot/message/push' : 'https://api.line.me/v2/bot/message/broadcast';
-      var bodyObj = targetId
-        ? { to: targetId, messages: [{ type: 'text', text: msgText }] }
-        : { messages: [{ type: 'text', text: msgText }] };
-      UrlFetchApp.fetch(endpoint, {
-        method: 'post',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + token
-        },
-        payload: JSON.stringify(bodyObj),
-        muteHttpExceptions: true
-      });
+      var isValidTarget = /^[UCR][0-9a-fA-F]{32}$/.test(targetId);
+      var sentSuccess = false;
+
+      if (isValidTarget) {
+        var pushResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'post',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          payload: JSON.stringify({
+            to: targetId,
+            messages: [{ type: 'text', text: msgText }]
+          }),
+          muteHttpExceptions: true
+        });
+        if (pushResp.getResponseCode() >= 200 && pushResp.getResponseCode() < 300) {
+          sentSuccess = true;
+        }
+      }
+
+      if (!sentSuccess) {
+        UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
+          method: 'post',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          payload: JSON.stringify({
+            messages: [{ type: 'text', text: msgText }]
+          }),
+          muteHttpExceptions: true
+        });
+      }
       return ContentService.createTextOutput(JSON.stringify({ status: 'ok', ok: true })).setMimeType(ContentService.MimeType.JSON);
     }
 
