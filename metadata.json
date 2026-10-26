@@ -1,0 +1,6 @@
+{
+  "name": "SheetCal LINE — ระบบปฏิทินงาน & แจ้งเตือน LINE OA บน Google Sheets",
+  "description": "ระบบจัดการตารางงาน To-Do List Calendar เชื่อมต่อฐานข้อมูล Google Sheets ของคุณเอง พร้อมระบบสั่งงานและแจ้งเตือนอัตโนมัติผ่าน LINE OA",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
