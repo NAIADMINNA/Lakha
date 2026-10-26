@@ -6,7 +6,7 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
-    base: '/Lakha/', //
+    base: process.env.GITHUB_ACTIONS ? '/Lakha/' : '/',
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

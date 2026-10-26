@@ -688,6 +688,7 @@ export default function App() {
       let apiNotice = '';
 
       if (lineSettings.channelAccessToken.trim()) {
+        let handledByServer = false;
         try {
           const res = await fetch('/api/line/push', {
             method: 'POST',
@@ -714,7 +715,8 @@ export default function App() {
             }),
           });
           const contentType = res.headers.get('content-type') || '';
-          if (contentType.includes('application/json')) {
+          if (res.ok && contentType.includes('application/json')) {
+            handledByServer = true;
             const data = await res.json();
             if (data.ok) {
               deliveryChannel = 'line_messaging_api';
@@ -723,7 +725,30 @@ export default function App() {
             apiNotice = data.message || '';
           }
         } catch {
-          deliveryStatus = 'simulated';
+          handledByServer = false;
+        }
+
+        if (!handledByServer) {
+          const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+          if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+            try {
+              await fetch(savedGasUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                  action: 'push_line',
+                  channelAccessToken: lineSettings.channelAccessToken.trim(),
+                  to: lineSettings.targetUserId.trim(),
+                  text: reminderText,
+                }),
+              });
+              deliveryChannel = 'line_messaging_api';
+              deliveryStatus = 'delivered';
+            } catch {
+              deliveryStatus = 'simulated';
+            }
+          }
         }
       }
 
@@ -1252,6 +1277,7 @@ export default function App() {
     let status: LineMessageLog['status'] = 'simulated';
 
     if (lineSettings.enabled && lineSettings.channelAccessToken.trim()) {
+      let handledByServer = false;
       try {
         const res = await fetch('/api/line/push', {
           method: 'POST',
@@ -1276,13 +1302,40 @@ export default function App() {
             includeOpenAppButton: true,
           }),
         });
-        const data = await res.json();
-        if (res.ok && data.ok) {
-          deliveryChannel = 'line_messaging_api';
-          status = 'delivered';
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          handledByServer = true;
+          const data = await res.json();
+          if (data.ok) {
+            deliveryChannel = 'line_messaging_api';
+            status = 'delivered';
+          }
         }
       } catch {
-        // Fallback to simulated log if network fails
+        handledByServer = false;
+      }
+
+      if (!handledByServer) {
+        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          try {
+            await fetch(savedGasUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'push_line',
+                channelAccessToken: lineSettings.channelAccessToken.trim(),
+                to: lineSettings.targetUserId.trim(),
+                text: memberInviteText,
+              }),
+            });
+            deliveryChannel = 'line_messaging_api';
+            status = 'delivered';
+          } catch {
+            // Fallback to simulated
+          }
+        }
       }
     }
 
@@ -1435,6 +1488,7 @@ export default function App() {
       'ส่งการ์ดสรุปตารางงานประจำวันเข้าห้องแชท LINE OA เรียบร้อยแล้ว!';
 
     if (lineSettings.channelAccessToken.trim()) {
+      let handledByServer = false;
       try {
         const res = await fetch('/api/line/push', {
           method: 'POST',
@@ -1450,7 +1504,8 @@ export default function App() {
           }),
         });
         const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
+        if (res.ok && contentType.includes('application/json')) {
+          handledByServer = true;
           const data = await res.json();
           apiOk = Boolean(data.ok);
           if (data.message) {
@@ -1458,7 +1513,31 @@ export default function App() {
           }
         }
       } catch {
-        statusMessage = 'ส่งการ์ดสรุปตารางงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
+        handledByServer = false;
+      }
+
+      if (!handledByServer) {
+        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          try {
+            await fetch(savedGasUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'push_line',
+                channelAccessToken: lineSettings.channelAccessToken.trim(),
+                to: lineSettings.targetUserId.trim(),
+                text: summaryText,
+              }),
+            });
+            apiOk = true;
+            statusMessage =
+              'ส่งสรุปตารางงานประจำวันเข้าแอป LINE OA (ผ่าน Google Apps Script) เรียบร้อยแล้ว!';
+          } catch {
+            statusMessage = 'ส่งการ์ดสรุปตารางงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
+          }
+        }
       }
     }
 

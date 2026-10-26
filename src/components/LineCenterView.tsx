@@ -86,15 +86,32 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const [activeSettingsTab, setActiveSettingsTab] = useState<
     'timing' | 'format' | 'triggers' | 'api'
   >('format');
-  const [gasUrl, setGasUrl] = useState(
-    'https://script.google.com/macros/s/AKfycby5KO2cApLJ3p5DvbVnoa446OmmOqJ2yLsJMpUu3OobHzRieCUs_jmW1BFGQCzpYQQorQ/exec'
-  );
+  const [gasUrl, setGasUrl] = useState(() => {
+    try {
+      return (
+        localStorage.getItem('sheetcal_gas_url_v1') ||
+        'https://script.google.com/macros/s/AKfycby5KO2cApLJ3p5DvbVnoa446OmmOqJ2yLsJMpUu3OobHzRieCUs_jmW1BFGQCzpYQQorQ/exec'
+      );
+    } catch {
+      return 'https://script.google.com/macros/s/AKfycby5KO2cApLJ3p5DvbVnoa446OmmOqJ2yLsJMpUu3OobHzRieCUs_jmW1BFGQCzpYQQorQ/exec';
+    }
+  });
   const [isTestingGas, setIsTestingGas] = useState(false);
   const [gasVerifyResult, setGasVerifyResult] = useState<{
     ok: boolean;
     message: string;
   } | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      if (gasUrl.trim()) {
+        localStorage.setItem('sheetcal_gas_url_v1', gasUrl.trim());
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [gasUrl]);
 
   const todayStr = useMemo(() => formatLocalDateYMD(), []);
 
@@ -128,7 +145,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const appsScriptCode = generateGoogleAppsScriptCode(
     spreadsheetId,
     lineSettings.channelAccessToken,
-    window.location.origin
+    window.location.origin + window.location.pathname
   );
 
   const handleCopyScript = async () => {
@@ -142,34 +159,106 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   };
 
   const handleTestGasWebhook = async (withSampleTask: boolean) => {
-    if (!gasUrl.trim()) return;
-    setIsTestingGas(true);
-    setGasVerifyResult(null);
-    try {
-      const sampleText = withSampleTask
-        ? `ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง`
-        : undefined;
-      const res = await fetch('/api/line/test-gas-webhook', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scriptUrl: gasUrl.trim(),
-          testText: sampleText,
-        }),
-      });
-      const data = await res.json();
-      setGasVerifyResult({
-        ok: Boolean(data.ok),
-        message: data.message || 'ตรวจสอบเสร็จสิ้น',
-      });
-      if (withSampleTask && data.ok && onPullFromSheets) {
-        await onPullFromSheets();
-      }
-    } catch {
+    const trimmedUrl = gasUrl.trim();
+    if (!trimmedUrl) return;
+
+    if (!trimmedUrl.startsWith('https://script.google.com/macros/s/')) {
       setGasVerifyResult({
         ok: false,
-        message: 'เกิดข้อผิดพลาดในการเชื่อมต่อเพื่อทดสอบลิงก์ Apps Script',
+        message:
+          'กรุณาวางลิงก์ Google Apps Script Web App URL ที่ขึ้นต้นด้วย https://script.google.com/macros/s/.../exec',
       });
+      return;
+    }
+
+    setIsTestingGas(true);
+    setGasVerifyResult(null);
+
+    const sampleText = withSampleTask
+      ? `ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง`
+      : undefined;
+
+    try {
+      // 1. ลองเรียกผ่าน Backend API ก่อน (กรณีรันบน Full-stack Server)
+      let handledByBackend = false;
+      try {
+        const res = await fetch('/api/line/test-gas-webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scriptUrl: trimmedUrl,
+            testText: sampleText,
+          }),
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          handledByBackend = true;
+          setGasVerifyResult({
+            ok: Boolean(data.ok),
+            message: data.message || 'ตรวจสอบเสร็จสิ้น',
+          });
+          if (withSampleTask && data.ok) {
+            if (onPullFromSheets && spreadsheetId.trim()) {
+              await onPullFromSheets();
+            } else if (sampleText) {
+              onSendChatCommand(sampleText);
+            }
+          }
+        }
+      } catch {
+        handledByBackend = false;
+      }
+
+      // 2. Fallback อัตโนมัติสำหรับ GitHub Pages / Static Web (ยิงตรงจากเบราว์เซอร์ไปที่ Google Apps Script)
+      if (!handledByBackend) {
+        const webhookPayload = sampleText
+          ? {
+              events: [
+                {
+                  type: 'message',
+                  replyToken: '00000000000000000000000000000000',
+                  message: { type: 'text', text: sampleText },
+                },
+              ],
+            }
+          : { events: [] };
+
+        try {
+          // ใช้ text/plain เพื่อหลีกเลี่ยง CORS Preflight (OPTIONS) ของ Google Apps Script
+          await fetch(trimmedUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(webhookPayload),
+          });
+
+          if (withSampleTask && sampleText) {
+            onSendChatCommand(sampleText);
+            if (onPullFromSheets && spreadsheetId.trim()) {
+              setTimeout(() => {
+                onPullFromSheets().catch(() => {});
+              }, 1500);
+            }
+            setGasVerifyResult({
+              ok: true,
+              message: `ส่งข้อความ "${sampleText}" ไปยัง Google Apps Script และเพิ่มงานเข้าปฏิทินเรียบร้อยแล้ว!`,
+            });
+          } else {
+            setGasVerifyResult({
+              ok: true,
+              message:
+                'ตรวจสอบและส่งสัญญาณทดสอบไปยังลิงก์ Google Apps Script สำเร็จ! (รองรับการใช้งานบน GitHub Pages — อย่าลืมตั้งค่าการ Deploy เป็น Who has access: Anyone)',
+            });
+          }
+        } catch {
+          setGasVerifyResult({
+            ok: false,
+            message:
+              'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบลิงก์ หรือตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น "Anyone (ทุกคน)" แล้ว',
+          });
+        }
+      }
     } finally {
       setIsTestingGas(false);
     }

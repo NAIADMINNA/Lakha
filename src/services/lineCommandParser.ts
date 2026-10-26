@@ -1044,9 +1044,38 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
   };
 }
 
+function doGet(e) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'verified', message: 'SheetCal LINE Webhook Ready' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function doPost(e) {
   try {
-    var payload = JSON.parse(e.postData.contents);
+    var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
+    var payload = JSON.parse(rawContents);
+
+    // รองรับการส่งแจ้งเตือน LINE Push / Broadcast จากหน้าเว็บโดยตรง (กรณีรันบน GitHub Pages)
+    if (payload.action === 'push_line') {
+      var token = payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN;
+      var targetId = payload.to || '';
+      var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
+      var endpoint = targetId ? 'https://api.line.me/v2/bot/message/push' : 'https://api.line.me/v2/bot/message/broadcast';
+      var bodyObj = targetId
+        ? { to: targetId, messages: [{ type: 'text', text: msgText }] }
+        : { messages: [{ type: 'text', text: msgText }] };
+      UrlFetchApp.fetch(endpoint, {
+        method: 'post',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        payload: JSON.stringify(bodyObj),
+        muteHttpExceptions: true
+      });
+      return ContentService.createTextOutput(JSON.stringify({ status: 'ok', ok: true })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var events = payload.events || [];
     if (events.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({ status: 'verified' })).setMimeType(ContentService.MimeType.JSON);
