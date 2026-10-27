@@ -47,9 +47,11 @@ import {
 import {
   doesTaskTriggerNotification,
   formatLocalDateYMD,
+  formatLocalTimeHM,
   formatRemindMinutesLabel,
   parseLineChatMessage,
   renderCustomLineMessage,
+  resolveTeamCalendarAppUrl,
 } from './services/lineCommandParser';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { ConfirmationModal } from './components/ConfirmationModal';
@@ -82,8 +84,29 @@ const STORAGE_KEYS = {
 export default function App() {
   const todayStr = formatLocalDateYMD();
 
-  // Navigation state
-  const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
+  // Navigation state (supports ?section=calendar or ?view=calendar deep-links from LINE Flex Cards)
+  const [activeSection, setActiveSection] = useState<ActiveSection>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
+      if (
+        sec === 'calendar' ||
+        sec === 'dashboard' ||
+        sec === 'team' ||
+        sec === 'line' ||
+        sec === 'categories' ||
+        sec === 'database'
+      ) {
+        return sec as ActiveSection;
+      }
+      if (params.get('date')) {
+        return 'calendar';
+      }
+    } catch {
+      // Ignore
+    }
+    return 'dashboard';
+  });
 
   // Shared Workspace ID (supports ?workspace=... URL param for shared calendar links)
   const [workspaceId] = useState<string>(() => {
@@ -217,7 +240,18 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [quickLineInput, setQuickLineInput] = useState<string>('');
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(todayStr);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const dateParam = (params.get('date') || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        return dateParam;
+      }
+    } catch {
+      // Ignore
+    }
+    return todayStr;
+  });
 
   // Task Modal State
   const [isTaskModalOpen, setIsTaskModalOpen] = useState<boolean>(false);
@@ -688,6 +722,12 @@ export default function App() {
       let apiNotice = '';
 
       if (lineSettings.channelAccessToken.trim()) {
+        const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+          customPublicUrl: lineSettings.publicCalendarUrl,
+          workspaceId,
+          spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+          date: task.date,
+        });
         let handledByServer = false;
         try {
           const res = await fetch('/api/line/push', {
@@ -706,7 +746,7 @@ export default function App() {
               categoryColor: cat?.color || '#2563EB',
               priority: task.priority,
               stats: summaryStats,
-              originUrl: window.location.origin,
+              originUrl: calendarDeepLinkUrl,
               messageFormat: formatMode,
               includeDescription: includeDesc,
               includeGoogleCalendarButton:
@@ -745,6 +785,7 @@ export default function App() {
               categoryColor: cat?.color || '#2563EB',
               priority: task.priority,
               messageFormat: formatMode,
+              originUrl: calendarDeepLinkUrl,
             });
             try {
               const gasRes = await fetch(savedGasUrl, {
@@ -852,7 +893,16 @@ export default function App() {
         );
       }
     },
-    [categories, lineLogs, lineSettings, showNotice, tasks]
+    [
+      categories,
+      lineLogs,
+      lineSettings,
+      sheetMeta?.spreadsheetId,
+      showNotice,
+      spreadsheetInput,
+      tasks,
+      workspaceId,
+    ]
   );
 
   // Automatic Background Check for Upcoming Tasks based on customizable timing & task trigger rules (runs every 30s)
@@ -1053,6 +1103,69 @@ export default function App() {
         }
       }
 
+      if (
+        (parsed.action === 'query_today' || parsed.action === 'query_pending') &&
+        lineSettings.enabled &&
+        lineSettings.channelAccessToken.trim()
+      ) {
+        const summaryDate = parsed.flexSummary?.date || formatLocalDateYMD();
+        const summaryDigestItems = parsed.flexSummary?.digestItems || [];
+        const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+          customPublicUrl: lineSettings.publicCalendarUrl,
+          workspaceId,
+          spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+          date: summaryDate,
+        });
+        (async () => {
+          let handled = false;
+          try {
+            const res = await fetch('/api/line/push', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                channelAccessToken: lineSettings.channelAccessToken.trim(),
+                to: lineSettings.targetUserId.trim(),
+                text: parsed.replyText,
+                date: summaryDate,
+                dateTime: parsed.flexSummary?.dateTime || summaryDate,
+                tasksList: summaryDigestItems,
+                originUrl: calendarDeepLinkUrl,
+              }),
+            });
+            const ct = res.headers.get('content-type') || '';
+            if (res.ok && ct.includes('application/json')) {
+              handled = true;
+            }
+          } catch {
+            handled = false;
+          }
+          if (!handled) {
+            const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+            if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+              try {
+                await fetch(savedGasUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({
+                    action: 'push_line',
+                    channelAccessToken: lineSettings.channelAccessToken.trim(),
+                    to: lineSettings.targetUserId.trim(),
+                    text: parsed.replyText,
+                    date: summaryDate,
+                    dateTime: parsed.flexSummary?.dateTime || summaryDate,
+                    tasksList: summaryDigestItems,
+                    messageFormat: lineSettings.messageFormat || 'executive_flex',
+                    originUrl: calendarDeepLinkUrl,
+                  }),
+                });
+              } catch {
+                // Ignore background error
+              }
+            }
+          }
+        })();
+      }
+
       setLineLogs(nextLogs);
     },
     [
@@ -1061,13 +1174,20 @@ export default function App() {
       handleDeleteTask,
       lineLogs,
       lineSettings.autoSyncOnLineCommand,
+      lineSettings.channelAccessToken,
       lineSettings.defaultRemindMinutes,
+      lineSettings.enabled,
+      lineSettings.messageFormat,
+      lineSettings.publicCalendarUrl,
+      lineSettings.targetUserId,
       pushCollaborativeWorkspace,
       sheetMeta,
       showNotice,
+      spreadsheetInput,
       syncAllToConnectedSheet,
       tasks,
       teamMembers,
+      workspaceId,
     ]
   );
 
@@ -1320,6 +1440,12 @@ export default function App() {
     let status: LineMessageLog['status'] = 'simulated';
 
     if (lineSettings.enabled && lineSettings.channelAccessToken.trim()) {
+      const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        workspaceId,
+        spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+        date: todayStr,
+      });
       let handledByServer = false;
       try {
         const res = await fetch('/api/line/push', {
@@ -1338,7 +1464,7 @@ export default function App() {
             categoryColor: newMember.avatarColor || '#06C755',
             priority: TaskPriority.MEDIUM,
             stats: summaryStats,
-            originUrl: window.location.origin,
+            originUrl: calendarDeepLinkUrl,
             messageFormat: lineSettings.messageFormat || 'executive_flex',
             includeDescription: true,
             includeGoogleCalendarButton: false,
@@ -1374,6 +1500,7 @@ export default function App() {
             categoryName: 'ปฏิทินทีมร่วมกัน',
             categoryColor: newMember.avatarColor || '#06C755',
             messageFormat: lineSettings.messageFormat || 'executive_flex',
+            originUrl: calendarDeepLinkUrl,
           });
           try {
             const gasRes = await fetch(savedGasUrl, {
@@ -1498,56 +1625,32 @@ export default function App() {
     });
   };
 
-  // Test Push Notification to LINE (Sends Executive Daily Digest Flex Message)
+  // Test Push Notification to LINE (Sends Time-Split Daily Digest Flex Message)
   const handleTestLinePush = async () => {
     setIsSendingPush(true);
-    const todayTasks = tasks
-      .filter((t) => t.date === todayStr)
-      .sort((a, b) => a.time.localeCompare(b.time));
-    const targetTasks =
-      todayTasks.length > 0
-        ? todayTasks
-        : [...tasks].sort((a, b) =>
-            `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
-          );
-
-    const pendingTarget = targetTasks.filter((t) => t.status !== TaskStatus.COMPLETED);
-    const completedTarget = targetTasks.filter((t) => t.status === TaskStatus.COMPLETED);
-    const highTarget = pendingTarget.filter((t) => t.priority === TaskPriority.HIGH);
-
-    const digestItems = targetTasks.slice(0, 8).map((t) => {
-      const cat = categories.find((c) => c.id === t.categoryId);
-      return {
-        title: t.title,
-        date: t.date,
-        time: t.time,
-        categoryName: cat?.name || 'ทั่วไป',
-        categoryColor: cat?.color || '#2563EB',
-        priority: t.priority,
-        status: t.status,
-      };
-    });
-
-    const lines = digestItems.map(
-      (item, idx) =>
-        `${idx + 1}. ${item.time} น. — ${item.title} [${
-          item.status === 'completed'
-            ? 'เสร็จแล้ว'
-            : item.priority === 'high'
-            ? 'ด่วนมาก'
-            : 'รอทำ'
-        }]`
+    const nowTimeHM = formatLocalTimeHM();
+    const parsedDigest = parseLineChatMessage(
+      'สรุปงานตามเวลา',
+      tasks,
+      categories,
+      lineSettings.defaultRemindMinutes,
+      teamMembers
     );
 
-    const summaryText = `📊 สรุปตารางงานประจำวัน (${todayStr}) — ทั้งหมด ${targetTasks.length} งาน (รอทำ ${pendingTarget.length} · เสร็จแล้ว ${completedTarget.length})\n${lines.join(
-      '\n'
-    )}`;
+    const summaryText = parsedDigest.replyText;
+    const digestItems = parsedDigest.flexSummary?.digestItems || [];
 
     let apiOk = false;
     let statusMessage =
-      'ส่งการ์ดสรุปตารางงานประจำวันเข้าห้องแชท LINE OA เรียบร้อยแล้ว!';
+      'ส่งการ์ดสรุปตารางงานแยกตามเวลา (ผ่านแล้ว / ยังไม่ถึง) เข้าห้องแชท LINE OA เรียบร้อยแล้ว!';
 
     if (lineSettings.channelAccessToken.trim()) {
+      const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        workspaceId,
+        spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+        date: todayStr,
+      });
       let handledByServer = false;
       try {
         const res = await fetch('/api/line/push', {
@@ -1558,9 +1661,9 @@ export default function App() {
             to: lineSettings.targetUserId,
             text: summaryText,
             date: todayStr,
-            dateTime: todayStr,
+            dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
             tasksList: digestItems,
-            originUrl: window.location.origin,
+            originUrl: calendarDeepLinkUrl,
           }),
         });
         const contentType = res.headers.get('content-type') || '';
@@ -1585,9 +1688,10 @@ export default function App() {
             to: lineSettings.targetUserId.trim(),
             text: summaryText,
             date: todayStr,
-            dateTime: todayStr,
+            dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
             tasksList: digestItems,
             messageFormat: lineSettings.messageFormat || 'executive_flex',
+            originUrl: calendarDeepLinkUrl,
           });
           try {
             const gasRes = await fetch(savedGasUrl, {
@@ -1605,7 +1709,7 @@ export default function App() {
             if (gasData.mode === 'gas_push_line' && gasData.ok) {
               apiOk = true;
               statusMessage =
-                'ส่งการ์ดสรุปตารางงานประจำวันเข้าแอป LINE OA (ผ่าน Google Apps Script Bridge) เรียบร้อยแล้ว!';
+                'ส่งการ์ดสรุปตารางงานแยกตามเวลาเข้าแอป LINE OA (ผ่าน Google Apps Script Bridge) เรียบร้อยแล้ว!';
             } else if (gasData.status === 'verified' && !gasData.mode) {
               apiOk = false;
               statusMessage =
@@ -1617,7 +1721,7 @@ export default function App() {
               )}`;
             }
           } catch {
-            statusMessage = 'ส่งการ์ดสรุปตารางงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
+            statusMessage = 'ส่งการ์ดสรุปตารางงานแยกตามเวลาเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
           }
         }
       }
@@ -1630,28 +1734,7 @@ export default function App() {
       text: summaryText,
       deliveryChannel: apiOk ? 'line_messaging_api' : 'simulator',
       status: apiOk ? 'delivered' : 'simulated',
-      flexSummary: {
-        badge: 'SHEETCAL DAILY DIGEST',
-        title:
-          todayTasks.length > 0
-            ? `สรุปตารางงานวันนี้ (${todayTasks.length} งาน)`
-            : `สรุปภาพรวมตารางงาน (${targetTasks.length} งาน)`,
-        subtitle:
-          highTarget.length > 0
-            ? `มีงานด่วนสำคัญสูง ${highTarget.length} รายการที่ต้องโฟกัส · รอดำเนินการ ${pendingTarget.length} งาน`
-            : `รอดำเนินการ ${pendingTarget.length} งาน · เสร็จสิ้น ${completedTarget.length} งาน`,
-        dateTime: todayStr,
-        date: todayStr,
-        categoryName: 'ระบบแจ้งเตือนอัตโนมัติ SheetCal',
-        categoryColor: '#4F46E5',
-        priorityLabel: todayStr,
-        digestItems,
-        stats: {
-          total: targetTasks.length,
-          pending: pendingTarget.length,
-          completed: completedTarget.length,
-        },
-      },
+      flexSummary: parsedDigest.flexSummary,
     };
 
     const nextLogs = [...lineLogs, newLog];

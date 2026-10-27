@@ -158,6 +158,25 @@ export function formatLocalDateYMD(date: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
+export function formatLocalTimeHM(date: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+    const hh = parts.find((p) => p.type === 'hour')?.value;
+    const mm = parts.find((p) => p.type === 'minute')?.value;
+    if (hh && mm) {
+      return `${hh.padStart(2, '0')}:${mm.padStart(2, '0')}`;
+    }
+  } catch {
+    // Fallback
+  }
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
 export function getBangkokDateObject(offsetDays = 0): Date {
   const todayYMD = formatLocalDateYMD(new Date());
   const [y, m, d] = todayYMD.split('-').map((n) => parseInt(n, 10));
@@ -410,24 +429,64 @@ export function parseLineChatMessage(
   const lower = text.toLowerCase();
   const todayStr = formatLocalDateYMD();
 
-  // 1. Check summary / today commands
-  if (
+  // 1. Check summary / time-split commands (รองรับทั้ง "สรุปงานตามเวลา", "เช็คเวลางาน", "สรุปงานวันนี้", "สรุปงาน <วันที่/เวลา>")
+  const isTimeSplitOrSummaryCommand =
     lower === 'งานวันนี้' ||
     lower === 'สรุปงานวันนี้' ||
     lower === 'สรุปงาน' ||
     lower === 'สรุปตารางงาน' ||
     lower === 'สรุปงานทั้งหมด' ||
-    lower === 'today'
-  ) {
-    const todayTasks = existingTasks
-      .filter((t) => t.date === todayStr)
+    lower === 'สรุปงานตามเวลา' ||
+    lower === 'เช็คเวลางาน' ||
+    lower === 'ตารางงานวันนี้' ||
+    lower === 'today' ||
+    /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปตารางงาน|สรุปงาน|ตารางงานวันนี้|ดูงานวันที่|งานวันที่)\s+(.+)$/i.test(
+      text
+    );
+
+  if (isTimeSplitOrSummaryCommand) {
+    const nowTimeHM = formatLocalTimeHM();
+    const { dateStr: parsedDate } = extractThaiDate(text);
+    const hasCustomTimeInCommand = /(?:เวลา\s*)?(\d{1,2})[:.](\d{2})/.test(text);
+    const refTimeStr = hasCustomTimeInCommand ? extractThaiTime(text).timeStr : nowTimeHM;
+    const targetDate = parsedDate || todayStr;
+
+    const dateMatchingTasks = existingTasks
+      .filter((t) => t.date === targetDate)
       .sort((a, b) => a.time.localeCompare(b.time));
+
+    const hasExplicitDateInText =
+      text.includes('พรุ่งนี้') ||
+      text.includes('มะรืน') ||
+      /(\d{1,2})[/-](\d{1,2})/.test(text) ||
+      /(\d{4})-(\d{1,2})-(\d{1,2})/.test(text) ||
+      /วันที่\s*\d{1,2}/.test(text);
+
     const targetTasks =
-      todayTasks.length > 0
-        ? todayTasks
+      dateMatchingTasks.length > 0 || hasExplicitDateInText
+        ? dateMatchingTasks
         : [...existingTasks].sort((a, b) =>
             `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
           );
+
+    const isShowingAllBecauseTodayEmpty =
+      dateMatchingTasks.length === 0 && !hasExplicitDateInText && targetTasks.length > 0;
+
+    // แยกงานตามเวลา: 1) งานที่ผ่านเวลาที่กำหนดมาแล้ว (passed) vs 2) งานที่ยังไม่ถึงเวลาที่กำหนด (upcoming)
+    const classifyTimePhase = (t: Task): 'passed' | 'upcoming' => {
+      if (hasCustomTimeInCommand) {
+        return t.time <= refTimeStr ? 'passed' : 'upcoming';
+      }
+      if (t.date < todayStr) return 'passed';
+      if (t.date > todayStr) return 'upcoming';
+      return t.time <= refTimeStr ? 'passed' : 'upcoming';
+    };
+
+    const passedTasks = targetTasks.filter((t) => classifyTimePhase(t) === 'passed');
+    const upcomingTasks = targetTasks.filter((t) => classifyTimePhase(t) === 'upcoming');
+
+    const passedCompletedCount = passedTasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
+    const passedOverdueCount = passedTasks.length - passedCompletedCount;
 
     const pendingCount = targetTasks.filter((t) => t.status !== TaskStatus.COMPLETED).length;
     const completedCount = targetTasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
@@ -435,7 +494,7 @@ export function parseLineChatMessage(
       (t) => t.priority === TaskPriority.HIGH && t.status !== TaskStatus.COMPLETED
     ).length;
 
-    const digestItems = targetTasks.slice(0, 8).map((t) => {
+    const digestItems = targetTasks.slice(0, 12).map((t) => {
       const cat = categories.find((c) => c.id === t.categoryId);
       return {
         title: t.title,
@@ -445,65 +504,107 @@ export function parseLineChatMessage(
         categoryColor: cat?.color || '#2563EB',
         priority: t.priority,
         status: t.status,
+        assigneeName: t.assigneeName,
+        timePhase: classifyTimePhase(t),
       };
     });
 
     if (targetTasks.length === 0) {
       return {
         action: 'query_today',
-        replyText: `📅 วันนี้ (${todayStr}) คุณไม่มีรายการงานค้างในตาราง พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมสรุปแผนงาน พรุ่งนี้ 10:00 #สูง" เพื่อบันทึกงานใหม่ได้เลยครับ`,
+        replyText: `📅 วันที่ ${targetDate} (เทียบเวลา ณ ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ\n• ⏮️ งานที่ผ่านเวลาที่กำหนดแล้ว: 0 งาน\n• ⏭️ งานที่ยังไม่ถึงเวลาที่กำหนด: 0 งาน`,
         flexSummary: {
-          badge: 'SHEETCAL DAILY DIGEST',
-          title: 'สรุปตารางงานประจำวัน',
-          subtitle: 'ไม่มีรายการงานค้างในระบบวันนี้',
-          dateTime: todayStr,
-          date: todayStr,
-          categoryName: 'สรุปตารางงานประจำวัน',
+          badge: 'TIME-SPLIT DAILY SUMMARY',
+          title: `สรุปตารางงานแยกตามเวลา (${targetDate})`,
+          subtitle: `เทียบเวลา ณ ${refTimeStr} น. · ไม่มีรายการงานในตาราง`,
+          dateTime: `${targetDate} · ณ ${refTimeStr} น.`,
+          date: targetDate,
+          time: refTimeStr,
+          categoryName: 'สรุปตารางงานแยกตามเวลา',
           categoryColor: '#10B981',
-          priorityLabel: 'ครบทุกงานแล้ว',
+          priorityLabel: 'ไม่มีงานค้าง',
           digestItems: [],
           stats: { total: 0, pending: 0, completed: 0 },
+          timeSplitStats: {
+            referenceTime: refTimeStr,
+            passedCount: 0,
+            passedCompletedCount: 0,
+            passedOverdueCount: 0,
+            upcomingCount: 0,
+          },
         },
       };
     }
 
-    const lines = targetTasks.map(
-      (t, i) =>
-        `${i + 1}. [${t.status === TaskStatus.COMPLETED ? '✓ เสร็จแล้ว' : `${t.time} น.`}] ${t.title} (${
-          t.priority === TaskPriority.HIGH ? '🔥 ด่วนมาก' : t.priority === TaskPriority.MEDIUM ? 'ปานกลาง' : 'ทั่วไป'
-        })`
-    );
+    const passedLines =
+      passedTasks.length > 0
+        ? passedTasks.map(
+            (t, i) =>
+              `   ${i + 1}. ${t.time} น.${t.date !== targetDate ? ` (${t.date})` : ''} — ${t.title} [${
+                t.status === TaskStatus.COMPLETED
+                  ? '✓ ดำเนินการเสร็จแล้ว'
+                  : '⚠️ เลยเวลาแล้วยังค้างอยู่'
+              }]`
+          )
+        : ['   • ไม่มีงานที่ผ่านเวลาที่กำหนด'];
 
-    const isShowingAllBecauseTodayEmpty = todayTasks.length === 0;
+    const upcomingLines =
+      upcomingTasks.length > 0
+        ? upcomingTasks.map(
+            (t, i) =>
+              `   ${i + 1}. ${t.time} น.${t.date !== targetDate ? ` (${t.date})` : ''} — ${t.title} [${
+                t.status === TaskStatus.COMPLETED
+                  ? '✓ ทำเสร็จล่วงหน้าแล้ว'
+                  : t.priority === TaskPriority.HIGH
+                  ? '⏳ รอถึงเวลา · 🔥 ด่วนมาก'
+                  : '⏳ รอถึงเวลาที่กำหนด'
+              }]`
+          )
+        : ['   • ไม่มีงานที่รอถึงเวลาอีกในวันนี้'];
+
+    const headerTitle = isShowingAllBecauseTodayEmpty
+      ? `สรุปตารางงานทั้งหมดแยกตามเวลา (${targetTasks.length} งาน)`
+      : `สรุปงานวันที่ ${targetDate} แยกตามเวลา (${targetTasks.length} งาน)`;
+
+    const replyText = [
+      `📊 ${headerTitle}`,
+      `⏰ เทียบเวลา ณ ปัจจุบัน: ${refTimeStr} น.`,
+      `📌 รวมทั้งหมด ${targetTasks.length} งาน (รอทำ ${pendingCount} · เสร็จแล้ว ${completedCount})`,
+      `━━━━━━━━━━━━━━`,
+      `⏮️ 1. งานที่ผ่านเวลาที่กำหนดมาแล้ว (<= ${refTimeStr} น.) : ${passedTasks.length} งาน (เสร็จ ${passedCompletedCount} · ค้าง ${passedOverdueCount})`,
+      ...passedLines,
+      `━━━━━━━━━━━━━━`,
+      `⏭️ 2. งานที่ยังไม่ถึงเวลาที่กำหนด (> ${refTimeStr} น.) : ${upcomingTasks.length} งาน`,
+      ...upcomingLines,
+    ].join('\n');
 
     return {
       action: 'query_today',
-      replyText: `📊 ${
-        isShowingAllBecauseTodayEmpty
-          ? `สรุปภาพรวมตารางงานทั้งหมด (${targetTasks.length} งาน)`
-          : `สรุปตารางงานวันนี้ (${todayStr})`
-      }\nทั้งหมด ${targetTasks.length} งาน · รอทำ ${pendingCount} · เสร็จแล้ว ${completedCount}\n\n${lines.join(
-        '\n'
-      )}`,
+      replyText,
       flexSummary: {
-        badge: 'SHEETCAL DAILY DIGEST',
-        title: isShowingAllBecauseTodayEmpty
-          ? `สรุปตารางงานทั้งหมด (${targetTasks.length} งาน)`
-          : `สรุปตารางงานวันนี้ (${todayTasks.length} งาน)`,
-        subtitle:
-          highCount > 0
-            ? `มีงานด่วนสำคัญสูง ${highCount} รายการที่ต้องโฟกัส · รอทำ ${pendingCount} งาน`
-            : `รอดำเนินการ ${pendingCount} งาน · เสร็จสิ้น ${completedCount} งาน`,
-        dateTime: todayStr,
-        date: todayStr,
-        categoryName: 'สรุปตารางงานประจำวัน',
+        badge: 'TIME-SPLIT TASK SUMMARY',
+        title: headerTitle,
+        subtitle: `เทียบเวลา ${refTimeStr} น. · ผ่านเวลาแล้ว ${passedTasks.length} งาน · ยังไม่ถึงเวลา ${upcomingTasks.length} งาน${
+          highCount > 0 ? ` (ด่วนสูง ${highCount})` : ''
+        }`,
+        dateTime: `${targetDate} · ณ ${refTimeStr} น.`,
+        date: targetDate,
+        time: refTimeStr,
+        categoryName: 'สรุปตารางงานแยกตามเวลา',
         categoryColor: '#4F46E5',
-        priorityLabel: pendingCount > 0 ? `ค้าง ${pendingCount} งาน` : 'ครบทุกงานแล้ว',
+        priorityLabel: `ผ่านเวลา ${passedTasks.length} · รอถึงเวลา ${upcomingTasks.length}`,
         digestItems,
         stats: {
           total: targetTasks.length,
           pending: pendingCount,
           completed: completedCount,
+        },
+        timeSplitStats: {
+          referenceTime: refTimeStr,
+          passedCount: passedTasks.length,
+          passedCompletedCount,
+          passedOverdueCount,
+          upcomingCount: upcomingTasks.length,
         },
       },
     };
@@ -782,6 +883,53 @@ export function parseLineChatMessage(
   };
 }
 
+export function resolveTeamCalendarAppUrl(options?: {
+  customPublicUrl?: string;
+  workspaceId?: string;
+  spreadsheetId?: string;
+  date?: string;
+}): string {
+  const custom = (options?.customPublicUrl || '').trim();
+  let rawBase = '';
+
+  if (custom && /^https?:\/\//i.test(custom)) {
+    rawBase = custom;
+  } else if (typeof window !== 'undefined') {
+    rawBase = `${window.location.origin}${window.location.pathname}`;
+  } else {
+    rawBase = 'https://calendar.google.com';
+  }
+
+  // Convert private AI Studio dev container URL (ais-dev-*) to shared preview URL (ais-pre-*)
+  rawBase = rawBase.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
+
+  try {
+    const parsedUrl = new URL(rawBase);
+    const host = parsedUrl.hostname.toLowerCase();
+
+    if (
+      host.includes('calendar.google.com') ||
+      host.includes('docs.google.com')
+    ) {
+      return parsedUrl.toString();
+    }
+
+    parsedUrl.searchParams.set('section', 'calendar');
+    if (options?.workspaceId && options.workspaceId.trim()) {
+      parsedUrl.searchParams.set('workspace', options.workspaceId.trim());
+    }
+    if (options?.spreadsheetId && options.spreadsheetId.trim()) {
+      parsedUrl.searchParams.set('sheet', options.spreadsheetId.trim());
+    }
+    if (options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())) {
+      parsedUrl.searchParams.set('date', options.date.trim());
+    }
+    return parsedUrl.toString();
+  } catch {
+    return 'https://calendar.google.com';
+  }
+}
+
 export function generateGoogleAppsScriptCode(
   spreadsheetId: string,
   channelAccessToken?: string,
@@ -791,7 +939,10 @@ export function generateGoogleAppsScriptCode(
   const tokenDisplay = channelAccessToken?.trim()
     ? channelAccessToken.trim().replace(/^Bearer\s+/i, '')
     : 'วาง_LINE_CHANNEL_ACCESS_TOKEN_ของคุณที่นี่';
-  const webAppUrl = appUrl || 'https://calendar.google.com';
+  const webAppUrl = (appUrl || 'https://calendar.google.com').replace(
+    /^https:\/\/ais-dev-/i,
+    'https://ais-pre-'
+  );
 
   return `/**
  * ============================================================================
@@ -809,6 +960,38 @@ export function generateGoogleAppsScriptCode(
 const SPREADSHEET_ID = '${sheetIdDisplay}';
 const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
 const WEB_APP_URL = '${webAppUrl}';
+
+function getCalendarDeepLink(overrideBaseUrl, dateStr) {
+  var base = String(overrideBaseUrl || WEB_APP_URL || 'https://calendar.google.com').trim();
+  if (base.indexOf('http') !== 0) {
+    base = 'https://calendar.google.com';
+  }
+  base = base.replace(/^https:\\/\\/ais-dev-/i, 'https://ais-pre-');
+  if (base.indexOf('calendar.google.com') !== -1 || base.indexOf('docs.google.com') !== -1) {
+    return base;
+  }
+  var sep = base.indexOf('?') === -1 ? '?' : '&';
+  var url = base;
+  if (url.indexOf('section=') === -1) {
+    url += sep + 'section=calendar';
+    sep = '&';
+  }
+  if (dateStr && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(dateStr)) && url.indexOf('date=') === -1) {
+    url += sep + 'date=' + encodeURIComponent(String(dateStr));
+    sep = '&';
+  }
+  if (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1 && url.indexOf('sheet=') === -1) {
+    url += sep + 'sheet=' + encodeURIComponent(SPREADSHEET_ID);
+  }
+  return url;
+}
+
+function getSpreadsheetDirectUrl() {
+  if (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1 && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1) {
+    return 'https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID + '/edit';
+  }
+  return '';
+}
 
 function parseThaiCommand(rawText) {
   var text = String(rawText || '').trim();
@@ -875,13 +1058,42 @@ function parseThaiCommand(rawText) {
   return { title: title, date: targetDate, time: targetTime, priority: priority };
 }
 
-function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
+function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl) {
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  var nowHM = Utilities.formatDate(now, 'Asia/Bangkok', 'HH:mm');
   var total = rowsList.length;
   var completed = rowsList.filter(function(r) { return String(r[7]) === 'completed'; }).length;
   var pending = total - completed;
-  var taskBoxes = rowsList.slice(0, 6).map(function(r) {
+
+  var sortedRows = rowsList.slice().sort(function(a, b) {
+    var tA = String(a[4] || '09:00').replace(/^'/, '');
+    var tB = String(b[4] || '09:00').replace(/^'/, '');
+    return tA.localeCompare(tB);
+  });
+
+  var passedRows = [];
+  var upcomingRows = [];
+  sortedRows.forEach(function(r) {
+    var rDate = String(r[3] || dateLabel || todayStr).replace(/^'/, '');
+    var rTime = String(r[4] || '09:00').replace(/^'/, '');
+    if (rDate < todayStr || (rDate === todayStr && rTime <= nowHM)) {
+      passedRows.push(r);
+    } else {
+      upcomingRows.push(r);
+    }
+  });
+
+  function renderRowBox(r, isPassedPhase) {
     var isDone = String(r[7]) === 'completed';
     var isHigh = String(r[6]) === 'high';
+    var badgeLabel = isDone
+      ? '✓ เสร็จแล้ว'
+      : (isPassedPhase ? '⚠️ เลยเวลา' : (isHigh ? '🔥 ด่วน' : '⏳ รอถึงเวลา'));
+    var badgeColor = isDone
+      ? '#16A34A'
+      : (isPassedPhase ? '#DC2626' : (isHigh ? '#EA580C' : '#2563EB'));
+
     return {
       type: 'box',
       layout: 'horizontal',
@@ -891,7 +1103,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
       backgroundColor: '#FFFFFF',
       cornerRadius: '8px',
       borderWidth: '1px',
-      borderColor: isHigh ? '#FECACA' : '#E2E8F0',
+      borderColor: (!isDone && isPassedPhase) ? '#FECACA' : '#E2E8F0',
       contents: [
         {
           type: 'text',
@@ -908,35 +1120,80 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
           size: 'xs',
           color: isDone ? '#94A3B8' : '#0F172A',
           wrap: true,
-          flex: 6
+          flex: 5
         },
         {
           type: 'text',
-          text: isDone ? 'เสร็จ' : (isHigh ? 'ด่วน' : 'รอทำ'),
+          text: badgeLabel,
           size: 'xxs',
           weight: 'bold',
           align: 'end',
-          color: isDone ? '#16A34A' : (isHigh ? '#DC2626' : '#D97706'),
-          flex: 2
+          color: badgeColor,
+          flex: 3
         }
       ]
     };
-  });
+  }
 
-  if (taskBoxes.length === 0) {
-    taskBoxes.push({
+  var sectionContents = [];
+  if (total === 0) {
+    sectionContents.push({
       type: 'text',
-      text: '🎉 ไม่มีงานค้างในตารางของคุณ',
+      text: '🎉 ไม่มีรายการงานในตารางของวันนี้',
       size: 'xs',
       color: '#64748B',
       align: 'center',
       margin: 'md'
     });
+  } else {
+    sectionContents.push({
+      type: 'text',
+      text: '⏮️ ผ่านเวลาที่กำหนดแล้ว (<= ' + nowHM + ' น.) · ' + passedRows.length + ' งาน',
+      size: 'xxs',
+      weight: 'bold',
+      color: '#B45309',
+      margin: 'md'
+    });
+    if (passedRows.length > 0) {
+      passedRows.slice(0, 5).forEach(function(r) {
+        sectionContents.push(renderRowBox(r, true));
+      });
+    } else {
+      sectionContents.push({
+        type: 'text',
+        text: '• ไม่มีงานที่ผ่านเวลาที่กำหนด',
+        size: 'xxs',
+        color: '#94A3B8',
+        margin: 'xs'
+      });
+    }
+
+    sectionContents.push({
+      type: 'text',
+      text: '⏭️ ยังไม่ถึงเวลาที่กำหนด (> ' + nowHM + ' น.) · ' + upcomingRows.length + ' งาน',
+      size: 'xxs',
+      weight: 'bold',
+      color: '#1D4ED8',
+      margin: 'md'
+    });
+    if (upcomingRows.length > 0) {
+      upcomingRows.slice(0, 5).forEach(function(r) {
+        sectionContents.push(renderRowBox(r, false));
+      });
+    } else {
+      sectionContents.push({
+        type: 'text',
+        text: '• ไม่มีงานที่รอถึงเวลาอีกในวันนี้',
+        size: 'xxs',
+        color: '#94A3B8',
+        margin: 'xs'
+      });
+    }
   }
 
   return {
     type: 'flex',
-    altText: titleText + ' (' + total + ' งาน)',
+    altText: titleText + ' (' + total + ' งาน · ผ่านเวลา ' + passedRows.length + ' / ยังไม่ถึง ' + upcomingRows.length + ')',
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -948,7 +1205,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
         contents: [
           {
             type: 'text',
-            text: 'SHEETCAL TASK SUMMARY',
+            text: 'TIME-SPLIT TASK SUMMARY',
             color: '#34D399',
             size: 'xxs',
             weight: 'bold'
@@ -963,7 +1220,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
           },
           {
             type: 'text',
-            text: 'วันที่ ' + dateLabel + ' · ทั้งหมด ' + total + ' งาน',
+            text: 'วันที่ ' + dateLabel + ' (เทียบเวลา ' + nowHM + ' น.) · รวม ' + total + ' งาน',
             color: '#C7D2FE',
             size: 'xs',
             margin: 'xs'
@@ -984,23 +1241,23 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
               {
                 type: 'box',
                 layout: 'vertical',
-                backgroundColor: '#EEF2FF',
+                backgroundColor: '#FEF3C7',
                 cornerRadius: '8px',
                 paddingAll: '8px',
                 contents: [
-                  { type: 'text', text: String(total), weight: 'bold', size: 'lg', color: '#4F46E5', align: 'center' },
-                  { type: 'text', text: 'ทั้งหมด', size: 'xxs', color: '#4338CA', align: 'center' }
+                  { type: 'text', text: String(passedRows.length), weight: 'bold', size: 'lg', color: '#B45309', align: 'center' },
+                  { type: 'text', text: 'ผ่านเวลาแล้ว', size: 'xxs', color: '#92400E', align: 'center' }
                 ]
               },
               {
                 type: 'box',
                 layout: 'vertical',
-                backgroundColor: '#FFFBEB',
+                backgroundColor: '#DBEAFE',
                 cornerRadius: '8px',
                 paddingAll: '8px',
                 contents: [
-                  { type: 'text', text: String(pending), weight: 'bold', size: 'lg', color: '#D97706', align: 'center' },
-                  { type: 'text', text: 'รอทำ', size: 'xxs', color: '#B45309', align: 'center' }
+                  { type: 'text', text: String(upcomingRows.length), weight: 'bold', size: 'lg', color: '#1D4ED8', align: 'center' },
+                  { type: 'text', text: 'ยังไม่ถึงเวลา', size: 'xxs', color: '#1E40AF', align: 'center' }
                 ]
               },
               {
@@ -1010,35 +1267,41 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
                 cornerRadius: '8px',
                 paddingAll: '8px',
                 contents: [
-                  { type: 'text', text: String(completed), weight: 'bold', size: 'lg', color: '#059669', align: 'center' },
+                  { type: 'text', text: String(completed) + '/' + String(total), weight: 'bold', size: 'lg', color: '#059669', align: 'center' },
                   { type: 'text', text: 'เสร็จแล้ว', size: 'xxs', color: '#047857', align: 'center' }
                 ]
               }
             ]
-          },
-          {
-            type: 'text',
-            text: 'รายการงานในปฏิทิน',
-            size: 'xxs',
-            weight: 'bold',
-            color: '#64748B',
-            margin: 'md'
           }
-        ].concat(taskBoxes)
+        ].concat(sectionContents)
       },
       footer: {
         type: 'box',
         layout: 'vertical',
+        spacing: 'sm',
         paddingAll: '12px',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            color: '#4F46E5',
-            height: 'sm',
-            action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: WEB_APP_URL }
+        contents: (function() {
+          var targetCalUrl = getCalendarDeepLink(customOriginUrl, dateLabel || todayStr);
+          var sheetDirectUrl = getSpreadsheetDirectUrl();
+          var btns = [
+            {
+              type: 'button',
+              style: 'primary',
+              color: '#4F46E5',
+              height: 'sm',
+              action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: targetCalUrl }
+            }
+          ];
+          if (sheetDirectUrl && targetCalUrl !== sheetDirectUrl) {
+            btns.push({
+              type: 'button',
+              style: 'secondary',
+              height: 'sm',
+              action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: sheetDirectUrl }
+            });
           }
-        ]
+          return btns;
+        })()
       }
     }
   };
@@ -1116,12 +1379,32 @@ function doPost(e) {
       }
 
       var messagesPayload = [{ type: 'text', text: msgText }];
+      var calDeepLink = getCalendarDeepLink(payload.originUrl, payload.date || '');
+      var sheetUrl = getSpreadsheetDirectUrl();
+
       if (payload.messageFormat !== 'text_custom' && Array.isArray(payload.tasksList) && payload.tasksList.length > 0) {
         var rowsForFlex = payload.tasksList.map(function(item) {
           return ['', item.title || 'งาน', '', item.date || '', item.time || '09:00', item.categoryName || 'ทั่วไป', item.priority || 'medium', item.status || 'pending'];
         });
-        messagesPayload = [buildSummaryFlexBubble('สรุปตารางงานประจำวัน', payload.date || '', rowsForFlex)];
+        messagesPayload = [buildSummaryFlexBubble('สรุปตารางงานประจำวัน', payload.date || '', rowsForFlex, payload.originUrl)];
       } else if (payload.messageFormat !== 'text_custom' && payload.taskTitle) {
+        var singleFooterButtons = [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#06C755',
+            height: 'sm',
+            action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: calDeepLink }
+          }
+        ];
+        if (sheetUrl && calDeepLink !== sheetUrl) {
+          singleFooterButtons.push({
+            type: 'button',
+            style: 'secondary',
+            height: 'sm',
+            action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: sheetUrl }
+          });
+        }
         messagesPayload = [{
           type: 'flex',
           altText: msgText.slice(0, 300),
@@ -1146,6 +1429,13 @@ function doPost(e) {
                 { type: 'text', text: String(payload.dateTime || payload.date || 'วันนี้'), size: 'xs', weight: 'bold', color: '#334155' },
                 { type: 'text', text: String(payload.description || msgText), size: 'xs', color: '#475569', wrap: true, margin: 'sm' }
               ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              spacing: 'sm',
+              paddingAll: '12px',
+              contents: singleFooterButtons
             }
           }
         }];
@@ -1249,15 +1539,24 @@ function doPost(e) {
         var now = new Date();
         var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
 
-        if (userMessage === 'สรุปงานวันนี้' || userMessage === 'งานวันนี้' || userMessage === 'สรุปงาน' || userMessage === 'งานค้าง') {
+        if (
+          userMessage === 'สรุปงานตามเวลา' ||
+          userMessage === 'เช็คเวลางาน' ||
+          userMessage === 'สรุปงานวันนี้' ||
+          userMessage === 'งานวันนี้' ||
+          userMessage === 'สรุปงาน' ||
+          userMessage === 'งานค้าง' ||
+          /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่)\s+(.+)$/i.test(userMessage)
+        ) {
           var rows = taskSheet.getDataRange().getValues().slice(1);
+          var queryDate = parseThaiCommand(userMessage).date || todayStr;
           var filtered = userMessage === 'งานค้าง'
             ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
-            : rows.filter(function(r) { return String(r[3]).replace(/^'/, '') === todayStr; });
-          if (filtered.length === 0) filtered = rows;
+            : rows.filter(function(r) { return String(r[3]).replace(/^'/, '') === queryDate; });
+          if (filtered.length === 0 && queryDate === todayStr) filtered = rows;
           var flexBubble = buildSummaryFlexBubble(
-            userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : 'สรุปตารางงานประจำวัน',
-            todayStr,
+            userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : 'สรุปตารางงานแยกตามเวลา',
+            queryDate,
             filtered
           );
           replyLineMessages(replyToken, [flexBubble]);
@@ -1341,6 +1640,20 @@ function doPost(e) {
                     { type: 'text', text: '📊 สรุปตารางวันที่ ' + parsed.date, size: 'xxs', weight: 'bold', color: '#4338CA' },
                     { type: 'text', text: 'รวมทั้งหมด ' + dayRows.length + ' งาน · รอดำเนินการ ' + dayPending + ' งาน', size: 'xs', weight: 'bold', color: '#1E1B4B', margin: 'xs' }
                   ]
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              paddingAll: '12px',
+              contents: [
+                {
+                  type: 'button',
+                  style: 'primary',
+                  color: '#06C755',
+                  height: 'sm',
+                  action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: getCalendarDeepLink('', parsed.date) }
                 }
               ]
             }

@@ -79,4 +79,5 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   channelAccessToken: '',
   targetUserId: '',
   autoSyncOnLineCommand: true,
+  publicCalendarUrl: '',
 };

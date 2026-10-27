@@ -23,6 +23,7 @@ interface DigestTaskItem {
   status: 'pending' | 'in_progress' | 'completed';
   description?: string;
   assigneeName?: string;
+  timePhase?: 'passed' | 'upcoming';
 }
 
 interface CollaborativeWorkspaceState {
@@ -84,14 +85,46 @@ function buildGoogleCalUrl(title: string, date: string, time: string, details: s
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
+function getBangkokNowYMDAndHM(): { todayYMD: string; nowHM: string } {
+  const now = new Date();
+  try {
+    const dParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const tParts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Bangkok',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+    const y = dParts.find((p) => p.type === 'year')?.value || '2026';
+    const m = dParts.find((p) => p.type === 'month')?.value || '01';
+    const d = dParts.find((p) => p.type === 'day')?.value || '01';
+    const hh = tParts.find((p) => p.type === 'hour')?.value || '09';
+    const mm = tParts.find((p) => p.type === 'minute')?.value || '00';
+    return {
+      todayYMD: `${y}-${m}-${d}`,
+      nowHM: `${hh.padStart(2, '0')}:${mm.padStart(2, '0')}`,
+    };
+  } catch {
+    return {
+      todayYMD: now.toISOString().slice(0, 10),
+      nowHM: now.toTimeString().slice(0, 5),
+    };
+  }
+}
+
 function buildDailyDigestFlexMessage(
   dateStr: string,
   tasksList: DigestTaskItem[],
   appUrl: string
 ) {
+  const { todayYMD, nowHM } = getBangkokNowYMDAndHM();
   const totalCount = tasksList.length;
   const completedCount = tasksList.filter((t) => t.status === 'completed').length;
-  const pendingCount = totalCount - completedCount;
   const highCount = tasksList.filter(
     (t) => t.priority === 'high' && t.status !== 'completed'
   ).length;
@@ -99,113 +132,183 @@ function buildDailyDigestFlexMessage(
     totalCount > 0 ? Math.max(6, Math.round((completedCount / totalCount) * 100)) : 100;
   const readableDate = formatThaiDateReadable(dateStr);
 
-  const taskRowBoxes =
-    tasksList.length > 0
-      ? tasksList.slice(0, 6).map((t) => {
-          const isDone = t.status === 'completed';
-          const isHigh = t.priority === 'high';
-          const catColor =
-            /^#[0-9A-Fa-f]{6}$/.test(t.categoryColor || '') ? t.categoryColor : '#2563EB';
-          const statusLabel = isDone ? '✓ เสร็จแล้ว' : isHigh ? '🔥 ด่วนมาก' : '⏳ รอทำ';
-          const statusColor = isDone ? '#16A34A' : isHigh ? '#DC2626' : '#64748B';
+  const classifyItemPhase = (t: DigestTaskItem): 'passed' | 'upcoming' => {
+    if (t.timePhase === 'passed' || t.timePhase === 'upcoming') {
+      return t.timePhase;
+    }
+    const itemDate = t.date || dateStr || todayYMD;
+    const itemTime = t.time || '09:00';
+    if (itemDate < todayYMD) return 'passed';
+    if (itemDate > todayYMD) return 'upcoming';
+    return itemTime <= nowHM ? 'passed' : 'upcoming';
+  };
 
-          return {
-            type: 'box',
-            layout: 'horizontal',
-            spacing: 'md',
-            margin: 'md',
-            paddingAll: '12px',
-            backgroundColor: isDone ? '#F8FAFC' : '#FFFFFF',
-            cornerRadius: '12px',
-            borderWidth: '1px',
-            borderColor: isHigh && !isDone ? '#FECACA' : '#E2E8F0',
-            contents: [
-              {
-                type: 'box',
-                layout: 'vertical',
-                width: '58px',
-                flex: 0,
-                contents: [
-                  {
-                    type: 'text',
-                    text: `${t.time || '09:00'}`,
-                    weight: 'bold',
-                    size: 'sm',
-                    color: isDone ? '#94A3B8' : '#0F172A',
-                  },
-                  {
-                    type: 'text',
-                    text: statusLabel,
-                    size: 'xxs',
-                    color: statusColor,
-                    weight: 'bold',
-                    margin: 'xs',
-                  },
-                ],
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
-                width: '4px',
-                flex: 0,
-                backgroundColor: isDone ? '#CBD5E1' : catColor,
-                cornerRadius: '4px',
-                contents: [{ type: 'filler' }],
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
-                flex: 1,
-                contents: [
-                  {
-                    type: 'text',
-                    text: t.title || 'รายการงาน',
-                    weight: 'bold',
-                    size: 'sm',
-                    color: isDone ? '#94A3B8' : '#0F172A',
-                    wrap: true,
-                  },
-                  {
-                    type: 'text',
-                    text: `${t.categoryName || 'ทั่วไป'}${
-                      t.assigneeName ? ` · 👤 ${t.assigneeName}` : ''
-                    } · ${
-                      isHigh ? 'ความสำคัญสูง' : t.priority === 'medium' ? 'ปานกลาง' : 'ทั่วไป'
-                    }`,
-                    size: 'xxs',
-                    color: '#64748B',
-                    margin: 'xs',
-                    wrap: true,
-                  },
-                ],
-              },
-            ],
-          };
-        })
-      : [
-          {
-            type: 'box',
-            layout: 'vertical',
-            paddingAll: '16px',
-            backgroundColor: '#F8FAFC',
-            cornerRadius: '10px',
-            margin: 'md',
-            contents: [
-              {
-                type: 'text',
-                text: '🎉 วันนี้ไม่มีงานค้างในตารางของคุณ',
-                size: 'sm',
-                color: '#475569',
-                align: 'center',
-                weight: 'bold',
-              },
-            ],
-          },
-        ];
+  const passedItems = tasksList.filter((t) => classifyItemPhase(t) === 'passed');
+  const upcomingItems = tasksList.filter((t) => classifyItemPhase(t) === 'upcoming');
+
+  const renderTaskBox = (t: DigestTaskItem, isPassed: boolean) => {
+    const isDone = t.status === 'completed';
+    const isHigh = t.priority === 'high';
+    const catColor =
+      /^#[0-9A-Fa-f]{6}$/.test(t.categoryColor || '') ? t.categoryColor : '#2563EB';
+    const statusLabel = isDone
+      ? '✓ เสร็จแล้ว'
+      : isPassed
+      ? '⚠️ เลยเวลา'
+      : isHigh
+      ? '🔥 ด่วนมาก'
+      : '⏳ รอถึงเวลา';
+    const statusColor = isDone
+      ? '#16A34A'
+      : isPassed
+      ? '#DC2626'
+      : isHigh
+      ? '#EA580C'
+      : '#2563EB';
+
+    return {
+      type: 'box',
+      layout: 'horizontal',
+      spacing: 'md',
+      margin: 'sm',
+      paddingAll: '10px',
+      backgroundColor: isDone ? '#F8FAFC' : '#FFFFFF',
+      cornerRadius: '10px',
+      borderWidth: '1px',
+      borderColor: !isDone && isPassed ? '#FECACA' : '#E2E8F0',
+      contents: [
+        {
+          type: 'box',
+          layout: 'vertical',
+          width: '62px',
+          flex: 0,
+          contents: [
+            {
+              type: 'text',
+              text: `${t.time || '09:00'}`,
+              weight: 'bold',
+              size: 'sm',
+              color: isDone ? '#94A3B8' : '#0F172A',
+            },
+            {
+              type: 'text',
+              text: statusLabel,
+              size: 'xxs',
+              color: statusColor,
+              weight: 'bold',
+              margin: 'xs',
+            },
+          ],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          width: '4px',
+          flex: 0,
+          backgroundColor: isDone ? '#CBD5E1' : catColor,
+          cornerRadius: '4px',
+          contents: [{ type: 'filler' }],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          flex: 1,
+          contents: [
+            {
+              type: 'text',
+              text: t.title || 'รายการงาน',
+              weight: 'bold',
+              size: 'sm',
+              color: isDone ? '#94A3B8' : '#0F172A',
+              wrap: true,
+            },
+            {
+              type: 'text',
+              text: `${t.categoryName || 'ทั่วไป'}${
+                t.assigneeName ? ` · 👤 ${t.assigneeName}` : ''
+              } · ${
+                isHigh ? 'ความสำคัญสูง' : t.priority === 'medium' ? 'ปานกลาง' : 'ทั่วไป'
+              }`,
+              size: 'xxs',
+              color: '#64748B',
+              margin: 'xs',
+              wrap: true,
+            },
+          ],
+        },
+      ],
+    };
+  };
+
+  const timelineSectionBoxes: unknown[] = [];
+  if (totalCount === 0) {
+    timelineSectionBoxes.push({
+      type: 'box',
+      layout: 'vertical',
+      paddingAll: '16px',
+      backgroundColor: '#F8FAFC',
+      cornerRadius: '10px',
+      margin: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: '🎉 วันนี้ไม่มีรายการงานในตารางของคุณ',
+          size: 'sm',
+          color: '#475569',
+          align: 'center',
+          weight: 'bold',
+        },
+      ],
+    });
+  } else {
+    timelineSectionBoxes.push({
+      type: 'text',
+      text: `⏮️ ผ่านเวลาที่กำหนดแล้ว (<= ${nowHM} น.) · ${passedItems.length} งาน`,
+      size: 'xxs',
+      weight: 'bold',
+      color: '#B45309',
+      margin: 'lg',
+    });
+    if (passedItems.length > 0) {
+      passedItems.slice(0, 5).forEach((item) => {
+        timelineSectionBoxes.push(renderTaskBox(item, true));
+      });
+    } else {
+      timelineSectionBoxes.push({
+        type: 'text',
+        text: '• ไม่มีงานที่ผ่านเวลาที่กำหนด',
+        size: 'xs',
+        color: '#94A3B8',
+        margin: 'sm',
+      });
+    }
+
+    timelineSectionBoxes.push({
+      type: 'text',
+      text: `⏭️ ยังไม่ถึงเวลาที่กำหนด (> ${nowHM} น.) · ${upcomingItems.length} งาน`,
+      size: 'xxs',
+      weight: 'bold',
+      color: '#1D4ED8',
+      margin: 'lg',
+    });
+    if (upcomingItems.length > 0) {
+      upcomingItems.slice(0, 5).forEach((item) => {
+        timelineSectionBoxes.push(renderTaskBox(item, false));
+      });
+    } else {
+      timelineSectionBoxes.push({
+        type: 'text',
+        text: '• ไม่มีงานที่รอถึงเวลาอีกในวันนี้',
+        size: 'xs',
+        color: '#94A3B8',
+        margin: 'sm',
+      });
+    }
+  }
 
   return {
     type: 'flex',
-    altText: `📅 สรุปตารางงานประจำวัน (${readableDate}) — ทั้งหมด ${totalCount} งาน`,
+    altText: `📅 สรุปตารางงานแยกตามเวลา (${readableDate}) — ผ่านเวลา ${passedItems.length} · ยังไม่ถึงเวลา ${upcomingItems.length}`,
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -232,7 +335,7 @@ function buildDailyDigestFlexMessage(
                 contents: [
                   {
                     type: 'text',
-                    text: 'SHEETCAL DAILY DIGEST',
+                    text: 'TIME-SPLIT DAILY SUMMARY',
                     color: '#FFFFFF',
                     size: 'xxs',
                     weight: 'bold',
@@ -241,7 +344,7 @@ function buildDailyDigestFlexMessage(
               },
               {
                 type: 'text',
-                text: readableDate,
+                text: `${readableDate} · ${nowHM} น.`,
                 color: '#94A3B8',
                 size: 'xs',
                 align: 'end',
@@ -251,7 +354,7 @@ function buildDailyDigestFlexMessage(
           },
           {
             type: 'text',
-            text: 'สรุปตารางงานประจำวัน',
+            text: 'สรุปตารางงานแยกตามเวลา',
             color: '#FFFFFF',
             size: 'xl',
             weight: 'bold',
@@ -261,8 +364,8 @@ function buildDailyDigestFlexMessage(
             type: 'text',
             text:
               highCount > 0
-                ? `มีงานด่วนสำคัญสูง ${highCount} รายการที่ต้องโฟกัสวันนี้`
-                : 'ซิงค์ข้อมูลอัตโนมัติจาก Google Sheets ของคุณ',
+                ? `ผ่านเวลาแล้ว ${passedItems.length} งาน · ยังไม่ถึงเวลา ${upcomingItems.length} งาน (ด่วนสูง ${highCount})`
+                : `ผ่านเวลาแล้ว ${passedItems.length} งาน · ยังไม่ถึงเวลา ${upcomingItems.length} งาน`,
             color: highCount > 0 ? '#FCD34D' : '#CBD5E1',
             size: 'xs',
             margin: 'xs',
@@ -302,33 +405,6 @@ function buildDailyDigestFlexMessage(
               {
                 type: 'box',
                 layout: 'vertical',
-                backgroundColor: '#FFFFFF',
-                cornerRadius: '10px',
-                paddingAll: '10px',
-                borderWidth: '1px',
-                borderColor: '#E2E8F0',
-                contents: [
-                  {
-                    type: 'text',
-                    text: String(totalCount),
-                    size: 'xl',
-                    weight: 'bold',
-                    color: '#0F172A',
-                    align: 'center',
-                  },
-                  {
-                    type: 'text',
-                    text: 'งานทั้งหมด',
-                    size: 'xxs',
-                    color: '#64748B',
-                    align: 'center',
-                    margin: 'xs',
-                  },
-                ],
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
                 backgroundColor: '#FFFBEB',
                 cornerRadius: '10px',
                 paddingAll: '10px',
@@ -337,17 +413,44 @@ function buildDailyDigestFlexMessage(
                 contents: [
                   {
                     type: 'text',
-                    text: String(pendingCount),
+                    text: String(passedItems.length),
                     size: 'xl',
                     weight: 'bold',
-                    color: '#D97706',
+                    color: '#B45309',
                     align: 'center',
                   },
                   {
                     type: 'text',
-                    text: 'รอดำเนินการ',
+                    text: 'ผ่านเวลาแล้ว',
                     size: 'xxs',
-                    color: '#B45309',
+                    color: '#92400E',
+                    align: 'center',
+                    margin: 'xs',
+                  },
+                ],
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                backgroundColor: '#EFF6FF',
+                cornerRadius: '10px',
+                paddingAll: '10px',
+                borderWidth: '1px',
+                borderColor: '#BFDBFE',
+                contents: [
+                  {
+                    type: 'text',
+                    text: String(upcomingItems.length),
+                    size: 'xl',
+                    weight: 'bold',
+                    color: '#1D4ED8',
+                    align: 'center',
+                  },
+                  {
+                    type: 'text',
+                    text: 'ยังไม่ถึงเวลา',
+                    size: 'xxs',
+                    color: '#1E40AF',
                     align: 'center',
                     margin: 'xs',
                   },
@@ -364,7 +467,7 @@ function buildDailyDigestFlexMessage(
                 contents: [
                   {
                     type: 'text',
-                    text: String(completedCount),
+                    text: `${completedCount}/${totalCount}`,
                     size: 'xl',
                     weight: 'bold',
                     color: '#16A34A',
@@ -382,15 +485,7 @@ function buildDailyDigestFlexMessage(
               },
             ],
           },
-          {
-            type: 'text',
-            text: 'ตารางเวลา (TIMELINE)',
-            size: 'xxs',
-            weight: 'bold',
-            color: '#64748B',
-            margin: 'lg',
-          },
-          ...taskRowBoxes,
+          ...timelineSectionBoxes,
         ],
       },
       footer: {
@@ -755,10 +850,11 @@ async function startServer() {
         return;
       }
 
-      const appUrl =
+      const rawBaseUrl =
         process.env.APP_URL && process.env.APP_URL.startsWith('http')
           ? process.env.APP_URL
           : 'https://calendar.google.com';
+      const appUrl = rawBaseUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
       for (const event of events) {
         if (event.type === 'message' && event.message?.type === 'text') {
@@ -860,12 +956,13 @@ async function startServer() {
         return;
       }
 
-      const appUrl =
+      const rawAppUrl =
         originUrl && String(originUrl).startsWith('https://')
           ? String(originUrl)
           : process.env.APP_URL && process.env.APP_URL.startsWith('https://')
           ? process.env.APP_URL
           : 'https://calendar.google.com';
+      const appUrl = rawAppUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
       let flexMessage: unknown;
       if (Array.isArray(tasksList)) {

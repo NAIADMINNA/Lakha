@@ -33,6 +33,7 @@ import {
   formatRemindMinutesLabel,
   generateGoogleAppsScriptCode,
   renderCustomLineMessage,
+  resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
 
 interface LineCenterViewProps {
@@ -382,10 +383,20 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     setChatInput('');
   };
 
+  const resolvedCalendarButtonUrl = useMemo(
+    () =>
+      resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        spreadsheetId,
+        date: todayStr,
+      }),
+    [lineSettings.publicCalendarUrl, spreadsheetId, todayStr]
+  );
+
   const appsScriptCode = generateGoogleAppsScriptCode(
     spreadsheetId,
     lineSettings.channelAccessToken,
-    window.location.origin + window.location.pathname
+    resolvedCalendarButtonUrl
   );
 
   const handleCopyScript = async () => {
@@ -899,71 +910,285 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               </div>
                             </div>
 
-                            {/* Task Timeline List */}
-                            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-1">
-                              รายการงานในตาราง ({flex.digestItems?.length || 0} รายการ)
-                            </div>
+                            {/* Time-Split Summary Banner (Passed Time vs Upcoming Time) */}
+                            {flex.timeSplitStats && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                <div className="rounded-xl bg-amber-50/90 border border-amber-200 px-3 py-2 flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[11px] font-bold text-amber-900">
+                                      ⏮️ ผ่านเวลาที่กำหนดแล้ว (&le; {flex.timeSplitStats.referenceTime} น.)
+                                    </div>
+                                    <div className="text-[10px] text-amber-800 mt-0.5">
+                                      เสร็จแล้ว {flex.timeSplitStats.passedCompletedCount} · ค้าง/เลยเวลา{' '}
+                                      {flex.timeSplitStats.passedOverdueCount}
+                                    </div>
+                                  </div>
+                                  <span className="text-base font-bold text-amber-700 font-mono-tabular">
+                                    {flex.timeSplitStats.passedCount} งาน
+                                  </span>
+                                </div>
 
+                                <div className="rounded-xl bg-blue-50/90 border border-blue-200 px-3 py-2 flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[11px] font-bold text-blue-900">
+                                      ⏭️ ยังไม่ถึงเวลาที่กำหนด (&gt; {flex.timeSplitStats.referenceTime} น.)
+                                    </div>
+                                    <div className="text-[10px] text-blue-800 mt-0.5">
+                                      งานที่รอดำเนินการตามเวลาถัดไป
+                                    </div>
+                                  </div>
+                                  <span className="text-base font-bold text-blue-700 font-mono-tabular">
+                                    {flex.timeSplitStats.upcomingCount} งาน
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Task Timeline List (Grouped into Passed vs Upcoming when timePhase is available) */}
                             {flex.digestItems && flex.digestItems.length > 0 ? (
-                              <div className="space-y-2">
-                                {flex.digestItems.map((item, idx) => {
-                                  const isDone = item.status === 'completed';
-                                  const isHigh = item.priority === 'high';
-                                  return (
-                                    <div
-                                      key={`${item.title}-${idx}`}
-                                      style={{
-                                        borderLeft: `4px solid ${
-                                          isDone ? '#10B981' : item.categoryColor || '#2563EB'
-                                        }`,
-                                      }}
-                                      className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
-                                          <span className="font-bold text-indigo-700">
-                                            {item.time} น.
-                                          </span>
-                                          {item.date && item.date !== todayStr && (
-                                            <span className="text-slate-500">({item.date})</span>
-                                          )}
-                                          <span
-                                            className="font-semibold"
-                                            style={{ color: item.categoryColor || '#2563EB' }}
-                                          >
-                                            · {item.categoryName}
-                                          </span>
-                                        </div>
-                                        <div
-                                          className={`text-xs font-semibold mt-0.5 break-words ${
-                                            isDone
-                                              ? 'line-through text-slate-400'
-                                              : 'text-slate-900'
-                                          }`}
-                                        >
-                                          {item.title}
-                                        </div>
-                                      </div>
-
-                                      <span
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                          isDone
-                                            ? 'bg-emerald-100 text-emerald-800'
-                                            : isHigh
-                                            ? 'bg-rose-100 text-rose-700'
-                                            : 'bg-amber-100 text-amber-800'
-                                        }`}
-                                      >
-                                        {isDone
-                                          ? '✓ เสร็จแล้ว'
-                                          : isHigh
-                                          ? '🔥 ด่วนมาก'
-                                          : '⏳ รอทำ'}
+                              flex.digestItems.some((i) => i.timePhase) ? (
+                                <div className="space-y-3 pt-1">
+                                  {/* Group 1: Passed Time */}
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-amber-900 bg-amber-100/70 border border-amber-200 rounded-lg px-2.5 py-1">
+                                      <span>
+                                        ⏮️ 1. งานที่ผ่านเวลาที่กำหนดมาแล้ว
+                                        {flex.timeSplitStats
+                                          ? ` (<= ${flex.timeSplitStats.referenceTime} น.)`
+                                          : ''}
+                                      </span>
+                                      <span>
+                                        {
+                                          flex.digestItems.filter((i) => i.timePhase === 'passed')
+                                            .length
+                                        }{' '}
+                                        รายการ
                                       </span>
                                     </div>
-                                  );
-                                })}
-                              </div>
+                                    {flex.digestItems.filter((i) => i.timePhase === 'passed')
+                                      .length > 0 ? (
+                                      flex.digestItems
+                                        .filter((i) => i.timePhase === 'passed')
+                                        .map((item, idx) => {
+                                          const isDone = item.status === 'completed';
+                                          return (
+                                            <div
+                                              key={`passed-${item.title}-${idx}`}
+                                              style={{
+                                                borderLeft: `4px solid ${
+                                                  isDone
+                                                    ? '#10B981'
+                                                    : item.categoryColor || '#DC2626'
+                                                }`,
+                                              }}
+                                              className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
+                                            >
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
+                                                  <span className="font-bold text-slate-700">
+                                                    {item.time} น.
+                                                  </span>
+                                                  {item.date && item.date !== todayStr && (
+                                                    <span className="text-slate-500">
+                                                      ({item.date})
+                                                    </span>
+                                                  )}
+                                                  <span
+                                                    className="font-semibold"
+                                                    style={{
+                                                      color: item.categoryColor || '#2563EB',
+                                                    }}
+                                                  >
+                                                    · {item.categoryName}
+                                                  </span>
+                                                </div>
+                                                <div
+                                                  className={`text-xs font-semibold mt-0.5 break-words ${
+                                                    isDone
+                                                      ? 'line-through text-slate-400'
+                                                      : 'text-slate-900'
+                                                  }`}
+                                                >
+                                                  {item.title}
+                                                </div>
+                                              </div>
+
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                                  isDone
+                                                    ? 'bg-emerald-100 text-emerald-800'
+                                                    : 'bg-rose-100 text-rose-700'
+                                                }`}
+                                              >
+                                                {isDone
+                                                  ? '✓ ดำเนินการเสร็จแล้ว'
+                                                  : '⚠️ เลยเวลา (ยังค้าง)'}
+                                              </span>
+                                            </div>
+                                          );
+                                        })
+                                    ) : (
+                                      <div className="bg-white border border-slate-200 rounded-lg p-2 text-center text-xs text-slate-500">
+                                        ไม่มีงานที่ผ่านเวลาที่กำหนด
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Group 2: Upcoming Time */}
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-blue-900 bg-blue-100/70 border border-blue-200 rounded-lg px-2.5 py-1">
+                                      <span>
+                                        ⏭️ 2. งานที่ยังไม่ถึงเวลาที่กำหนด
+                                        {flex.timeSplitStats
+                                          ? ` (> ${flex.timeSplitStats.referenceTime} น.)`
+                                          : ''}
+                                      </span>
+                                      <span>
+                                        {
+                                          flex.digestItems.filter((i) => i.timePhase === 'upcoming')
+                                            .length
+                                        }{' '}
+                                        รายการ
+                                      </span>
+                                    </div>
+                                    {flex.digestItems.filter((i) => i.timePhase === 'upcoming')
+                                      .length > 0 ? (
+                                      flex.digestItems
+                                        .filter((i) => i.timePhase === 'upcoming')
+                                        .map((item, idx) => {
+                                          const isDone = item.status === 'completed';
+                                          const isHigh = item.priority === 'high';
+                                          return (
+                                            <div
+                                              key={`upcoming-${item.title}-${idx}`}
+                                              style={{
+                                                borderLeft: `4px solid ${
+                                                  isDone
+                                                    ? '#10B981'
+                                                    : item.categoryColor || '#2563EB'
+                                                }`,
+                                              }}
+                                              className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
+                                            >
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
+                                                  <span className="font-bold text-indigo-700">
+                                                    {item.time} น.
+                                                  </span>
+                                                  {item.date && item.date !== todayStr && (
+                                                    <span className="text-slate-500">
+                                                      ({item.date})
+                                                    </span>
+                                                  )}
+                                                  <span
+                                                    className="font-semibold"
+                                                    style={{
+                                                      color: item.categoryColor || '#2563EB',
+                                                    }}
+                                                  >
+                                                    · {item.categoryName}
+                                                  </span>
+                                                </div>
+                                                <div
+                                                  className={`text-xs font-semibold mt-0.5 break-words ${
+                                                    isDone
+                                                      ? 'line-through text-slate-400'
+                                                      : 'text-slate-900'
+                                                  }`}
+                                                >
+                                                  {item.title}
+                                                </div>
+                                              </div>
+
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                                  isDone
+                                                    ? 'bg-emerald-100 text-emerald-800'
+                                                    : isHigh
+                                                    ? 'bg-rose-100 text-rose-700'
+                                                    : 'bg-blue-100 text-blue-800'
+                                                }`}
+                                              >
+                                                {isDone
+                                                  ? '✓ เสร็จล่วงหน้า'
+                                                  : isHigh
+                                                  ? '🔥 ด่วน · รอถึงเวลา'
+                                                  : '⏳ รอถึงเวลา'}
+                                              </span>
+                                            </div>
+                                          );
+                                        })
+                                    ) : (
+                                      <div className="bg-white border border-slate-200 rounded-lg p-2 text-center text-xs text-slate-500">
+                                        ไม่มีงานที่รอถึงเวลาอีกในวันนี้
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-1">
+                                    รายการงานในตาราง ({flex.digestItems?.length || 0} รายการ)
+                                  </div>
+                                  {flex.digestItems.map((item, idx) => {
+                                    const isDone = item.status === 'completed';
+                                    const isHigh = item.priority === 'high';
+                                    return (
+                                      <div
+                                        key={`${item.title}-${idx}`}
+                                        style={{
+                                          borderLeft: `4px solid ${
+                                            isDone ? '#10B981' : item.categoryColor || '#2563EB'
+                                          }`,
+                                        }}
+                                        className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
+                                      >
+                                        <div className="min-w-0">
+                                          <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
+                                            <span className="font-bold text-indigo-700">
+                                              {item.time} น.
+                                            </span>
+                                            {item.date && item.date !== todayStr && (
+                                              <span className="text-slate-500">({item.date})</span>
+                                            )}
+                                            <span
+                                              className="font-semibold"
+                                              style={{ color: item.categoryColor || '#2563EB' }}
+                                            >
+                                              · {item.categoryName}
+                                            </span>
+                                          </div>
+                                          <div
+                                            className={`text-xs font-semibold mt-0.5 break-words ${
+                                              isDone
+                                                ? 'line-through text-slate-400'
+                                                : 'text-slate-900'
+                                            }`}
+                                          >
+                                            {item.title}
+                                          </div>
+                                        </div>
+
+                                        <span
+                                          className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                            isDone
+                                              ? 'bg-emerald-100 text-emerald-800'
+                                              : isHigh
+                                              ? 'bg-rose-100 text-rose-700'
+                                              : 'bg-amber-100 text-amber-800'
+                                          }`}
+                                        >
+                                          {isDone
+                                            ? '✓ เสร็จแล้ว'
+                                            : isHigh
+                                            ? '🔥 ด่วนมาก'
+                                            : '⏳ รอทำ'}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )
                             ) : (
                               <div className="bg-white border border-slate-200 rounded-lg p-3 text-center text-xs text-slate-600 font-medium">
                                 🎉 ไม่มีรายการงานค้างในตาราง
@@ -1096,6 +1321,13 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               </span>
               <button
                 type="button"
+                onClick={() => onSendChatCommand('สรุปงานตามเวลา')}
+                className="px-2.5 py-1 rounded-md bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+              >
+                ⏰ สรุปงานตามเวลา (ผ่านแล้ว / ยังไม่ถึง)
+              </button>
+              <button
+                type="button"
                 onClick={() => onSendChatCommand('สรุปงานวันนี้')}
                 className="px-2.5 py-1 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors whitespace-nowrap shrink-0"
               >
@@ -1103,10 +1335,17 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => onSendChatCommand('สรุปงาน พรุ่งนี้')}
+                className="px-2.5 py-1 rounded-md bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold hover:bg-blue-100 transition-colors whitespace-nowrap shrink-0"
+              >
+                📅 สรุปงานพรุ่งนี้
+              </button>
+              <button
+                type="button"
                 onClick={() => onSendChatCommand('งานค้าง')}
                 className="px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold hover:bg-amber-100 transition-colors whitespace-nowrap shrink-0"
               >
-                ⏳ ดูสรุปงานค้างทั้งหมด
+                ⏳ งานค้างทั้งหมด
               </button>
               <button
                 type="button"
@@ -1115,7 +1354,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 }
                 className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
               >
-                + ตัวอย่างสั่งเพิ่มงานใหม่
+                + ตัวอย่างเพิ่มงานใหม่
               </button>
             </div>
 
@@ -1128,7 +1367,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder='พิมพ์ชื่องาน หรือพิมพ์ "สรุปงานวันนี้" / "งานค้าง"...'
+                placeholder='พิมพ์ "สรุปงานตามเวลา", "สรุปงานวันนี้", "สรุปงาน 28/10" หรือพิมพ์สั่งเพิ่มงาน...'
                 className="flex-1 rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none"
               />
               <button
@@ -1432,9 +1671,107 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                             </span>
                           </div>
                         </div>
+
+                        {lineSettings.includeOpenAppButton !== false && (
+                          <div className="pt-1">
+                            <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
+                              เปิดดูปฏิทินของทีม
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Public Calendar Button URL Configuration for LINE Flex Card */}
+                <div className="pt-3 border-t border-slate-200 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-semibold text-slate-900">
+                      🔗 ลิงก์ของปุ่ม &quot;เปิดดูปฏิทินของทีม&quot; บนการ์ดในแอป LINE
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={lineSettings.includeOpenAppButton !== false}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...lineSettings,
+                            includeOpenAppButton: e.target.checked,
+                          })
+                        }
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600"
+                      />
+                      <span>แสดงปุ่มเปิดปฏิทินบนการ์ด</span>
+                    </label>
+                  </div>
+
+                  <input
+                    type="url"
+                    value={lineSettings.publicCalendarUrl || ''}
+                    onChange={(e) =>
+                      onUpdateSettings({
+                        ...lineSettings,
+                        publicCalendarUrl: e.target.value,
+                      })
+                    }
+                    placeholder="วางลิงก์เว็บจริงของคุณ เช่น https://ชื่อคุณ.github.io/ชื่อโปรเจกต์/ (เว้นว่างเพื่อใช้ลิงก์อัตโนมัติ)"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-mono-tabular text-slate-900"
+                  />
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-slate-500">ตั้งค่าด่วน:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          publicCalendarUrl: '',
+                        })
+                      }
+                      className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] font-medium text-slate-700 transition-colors"
+                    >
+                      ใช้ลิงก์เว็บปฏิทินอัตโนมัติ (?section=calendar)
+                    </button>
+                    {spreadsheetUrl && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateSettings({
+                            ...lineSettings,
+                            publicCalendarUrl: spreadsheetUrl,
+                          })
+                        }
+                        className="px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-medium text-emerald-800 transition-colors"
+                      >
+                        ให้ปุ่มเปิดไฟล์ Google Sheets ของทีม
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          publicCalendarUrl: 'https://calendar.google.com',
+                        })
+                      }
+                      className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-[11px] font-medium text-indigo-800 transition-colors"
+                    >
+                      ให้ปุ่มเปิดแอป Google Calendar
+                    </button>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+                    <div>
+                      <strong className="text-slate-800">ปลายทางเมื่อกดปุ่มในแอป LINE:</strong>{' '}
+                      <code className="font-mono-tabular text-indigo-700 break-all">
+                        {resolvedCalendarButtonUrl}
+                      </code>
+                    </div>
+                    <div className="mt-1 text-slate-500">
+                      💡 หากคุณส่งแจ้งเตือนจากหน้าพรีวิว AI Studio ลิงก์ภายในอาจต้องล็อกอินบัญชีผู้พัฒนา แนะนำให้วางลิงก์เว็บจริง (เช่น GitHub Pages) หรือเลือกให้เปิดตาราง Google Sheets เพื่อให้สมาชิกทุกคนใน LINE กดเปิดดูได้ทันทีบนมือถือครับ
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

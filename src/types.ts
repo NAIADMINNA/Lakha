@@ -59,6 +59,7 @@ export interface FlexDigestItem {
   priority: 'low' | 'medium' | 'high';
   status: 'pending' | 'in_progress' | 'completed';
   assigneeName?: string;
+  timePhase?: 'passed' | 'upcoming';
 }
 
 export interface LineMessageLog {
@@ -89,6 +90,13 @@ export interface LineMessageLog {
       pending: number;
       completed: number;
     };
+    timeSplitStats?: {
+      referenceTime: string;
+      passedCount: number;
+      passedCompletedCount: number;
+      passedOverdueCount: number;
+      upcomingCount: number;
+    };
   };
 }
 
@@ -111,6 +119,7 @@ export interface LineSettings {
   channelAccessToken: string;
   targetUserId: string;
   autoSyncOnLineCommand: boolean;
+  publicCalendarUrl?: string;
 }
 
 export interface ConfirmationDialogRequest {
