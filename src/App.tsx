@@ -731,22 +731,58 @@ export default function App() {
         if (!handledByServer) {
           const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
           if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+            const gasPayload = JSON.stringify({
+              action: 'push_line',
+              channelAccessToken: lineSettings.channelAccessToken.trim(),
+              to: lineSettings.targetUserId.trim(),
+              text: reminderText,
+              taskTitle: task.title,
+              description: includeDesc ? task.description || reminderText : '',
+              date: task.date,
+              time: task.time,
+              dateTime: `${task.date} ${task.time} น.`,
+              categoryName,
+              categoryColor: cat?.color || '#2563EB',
+              priority: task.priority,
+              messageFormat: formatMode,
+            });
             try {
-              await fetch(savedGasUrl, {
+              const gasRes = await fetch(savedGasUrl, {
                 method: 'POST',
-                mode: 'no-cors',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({
-                  action: 'push_line',
-                  channelAccessToken: lineSettings.channelAccessToken.trim(),
-                  to: lineSettings.targetUserId.trim(),
-                  text: reminderText,
-                }),
+                body: gasPayload,
               });
-              deliveryChannel = 'line_messaging_api';
-              deliveryStatus = 'delivered';
+              const gasText = await gasRes.text();
+              let gasData: Record<string, unknown> = {};
+              try {
+                gasData = JSON.parse(gasText);
+              } catch {
+                gasData = {};
+              }
+              if (gasData.mode === 'gas_push_line' && gasData.ok) {
+                deliveryChannel = 'line_messaging_api';
+                deliveryStatus = 'delivered';
+              } else if (gasData.status === 'verified' && !gasData.mode) {
+                deliveryStatus = 'simulated';
+                apiNotice =
+                  '⚠️ ลิงก์ Google Apps Script ของคุณยังเป็นโค้ดเวอร์ชันเก่า จึงยังไม่ได้ส่งเข้าแอป LINE จริง — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับแล้วกด Deploy > New version';
+              } else {
+                deliveryStatus = 'simulated';
+                apiNotice = String(gasData.lineError || 'ไม่สามารถส่งเข้า LINE ผ่าน Apps Script ได้');
+              }
             } catch {
-              deliveryStatus = 'simulated';
+              try {
+                await fetch(savedGasUrl, {
+                  method: 'POST',
+                  mode: 'no-cors',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: gasPayload,
+                });
+                deliveryChannel = 'line_messaging_api';
+                deliveryStatus = 'delivered';
+              } catch {
+                deliveryStatus = 'simulated';
+              }
             }
           }
         }
@@ -1325,20 +1361,37 @@ export default function App() {
       if (!handledByServer) {
         const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
         if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          const gasPayload = JSON.stringify({
+            action: 'push_line',
+            channelAccessToken: lineSettings.channelAccessToken.trim(),
+            to: lineSettings.targetUserId.trim(),
+            text: memberInviteText,
+            taskTitle: `สมาชิกใหม่: ${newMember.name} (${roleLabel})`,
+            description: `${newMember.email}${newMember.department ? ` · ${newMember.department}` : ''} · สมาชิกรวม ${nextMembers.length} คน`,
+            date: todayStr,
+            time: nowTimeStr,
+            dateTime: `${todayStr} ${nowTimeStr} น.`,
+            categoryName: 'ปฏิทินทีมร่วมกัน',
+            categoryColor: newMember.avatarColor || '#06C755',
+            messageFormat: lineSettings.messageFormat || 'executive_flex',
+          });
           try {
-            await fetch(savedGasUrl, {
+            const gasRes = await fetch(savedGasUrl, {
               method: 'POST',
-              mode: 'no-cors',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({
-                action: 'push_line',
-                channelAccessToken: lineSettings.channelAccessToken.trim(),
-                to: lineSettings.targetUserId.trim(),
-                text: memberInviteText,
-              }),
+              body: gasPayload,
             });
-            deliveryChannel = 'line_messaging_api';
-            status = 'delivered';
+            const gasText = await gasRes.text();
+            let gasData: Record<string, unknown> = {};
+            try {
+              gasData = JSON.parse(gasText);
+            } catch {
+              gasData = {};
+            }
+            if (gasData.mode === 'gas_push_line' && gasData.ok) {
+              deliveryChannel = 'line_messaging_api';
+              status = 'delivered';
+            }
           } catch {
             // Fallback to simulated
           }
@@ -1526,21 +1579,43 @@ export default function App() {
       if (!handledByServer) {
         const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
         if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          const gasPayload = JSON.stringify({
+            action: 'push_line',
+            channelAccessToken: lineSettings.channelAccessToken.trim(),
+            to: lineSettings.targetUserId.trim(),
+            text: summaryText,
+            date: todayStr,
+            dateTime: todayStr,
+            tasksList: digestItems,
+            messageFormat: lineSettings.messageFormat || 'executive_flex',
+          });
           try {
-            await fetch(savedGasUrl, {
+            const gasRes = await fetch(savedGasUrl, {
               method: 'POST',
-              mode: 'no-cors',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({
-                action: 'push_line',
-                channelAccessToken: lineSettings.channelAccessToken.trim(),
-                to: lineSettings.targetUserId.trim(),
-                text: summaryText,
-              }),
+              body: gasPayload,
             });
-            apiOk = true;
-            statusMessage =
-              'ส่งสรุปตารางงานประจำวันเข้าแอป LINE OA (ผ่าน Google Apps Script) เรียบร้อยแล้ว!';
+            const gasText = await gasRes.text();
+            let gasData: Record<string, unknown> = {};
+            try {
+              gasData = JSON.parse(gasText);
+            } catch {
+              gasData = {};
+            }
+            if (gasData.mode === 'gas_push_line' && gasData.ok) {
+              apiOk = true;
+              statusMessage =
+                'ส่งการ์ดสรุปตารางงานประจำวันเข้าแอป LINE OA (ผ่าน Google Apps Script Bridge) เรียบร้อยแล้ว!';
+            } else if (gasData.status === 'verified' && !gasData.mode) {
+              apiOk = false;
+              statusMessage =
+                '⚠️ ลิงก์ Google Apps Script ของคุณยังเป็นโค้ดเวอร์ชันเก่า จึงยังไม่ได้ส่งเข้าแอป LINE จริง — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับแล้วกด Deploy > New version';
+            } else {
+              apiOk = false;
+              statusMessage = `ส่งผ่าน Google Apps Script ไม่สำเร็จ: ${String(
+                gasData.lineError || 'ตรวจสอบ Channel Access Token'
+              )}`;
+            }
           } catch {
             statusMessage = 'ส่งการ์ดสรุปตารางงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
           }

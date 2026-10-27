@@ -1046,7 +1046,12 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList) {
 
 function doGet(e) {
   return ContentService
-    .createTextOutput(JSON.stringify({ status: 'verified', message: 'SheetCal LINE Webhook Ready' }))
+    .createTextOutput(JSON.stringify({
+      status: 'verified',
+      version: '2.5-gas-bridge',
+      capabilities: ['webhook', 'push_line'],
+      message: 'SheetCal LINE Webhook & Push Bridge Ready'
+    }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -1055,13 +1060,96 @@ function doPost(e) {
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     var payload = JSON.parse(rawContents);
 
-    // รองรับการส่งแจ้งเตือน LINE Push / Broadcast จากหน้าเว็บโดยตรง (กรณีรันบน GitHub Pages)
+    // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) จากหน้าเว็บ
+    if (payload.action === 'check_bridge') {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'ok',
+        mode: 'gas_bridge_ready',
+        version: '2.5-gas-bridge',
+        capabilities: ['webhook', 'push_line']
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // รองรับการส่งแจ้งเตือน LINE Push / Broadcast จากหน้าเว็บโดยตรง (กรณีรันบน GitHub Pages / Static Hosting)
     if (payload.action === 'push_line') {
       var token = String(payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
       var targetId = String(payload.to || '').trim();
       var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
       var isValidTarget = /^[UCR][0-9a-fA-F]{32}$/.test(targetId);
       var sentSuccess = false;
+      var deliveryMethod = 'none';
+      var lastCode = 0;
+      var lastError = '';
+      var botName = '';
+
+      if (!token || token.indexOf('วาง_LINE_') !== -1) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: 'error',
+          mode: 'gas_push_line',
+          ok: false,
+          lineHttpCode: 401,
+          lineError: 'Missing LINE Channel Access Token'
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      if (payload.diagnose) {
+        var infoResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/info', {
+          method: 'get',
+          headers: { 'Authorization': 'Bearer ' + token },
+          muteHttpExceptions: true
+        });
+        lastCode = infoResp.getResponseCode();
+        if (lastCode >= 200 && lastCode < 300) {
+          try {
+            var infoData = JSON.parse(infoResp.getContentText());
+            botName = infoData.displayName || '';
+          } catch (err) {}
+        } else {
+          return ContentService.createTextOutput(JSON.stringify({
+            status: 'error',
+            mode: 'gas_push_line',
+            ok: false,
+            lineHttpCode: lastCode,
+            lineError: infoResp.getContentText()
+          })).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+
+      var messagesPayload = [{ type: 'text', text: msgText }];
+      if (payload.messageFormat !== 'text_custom' && Array.isArray(payload.tasksList) && payload.tasksList.length > 0) {
+        var rowsForFlex = payload.tasksList.map(function(item) {
+          return ['', item.title || 'งาน', '', item.date || '', item.time || '09:00', item.categoryName || 'ทั่วไป', item.priority || 'medium', item.status || 'pending'];
+        });
+        messagesPayload = [buildSummaryFlexBubble('สรุปตารางงานประจำวัน', payload.date || '', rowsForFlex)];
+      } else if (payload.messageFormat !== 'text_custom' && payload.taskTitle) {
+        messagesPayload = [{
+          type: 'flex',
+          altText: msgText.slice(0, 300),
+          contents: {
+            type: 'bubble',
+            size: 'mega',
+            header: {
+              type: 'box',
+              layout: 'vertical',
+              backgroundColor: payload.categoryColor || '#06C755',
+              paddingAll: '16px',
+              contents: [
+                { type: 'text', text: payload.categoryName || 'SHEETCAL NOTIFICATION', color: '#FFFFFF', size: 'xxs', weight: 'bold' },
+                { type: 'text', text: String(payload.taskTitle), color: '#FFFFFF', size: 'md', weight: 'bold', wrap: true, margin: 'xs' }
+              ]
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              paddingAll: '16px',
+              contents: [
+                { type: 'text', text: String(payload.dateTime || payload.date || 'วันนี้'), size: 'xs', weight: 'bold', color: '#334155' },
+                { type: 'text', text: String(payload.description || msgText), size: 'xs', color: '#475569', wrap: true, margin: 'sm' }
+              ]
+            }
+          }
+        }];
+      }
 
       if (isValidTarget) {
         var pushResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
@@ -1072,34 +1160,77 @@ function doPost(e) {
           },
           payload: JSON.stringify({
             to: targetId,
-            messages: [{ type: 'text', text: msgText }]
+            messages: messagesPayload
           }),
           muteHttpExceptions: true
         });
-        if (pushResp.getResponseCode() >= 200 && pushResp.getResponseCode() < 300) {
+        lastCode = pushResp.getResponseCode();
+        if (lastCode >= 200 && lastCode < 300) {
           sentSuccess = true;
+          deliveryMethod = 'push';
+        } else {
+          lastError = pushResp.getContentText();
         }
       }
 
       if (!sentSuccess) {
-        UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
+        var bcResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
           method: 'post',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + token
           },
           payload: JSON.stringify({
-            messages: [{ type: 'text', text: msgText }]
+            messages: messagesPayload
           }),
           muteHttpExceptions: true
         });
+        lastCode = bcResp.getResponseCode();
+        if (lastCode >= 200 && lastCode < 300) {
+          sentSuccess = true;
+          deliveryMethod = 'broadcast';
+        } else {
+          // Retry plain text if Flex failed
+          var bcTextResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
+            method: 'post',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + token
+            },
+            payload: JSON.stringify({
+              messages: [{ type: 'text', text: msgText }]
+            }),
+            muteHttpExceptions: true
+          });
+          lastCode = bcTextResp.getResponseCode();
+          if (lastCode >= 200 && lastCode < 300) {
+            sentSuccess = true;
+            deliveryMethod = 'broadcast_text';
+          } else {
+            lastError = bcTextResp.getContentText();
+          }
+        }
       }
-      return ContentService.createTextOutput(JSON.stringify({ status: 'ok', ok: true })).setMimeType(ContentService.MimeType.JSON);
+
+      return ContentService.createTextOutput(JSON.stringify({
+        status: sentSuccess ? 'ok' : 'error',
+        mode: 'gas_push_line',
+        version: '2.5-gas-bridge',
+        ok: sentSuccess,
+        deliveryMethod: deliveryMethod,
+        botName: botName,
+        lineHttpCode: lastCode,
+        lineError: lastError
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     var events = payload.events || [];
     if (events.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({ status: 'verified' })).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'verified',
+        version: '2.5-gas-bridge',
+        capabilities: ['webhook', 'push_line']
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1)

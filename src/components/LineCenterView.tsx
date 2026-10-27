@@ -106,7 +106,27 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     ok: boolean;
     steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[];
   } | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<'checking' | 'fullstack' | 'static_web'>('checking');
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/health')
+      .then((res) => {
+        const ct = res.headers.get('content-type') || '';
+        if (!cancelled) {
+          setRuntimeMode(res.ok && ct.includes('application/json') ? 'fullstack' : 'static_web');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRuntimeMode('static_web');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleDiagnoseLineApi = async (sendTest = true) => {
     setIsDiagnosingLine(true);
@@ -114,6 +134,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     const token = lineSettings.channelAccessToken.trim();
     const rawUserId = lineSettings.targetUserId.trim();
     const isValidUserIdFormat = /^[UCR][0-9a-fA-F]{32}$/.test(rawUserId);
+    const trimmedGas = gasUrl.trim();
 
     try {
       // 1. Try server-side real LINE API diagnostic (/api/line/diagnose)
@@ -129,9 +150,59 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       const contentType = res.headers.get('content-type') || '';
       if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
+        const serverSteps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[] = [
+          {
+            step: '0. ตรวจสอบสภาพแวดล้อมที่รันอยู่ (Runtime Environment)',
+            status: 'ok',
+            detail:
+              'กำลังรันบนโหมด Full-Stack Server (มี Backend /api/line/push) จึงยิงตรงเข้าเซิร์ฟเวอร์ LINE ได้ทันที — แต่หากคุณนำขึ้นเว็บจริง (GitHub Pages) ตัวเว็บจะไม่มี Backend Server และต้องส่งผ่านลิงก์ Google Apps Script ด้านล่างแทน',
+          },
+          ...(Array.isArray(data.steps) ? data.steps : []),
+        ];
+
+        // Also check if the user's Google Apps Script URL is updated for GitHub Pages!
+        if (trimmedGas.startsWith('https://script.google.com/macros/s/')) {
+          try {
+            const gasRes = await fetch(trimmedGas, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({ action: 'check_bridge' }),
+            });
+            const gasText = await gasRes.text();
+            let gasJson: Record<string, unknown> = {};
+            try {
+              gasJson = JSON.parse(gasText);
+            } catch {
+              gasJson = {};
+            }
+            if (gasJson.mode === 'gas_bridge_ready' || gasJson.version === '2.5-gas-bridge') {
+              serverSteps.push({
+                step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
+                status: 'ok',
+                detail:
+                  'ลิงก์ Google Apps Script ของคุณเป็นโค้ดเวอร์ชันล่าสุด (v2.5 Bridge Ready) พร้อมส่งแจ้งเตือนเข้า LINE เมื่อรันบน GitHub Pages แล้ว!',
+              });
+            } else {
+              serverSteps.push({
+                step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
+                status: 'warn',
+                detail:
+                  '⚠️ พบสาเหตุที่รันเป็นเว็บจริง (GitHub Pages) แล้วไม่แจ้งเตือน! ลิงก์ Google Apps Script ปัจจุบันของคุณยังเป็นโค้ดเวอร์ชันเก่า (รองรับแต่ขารับ Webhook แต่ยังไม่มีคำสั่ง push_line สำหรับส่งออกจากหน้าเว็บ) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy และอย่าลืม Push โค้ดเว็บล่าสุดขึ้น GitHub ด้วยครับ',
+              });
+            }
+          } catch {
+            serverSteps.push({
+              step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
+              status: 'warn',
+              detail:
+                'ไม่สามารถอ่านค่าตอบกลับจากลิงก์ Google Apps Script ได้ กรุณาตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น Anyone และอัปเดตเป็น New version แล้ว',
+            });
+          }
+        }
+
         setLineDiagnosticResult({
           ok: Boolean(data.ok),
-          steps: Array.isArray(data.steps) ? data.steps : [],
+          steps: serverSteps,
         });
         setIsDiagnosingLine(false);
         return;
@@ -140,14 +211,22 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       // Fallback to static web / GitHub Pages diagnostic
     }
 
-    // 2. Fallback diagnostic when running on GitHub Pages (Static Hosting)
-    const steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[] = [];
+    // 2. Diagnostic when running on GitHub Pages (Static Hosting without Node.js backend)
+    const steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[] = [
+      {
+        step: '0. ตรวจสอบสภาพแวดล้อมที่รันอยู่ (GitHub Pages / Static Web)',
+        status: 'ok',
+        detail:
+          'เว็บกำลังรันแบบ Static Hosting (ไม่มีเซิร์ฟเวอร์ /api/line/push ในตัว และเบราว์เซอร์ยิงตรงไปหา api.line.me ไม่ได้เพราะติด CORS ของ LINE) ระบบจึงใช้ลิงก์ Google Apps Script Web App ของคุณเป็นสะพานส่งแจ้งเตือนเข้า LINE',
+      },
+    ];
+
     if (!token) {
       steps.push({
         step: '1. ตรวจสอบ LINE Channel Access Token',
         status: 'error',
         detail:
-          'ยังไม่ได้วาง LINE Channel Access Token กรุณาคัดลอกจาก LINE Developers Console > แท็บ Messaging API มาวาง',
+          'ยังไม่ได้วาง LINE Channel Access Token บนเว็บหน้านี้ (ข้อมูลที่กรอกไว้ใน AI Studio จะไม่ได้ตามมาที่เว็บ GitHub Pages อัตโนมัติเพราะเก็บแยกตามโดเมนเบราว์เซอร์) กรุณาวาง Channel Access Token ที่หน้าเว็บนี้อีกครั้ง',
       });
       setLineDiagnosticResult({ ok: false, steps });
       setIsDiagnosingLine(false);
@@ -179,7 +258,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       steps.push({
         step: '2. ตรวจสอบรูปแบบ LINE User ID',
         status: 'error',
-        detail: `ค่าที่ระบุ ("${rawUserId}") ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร! รหัสที่ถูกต้องต้องขึ้นต้นด้วย U ตามด้วยรหัส 32 ตัวอักษร (เช่น U4af4980629...) ดูได้จาก LINE Developers Console > Basic settings > Your user ID (ไม่ใช่ LINE ID ส่วนตัวที่ใช้แอดเพื่อนครับ) แนะนำให้กดปุ่ม "ล้างค่าเพื่อส่งแบบ Broadcast" ด้านล่าง`,
+        detail: `ค่าที่ระบุ ("${rawUserId}") ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร! รหัสที่ถูกต้องต้องขึ้นต้นด้วย U ตามด้วยรหัส 32 ตัวอักษร (เช่น U4af4980629...) แนะนำให้กดปุ่ม "ล้างค่า (ใช้ Broadcast แทน)"`,
       });
     } else {
       steps.push({
@@ -189,13 +268,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       });
     }
 
-    const trimmedGas = gasUrl.trim();
     if (!trimmedGas.startsWith('https://script.google.com/macros/s/')) {
       steps.push({
         step: '3. ตรวจสอบตัวกลางส่ง LINE บน GitHub Pages (Google Apps Script)',
         status: 'error',
         detail:
-          'เนื่องจากเว็บที่รันบน GitHub Pages ไม่มี Backend Server เบราว์เซอร์จะถูก LINE บล็อก CORS หากยิงตรง — กรุณาวางลิงก์ Web App URL ของ Google Apps Script ด้านล่าง และอัปเดตโค้ด Apps Script เวอร์ชันล่าสุดเพื่อให้ช่วยส่งข้อความเข้า LINE',
+          'กรุณาวางลิงก์ Web App URL ของ Google Apps Script ด้านล่าง (ที่ลงท้ายด้วย /exec) เพื่อให้เว็บบน GitHub Pages ใช้ส่งข้อความเข้า LINE',
       });
       setLineDiagnosticResult({ ok: false, steps });
       setIsDiagnosingLine(false);
@@ -204,30 +282,58 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
     if (sendTest) {
       try {
-        await fetch(trimmedGas, {
+        // Call without no-cors first using text/plain so we can read Google Apps Script's JSON response!
+        const gasRes = await fetch(trimmedGas, {
           method: 'POST',
-          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
             action: 'push_line',
+            diagnose: true,
             channelAccessToken: token,
             to: isValidUserIdFormat ? rawUserId : '',
-            text: `✅ [SheetCal LINE Diagnostic]\nทดสอบส่งแจ้งเตือนผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
+            text: `✅ [SheetCal LINE Diagnostic - Web]\nทดสอบส่งแจ้งเตือนจากหน้าเว็บจริงผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
           }),
         });
-        steps.push({
-          step: '3. ทดสอบส่งข้อความเข้าแอป LINE ผ่าน Google Apps Script',
-          status: 'ok',
-          detail:
-            'ส่งคำสั่งแจ้งเตือนไปยัง Google Apps Script เรียบร้อยแล้ว! (ข้อสำคัญ: หากยังไม่มีข้อความเด้งใน LINE กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Apps Script แล้วกด Deploy > Manage deployments > แก้ไขเป็น New version)',
-        });
-        setLineDiagnosticResult({ ok: true, steps });
+        const gasText = await gasRes.text();
+        let gasData: Record<string, unknown> = {};
+        try {
+          gasData = JSON.parse(gasText);
+        } catch {
+          gasData = {};
+        }
+
+        if (gasData.mode === 'gas_push_line') {
+          if (gasData.ok) {
+            steps.push({
+              step: '3. ผลส่งข้อความเข้า LINE ผ่าน Google Apps Script Bridge',
+              status: 'ok',
+              detail: `สำเร็จ! ส่งเข้า LINE OA ${gasData.botName ? `"${gasData.botName}" ` : ''}ผ่านโหมด ${gasData.deliveryMethod} (HTTP ${gasData.lineHttpCode || 200}) — กรุณาเช็คข้อความในแอป LINE ของคุณได้เลย`,
+            });
+            setLineDiagnosticResult({ ok: true, steps });
+          } else {
+            steps.push({
+              step: '3. ผลส่งข้อความเข้า LINE ผ่าน Google Apps Script Bridge',
+              status: 'error',
+              detail: `Google Apps Script เชื่อมต่อได้แล้ว แต่ LINE API ปฏิเสธคำขอ (HTTP ${gasData.lineHttpCode}): ${String(gasData.lineError || 'ตรวจสอบ Channel Access Token หรือการแอดเพื่อนบอท')}`,
+            });
+            setLineDiagnosticResult({ ok: false, steps });
+          }
+        } else {
+          // Old Apps Script code returned {"status":"verified"} without executing push_line!
+          steps.push({
+            step: '3. ตรวจพบสาเหตุที่เว็บไม่ส่งแจ้งเตือนเข้า LINE!',
+            status: 'error',
+            detail:
+              '❌ ลิงก์ Google Apps Script ของคุณยังเป็น "โค้ดเวอร์ชันเก่า" (ตอบกลับเป็น {"status":"verified"} โดยยังไม่มีคำสั่ง push_line สำหรับส่งเข้า LINE) — วิธีแก้: 1) กดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง 2) ไปวางทับใน Google Sheets > Extensions > Apps Script 3) กดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy',
+          });
+          setLineDiagnosticResult({ ok: false, steps });
+        }
       } catch {
         steps.push({
           step: '3. ทดสอบส่งข้อความเข้าแอป LINE ผ่าน Google Apps Script',
           status: 'error',
           detail:
-            'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น Anyone',
+            'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น "Anyone (ทุกคน)" และเลือก New version แล้ว',
         });
         setLineDiagnosticResult({ ok: false, steps });
       }
@@ -344,8 +450,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
         handledByBackend = false;
       }
 
-      // 2. Fallback อัตโนมัติสำหรับ GitHub Pages / Static Web (ยิงตรงจากเบราว์เซอร์ไปที่ Google Apps Script)
-      if (!handledByBackend) {
+      // 2. ตรวจสอบตรงจากเบราว์เซอร์ไปที่ Google Apps Script (อ่าน JSON Response เพื่อเช็คเวอร์ชันโค้ดจริง)
+      if (!handledByBackend || !withSampleTask) {
         const webhookPayload = sampleText
           ? {
               events: [
@@ -356,16 +462,22 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 },
               ],
             }
-          : { events: [] };
+          : { action: 'check_bridge', events: [] };
 
         try {
-          // ใช้ text/plain เพื่อหลีกเลี่ยง CORS Preflight (OPTIONS) ของ Google Apps Script
-          await fetch(trimmedUrl, {
+          // ใช้ text/plain แบบปกติก่อนเพื่ออ่าน JSON ตรวจสอบว่าโค้ด Apps Script อัปเดตเป็น v2.5 หรือยัง
+          const directRes = await fetch(trimmedUrl, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify(webhookPayload),
           });
+          const rawText = await directRes.text();
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(rawText);
+          } catch {
+            parsed = {};
+          }
 
           if (withSampleTask && sampleText) {
             onSendChatCommand(sampleText);
@@ -378,19 +490,45 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               ok: true,
               message: `ส่งข้อความ "${sampleText}" ไปยัง Google Apps Script และเพิ่มงานเข้าปฏิทินเรียบร้อยแล้ว!`,
             });
+          } else if (parsed.mode === 'gas_bridge_ready' || parsed.version === '2.5-gas-bridge') {
+            setGasVerifyResult({
+              ok: true,
+              message:
+                '✅ ลิงก์ Google Apps Script พร้อมใช้งาน 100% (โค้ดเวอร์ชันล่าสุด v2.5 รองรับทั้งขารับ Webhook และขาส่งแจ้งเตือน LINE จากเว็บ GitHub Pages)',
+            });
+          } else if (parsed.status === 'verified') {
+            setGasVerifyResult({
+              ok: false,
+              message:
+                '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ด Apps Script เวอร์ชันเก่า" (จึงทำให้เวลาเปิดเว็บจริงบน GitHub Pages แล้วไม่แจ้งเตือนเข้า LINE) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
+            });
           } else {
             setGasVerifyResult({
               ok: true,
               message:
-                'ตรวจสอบและส่งสัญญาณทดสอบไปยังลิงก์ Google Apps Script สำเร็จ! (รองรับการใช้งานบน GitHub Pages — อย่าลืมตั้งค่าการ Deploy เป็น Who has access: Anyone)',
+                'เชื่อมต่อลิงก์ Google Apps Script สำเร็จ! (หากต้องการให้ส่ง LINE จากเว็บ GitHub Pages ได้ อย่าลืมคัดลอกโค้ดด้านล่างไปอัปเดตเป็น New version)',
             });
           }
         } catch {
-          setGasVerifyResult({
-            ok: false,
-            message:
-              'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบลิงก์ หรือตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น "Anyone (ทุกคน)" แล้ว',
-          });
+          try {
+            await fetch(trimmedUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify(webhookPayload),
+            });
+            setGasVerifyResult({
+              ok: true,
+              message:
+                'ส่งสัญญาณไปยัง Google Apps Script แล้ว (หากยังไม่ได้อัปเดตโค้ดล่าสุด กรุณาคัดลอกโค้ดด้านล่างไปวางแล้วกด Deploy > Manage deployments > New version)',
+            });
+          } catch {
+            setGasVerifyResult({
+              ok: false,
+              message:
+                'ไม่สามารถเชื่อมต่อลิงก์ Google Apps Script ได้ กรุณาตรวจสอบลิงก์ หรือตรวจสอบว่าตั้งค่า Deploy > Who has access เป็น "Anyone (ทุกคน)" แล้ว',
+            });
+          }
         }
       }
     } finally {
@@ -1551,6 +1689,24 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             {/* TAB 4: LINE Messaging API Credentials */}
             {activeSettingsTab === 'api' && (
               <div className="mt-4 space-y-3">
+                <div
+                  className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                    runtimeMode === 'fullstack'
+                      ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                      : 'bg-indigo-50/70 border-indigo-200 text-indigo-950'
+                  }`}
+                >
+                  <div className="font-bold">
+                    {runtimeMode === 'fullstack'
+                      ? '🟢 โหมดปัจจุบัน: AI Studio / Full-Stack Server (ส่งผ่าน /api/line/push โดยตรง)'
+                      : '🌐 โหมดปัจจุบัน: เว็บไซต์จริง / GitHub Pages (ส่งผ่าน Google Apps Script Bridge)'}
+                  </div>
+                  <div className="mt-0.5 text-[11px] opacity-90">
+                    {runtimeMode === 'fullstack'
+                      ? 'หน้าพรีวิวนี้มี Node.js Server จึงส่งเข้า LINE ได้ทันที — แต่หากรันบนเว็บจริง (GitHub Pages) จะไม่มี Server ในตัว ต้องคัดลอกโค้ด Apps Script ด้านล่างไป Deploy เป็น New version เพื่อทำหน้าที่ส่งข้อความแทน'
+                      : 'เนื่องจากเว็บจริงบน GitHub Pages เป็น Static Web (เบราว์เซอร์ยิงตรงไปหา api.line.me ไม่ได้เพราะติด CORS) ระบบจะส่งแจ้งเตือนผ่านลิงก์ Google Apps Script ด้านล่างโดยอัตโนมัติ'}
+                  </div>
+                </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-medium text-slate-700">
