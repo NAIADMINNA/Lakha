@@ -37,7 +37,14 @@ import {
   INITIAL_TEAM_MEMBERS,
   getInitialTasks,
 } from './data/initialData';
-import { getAccessToken, googleSignIn, initAuth, logout } from './services/auth';
+import {
+  getAccessToken,
+  googleSignIn,
+  initAuth,
+  isInAppWebView,
+  logout,
+  openInExternalBrowser,
+} from './services/auth';
 import {
   SheetMetadata,
   createDatabaseSpreadsheet,
@@ -112,6 +119,13 @@ export default function App() {
   const [workspaceId] = useState<string>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
+      const gasFromUrl = params.get('gas');
+      if (
+        gasFromUrl &&
+        gasFromUrl.trim().startsWith('https://script.google.com/macros/s/')
+      ) {
+        localStorage.setItem('sheetcal_gas_url_v1', gasFromUrl.trim());
+      }
       const fromUrl = params.get('workspace');
       if (fromUrl && fromUrl.trim()) {
         localStorage.setItem(STORAGE_KEYS.WORKSPACE_ID, fromUrl.trim());
@@ -1219,6 +1233,39 @@ export default function App() {
     return () => clearInterval(pollTimer);
   }, [handleSendLineChatCommand, lineSettings.targetUserId]);
 
+  // Zero-Login Auto-Pull via Google Apps Script Bridge (works on mobile/LINE without Gmail OAuth login!)
+  useEffect(() => {
+    const pullFromGasBridge = async () => {
+      try {
+        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        if (!savedGasUrl.startsWith('https://script.google.com/macros/s/')) return;
+
+        const res = await fetch(savedGasUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'get_tasks' }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.tasks) && data.tasks.length > 0) {
+          setTasks((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newItems = (data.tasks as Task[]).filter(
+              (rt) => rt && rt.id && rt.title && rt.date && !existingIds.has(rt.id)
+            );
+            return newItems.length > 0 ? [...newItems, ...prev] : prev;
+          });
+        }
+      } catch {
+        // Silent background check
+      }
+    };
+
+    pullFromGasBridge();
+    const gasTimer = setInterval(pullFromGasBridge, 10000);
+    return () => clearInterval(gasTimer);
+  }, []);
+
   // Background Auto-Pull from Google Sheets every 6 seconds so tasks added via real LINE App (Google Apps Script Webhook) appear in Calendar automatically
   useEffect(() => {
     if (!sheetMeta?.spreadsheetId || !accessToken || isSyncing) return;
@@ -2069,6 +2116,27 @@ export default function App() {
           <span>Google Sheets</span>
         </button>
       </div>
+
+      {/* In-App Browser (LINE WebView) Warning Banner with 1-Click External Browser Redirect */}
+      {isInAppWebView() && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5">
+          <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-amber-950">
+            <div>
+              <strong>💡 คุณกำลังเปิดผ่านเบราว์เซอร์ภายในแอป LINE:</strong>{' '}
+              คุณสามารถดูตารางงานและปฏิทินทีมได้ทันทีโดยไม่ต้องล็อกอิน Gmail แต่หากต้องการกด{' '}
+              <strong>Sign in with Google</strong> กรุณาเปิดใน Safari หรือ Chrome (เพราะเบราว์เซอร์ในแอป LINE บล็อกระบบล็อกอินของ Google)
+            </div>
+            <button
+              type="button"
+              onClick={() => openInExternalBrowser()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold hover:bg-amber-700 transition-colors whitespace-nowrap shrink-0"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span>เปิดใน Safari / Chrome</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Minimalist Workspace Status Bar */}
       <div className="bg-gradient-to-r from-indigo-50/70 via-white to-emerald-50/70 border-b border-slate-200 px-6 py-2">

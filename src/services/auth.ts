@@ -42,6 +42,25 @@ export const initAuth = (
   });
 };
 
+export const isInAppWebView = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /\b(Line\/|FBAN|FBAV|Instagram|MicroMessenger)\b/i.test(ua);
+};
+
+export const openInExternalBrowser = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('openExternalBrowser', '1');
+    const target = url.toString();
+    window.location.href = target;
+    return target;
+  } catch {
+    return window.location.href;
+  }
+};
+
 export interface GoogleSignInResult {
   user: User;
   accessToken: string;
@@ -49,6 +68,16 @@ export interface GoogleSignInResult {
 
 export const googleSignIn = async (): Promise<GoogleSignInResult | null> => {
   if (isSigningIn) return null;
+
+  // Prevent storage-partitioned WebView crash ("Unable to process request due to missing initial state")
+  // inside LINE / Facebook / Instagram In-App Browsers on iOS & Android
+  if (isInAppWebView()) {
+    openInExternalBrowser();
+    throw new Error(
+      'เบราว์เซอร์ภายในแอป LINE ไม่รองรับการล็อกอิน Google โดยตรง (เนื่องจากระบบความปลอดภัยของ iOS/Google บล็อก sessionStorage ในแอปแชท) — ระบบได้ส่งคำสั่งเปิดใน Safari/Chrome ให้แล้ว หรือกดปุ่มแชร์/เมนู (⋯) มุมขวาล่าง แล้วเลือก "เปิดในเบราว์เซอร์เริ่มต้น (Open in Safari/Chrome)" ครับ'
+    );
+  }
+
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -73,13 +102,14 @@ export const googleSignIn = async (): Promise<GoogleSignInResult | null> => {
 
     if (code === 'auth/popup-blocked') {
       throw new Error(
-        'เบราว์เซอร์บล็อกหน้าต่างป๊อปอัป กรุณาอนุญาตป๊อปอัป (Allow Pop-ups) สำหรับเว็บไซต์นี้แล้วลองใหม่อีกครั้ง'
+        'เบราว์เซอร์บล็อกหน้าต่างป๊อปอัป กรุณาอนุญาตป๊อปอัป (Allow Pop-ups) หรือเปิดลิงก์นี้ใน Safari / Chrome โดยตรงแล้วลองใหม่อีกครั้ง'
       );
     }
 
     if (code === 'auth/unauthorized-domain') {
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
       throw new Error(
-        'โดเมนปัจจุบันยังไม่ได้รับอนุญาตใน Firebase Auth กรุณาตรวจสอบการตั้งค่า OAuth'
+        `โดเมน "${host}" ยังไม่ได้เพิ่มในรายการอนุญาตของ Firebase Auth (ไม่จำเป็นต้องล็อกอิน Google หากเชื่อมต่อผ่านลิงก์ Google Apps Script แล้ว)`
       );
     }
 

@@ -924,6 +924,19 @@ export function resolveTeamCalendarAppUrl(options?: {
     if (options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())) {
       parsedUrl.searchParams.set('date', options.date.trim());
     }
+    try {
+      const savedGas =
+        typeof localStorage !== 'undefined'
+          ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
+          : '';
+      if (savedGas.startsWith('https://script.google.com/macros/s/')) {
+        parsedUrl.searchParams.set('gas', savedGas);
+      }
+    } catch {
+      // Ignore storage access
+    }
+    // Force LINE app on iOS/Android to open in Safari/Chrome instead of storage-partitioned LINE WebView
+    parsedUrl.searchParams.set('openExternalBrowser', '1');
     return parsedUrl.toString();
   } catch {
     return 'https://calendar.google.com';
@@ -982,6 +995,10 @@ function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   }
   if (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1 && url.indexOf('sheet=') === -1) {
     url += sep + 'sheet=' + encodeURIComponent(SPREADSHEET_ID);
+    sep = '&';
+  }
+  if (url.indexOf('openExternalBrowser=') === -1) {
+    url += sep + 'openExternalBrowser=1';
   }
   return url;
 }
@@ -1307,12 +1324,43 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
   };
 }
 
+function readSheetTasksForWeb() {
+  try {
+    var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1 && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1)
+      ? SpreadsheetApp.openById(SPREADSHEET_ID)
+      : SpreadsheetApp.getActiveSpreadsheet();
+    var taskSheet = ss.getSheetByName('Tasks');
+    if (!taskSheet || taskSheet.getLastRow() <= 1) return [];
+    var rows = taskSheet.getDataRange().getValues().slice(1);
+    return rows.map(function(r, idx) {
+      return {
+        id: String(r[0] || ('sheet-task-' + idx)),
+        title: String(r[1] || 'งาน'),
+        description: String(r[2] || ''),
+        date: String(r[3] || '').replace(/^'/, ''),
+        time: String(r[4] || '09:00').replace(/^'/, ''),
+        categoryId: String(r[5] || 'cat-work'),
+        priority: String(r[6] || 'medium'),
+        status: String(r[7] || 'pending'),
+        remindMinutesBefore: Number(r[8] || 30),
+        lineNotified: String(r[9]).toUpperCase() === 'TRUE',
+        source: String(r[10] || 'sheets'),
+        updatedAt: String(r[11] || new Date().toISOString())
+      };
+    }).filter(function(t) { return Boolean(t.title && t.date); });
+  } catch (err) {
+    return [];
+  }
+}
+
 function doGet(e) {
+  var tasks = readSheetTasksForWeb();
   return ContentService
     .createTextOutput(JSON.stringify({
       status: 'verified',
       version: '2.5-gas-bridge',
-      capabilities: ['webhook', 'push_line'],
+      capabilities: ['webhook', 'push_line', 'get_tasks'],
+      tasks: tasks,
       message: 'SheetCal LINE Webhook & Push Bridge Ready'
     }))
     .setMimeType(ContentService.MimeType.JSON);
@@ -1323,13 +1371,14 @@ function doPost(e) {
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     var payload = JSON.parse(rawContents);
 
-    // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) จากหน้าเว็บ
-    if (payload.action === 'check_bridge') {
+    // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) หรือดึงข้อมูลตารางงานจาก Google Sheets โดยไม่ต้องล็อกอิน Gmail
+    if (payload.action === 'check_bridge' || payload.action === 'get_tasks') {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
         version: '2.5-gas-bridge',
-        capabilities: ['webhook', 'push_line']
+        capabilities: ['webhook', 'push_line', 'get_tasks'],
+        tasks: readSheetTasksForWeb()
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
