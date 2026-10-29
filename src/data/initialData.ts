@@ -80,4 +80,7 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   targetUserId: '',
   autoSyncOnLineCommand: true,
   publicCalendarUrl: '',
+  cardFontSize: 'md',
+  cardTitleWeight: 'bold',
+  cardLineSpacing: 'relaxed',
 };

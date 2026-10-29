@@ -120,6 +120,9 @@ export interface LineSettings {
   targetUserId: string;
   autoSyncOnLineCommand: boolean;
   publicCalendarUrl?: string;
+  cardFontSize?: 'sm' | 'md' | 'lg';
+  cardTitleWeight?: 'bold' | 'regular';
+  cardLineSpacing?: 'tight' | 'normal' | 'relaxed';
 }
 
 export interface ConfirmationDialogRequest {

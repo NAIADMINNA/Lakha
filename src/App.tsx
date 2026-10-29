@@ -381,6 +381,23 @@ export default function App() {
       } catch {
         // Silent fallback
       }
+
+      // Also sync tasks to Google Sheets via Google Apps Script Bridge without requiring Google Sign-In again
+      try {
+        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          await fetch(savedGasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'sync_tasks',
+              tasks: nextTasks,
+            }),
+          });
+        }
+      } catch {
+        // Silent fallback
+      }
     },
     [sheetMeta?.spreadsheetId, sheetMeta?.spreadsheetUrl, user?.email, workspaceId]
   );
@@ -709,7 +726,13 @@ export default function App() {
       );
 
       const sameDayTasks = tasks.filter((t) => t.date === task.date);
-      const summaryTasks = sameDayTasks.length > 0 ? sameDayTasks : tasks;
+      const baseSummaryTasks = sameDayTasks.length > 0 ? sameDayTasks : tasks;
+      const summaryTasks =
+        baseSummaryTasks.length > 0
+          ? baseSummaryTasks.some((t) => t.id === task.id)
+            ? baseSummaryTasks
+            : [...baseSummaryTasks, task]
+          : [task];
       const summaryStats = {
         total: summaryTasks.length,
         pending: summaryTasks.filter((t) => t.status !== TaskStatus.COMPLETED).length,
@@ -766,6 +789,9 @@ export default function App() {
               includeGoogleCalendarButton:
                 lineSettings.includeGoogleCalendarButton !== false,
               includeOpenAppButton: lineSettings.includeOpenAppButton !== false,
+              cardFontSize: lineSettings.cardFontSize || 'md',
+              cardTitleWeight: lineSettings.cardTitleWeight || 'bold',
+              cardLineSpacing: lineSettings.cardLineSpacing || 'relaxed',
             }),
           });
           const contentType = res.headers.get('content-type') || '';
@@ -800,6 +826,9 @@ export default function App() {
               priority: task.priority,
               messageFormat: formatMode,
               originUrl: calendarDeepLinkUrl,
+              cardFontSize: lineSettings.cardFontSize || 'md',
+              cardTitleWeight: lineSettings.cardTitleWeight || 'bold',
+              cardLineSpacing: lineSettings.cardLineSpacing || 'relaxed',
             });
             try {
               const gasRes = await fetch(savedGasUrl, {

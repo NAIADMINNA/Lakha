@@ -1353,13 +1353,49 @@ function readSheetTasksForWeb() {
   }
 }
 
+function writeSheetTasksFromWeb(tasksList) {
+  try {
+    var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1 && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1)
+      ? SpreadsheetApp.openById(SPREADSHEET_ID)
+      : SpreadsheetApp.getActiveSpreadsheet();
+    var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
+    taskSheet.clearContents();
+    var rows = [
+      ['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']
+    ];
+    if (Array.isArray(tasksList)) {
+      tasksList.forEach(function(t) {
+        if (!t || !t.title) return;
+        rows.push([
+          String(t.id || ('task-' + new Date().getTime())),
+          String(t.title || ''),
+          String(t.description || ''),
+          "'" + String(t.date || ''),
+          "'" + String(t.time || '09:00'),
+          String(t.categoryId || 'cat-work'),
+          String(t.priority || 'medium'),
+          String(t.status || 'pending'),
+          Number(t.remindMinutesBefore || 30),
+          t.lineNotified ? 'TRUE' : 'FALSE',
+          String(t.source || 'web'),
+          String(t.updatedAt || new Date().toISOString())
+        ]);
+      });
+    }
+    taskSheet.getRange(1, 1, rows.length, 12).setValues(rows);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function doGet(e) {
   var tasks = readSheetTasksForWeb();
   return ContentService
     .createTextOutput(JSON.stringify({
       status: 'verified',
       version: '2.5-gas-bridge',
-      capabilities: ['webhook', 'push_line', 'get_tasks'],
+      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks'],
       tasks: tasks,
       message: 'SheetCal LINE Webhook & Push Bridge Ready'
     }))
@@ -1377,8 +1413,19 @@ function doPost(e) {
         status: 'ok',
         mode: 'gas_bridge_ready',
         version: '2.5-gas-bridge',
-        capabilities: ['webhook', 'push_line', 'get_tasks'],
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks'],
         tasks: readSheetTasksForWeb()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // บันทึก/อัปเดตรายการงานลง Google Sheets ผ่าน Apps Script โดยไม่ต้องล็อกอิน Gmail ซ้ำ
+    if (payload.action === 'sync_tasks') {
+      var savedOk = writeSheetTasksFromWeb(payload.tasks || []);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: savedOk ? 'ok' : 'error',
+        mode: 'gas_sync_tasks',
+        version: '2.5-gas-bridge',
+        ok: savedOk
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -1454,6 +1501,11 @@ function doPost(e) {
             action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: sheetUrl }
           });
         }
+        var fontSizeMode = payload.cardFontSize || 'md';
+        var titleSize = fontSizeMode === 'sm' ? 'md' : fontSizeMode === 'lg' ? 'xl' : 'lg';
+        var bodySize = fontSizeMode === 'sm' ? 'xxs' : fontSizeMode === 'lg' ? 'sm' : 'xs';
+        var titleWeight = payload.cardTitleWeight === 'regular' ? 'regular' : 'bold';
+        var lineSpacingVal = payload.cardLineSpacing === 'tight' ? '2px' : payload.cardLineSpacing === 'normal' ? '4px' : '6px';
         messagesPayload = [{
           type: 'flex',
           altText: msgText.slice(0, 300),
@@ -1467,7 +1519,7 @@ function doPost(e) {
               paddingAll: '16px',
               contents: [
                 { type: 'text', text: payload.categoryName || 'SHEETCAL NOTIFICATION', color: '#FFFFFF', size: 'xxs', weight: 'bold' },
-                { type: 'text', text: String(payload.taskTitle), color: '#FFFFFF', size: 'md', weight: 'bold', wrap: true, margin: 'xs' }
+                { type: 'text', text: String(payload.taskTitle), color: '#FFFFFF', size: titleSize, weight: titleWeight, lineSpacing: lineSpacingVal, wrap: true, margin: 'xs' }
               ]
             },
             body: {
@@ -1475,8 +1527,8 @@ function doPost(e) {
               layout: 'vertical',
               paddingAll: '16px',
               contents: [
-                { type: 'text', text: String(payload.dateTime || payload.date || 'วันนี้'), size: 'xs', weight: 'bold', color: '#334155' },
-                { type: 'text', text: String(payload.description || msgText), size: 'xs', color: '#475569', wrap: true, margin: 'sm' }
+                { type: 'text', text: String(payload.dateTime || payload.date || 'วันนี้'), size: bodySize, weight: titleWeight, color: '#334155' },
+                { type: 'text', text: String(payload.description || msgText), size: bodySize, color: '#475569', lineSpacing: lineSpacingVal, wrap: true, margin: 'sm' }
               ]
             },
             footer: {

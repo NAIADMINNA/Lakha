@@ -1617,68 +1617,244 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       </div>
                     </div>
                   ) : (
-                    /* Colorful Flex Card Live Preview */
-                    <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-white">
-                      <div
-                        style={{
-                          backgroundColor: sampleCategory?.color || '#2563EB',
-                        }}
-                        className="px-4 py-3 text-white"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="px-2 py-0.5 rounded bg-black/25 text-[10px] font-bold uppercase">
-                            🔥 HIGH PRIORITY REMINDER
+                    /* Colorful Flex Card Live Preview + Typography Controls */
+                    <div className="space-y-3">
+                      <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-900">
+                            🔤 ปรับลักษณะตัวอักษรและการจัดวางบนการ์ด LINE
                           </span>
-                          <span className="text-xs font-mono-tabular font-bold">
-                            {samplePreviewTask.time} น.
+                          <span className="text-[10px] font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                            แก้ปัญหาตัวหนังสือบวม/สระซ้อนบน LINE PC
                           </span>
                         </div>
-                        <div className="text-sm font-bold mt-1.5">
-                          {samplePreviewTask.title}
-                        </div>
-                      </div>
-                      <div className="p-3.5 space-y-2.5 text-xs">
-                        <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 space-y-1">
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">🗓️ วันที่:</span>
-                            <span className="font-bold text-slate-900">
-                              {samplePreviewTask.date} เวลา {samplePreviewTask.time} น.
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">🗂️ หมวดหมู่:</span>
-                            <span
-                              className="font-bold"
-                              style={{ color: sampleCategory?.color || '#2563EB' }}
-                            >
-                              {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
-                            </span>
-                          </div>
-                        </div>
 
-                        <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-2.5">
-                          <div className="text-[10px] font-bold text-indigo-700 uppercase">
-                            📊 สรุปภาพรวมตารางงานประจำวัน
-                          </div>
-                          <div className="text-xs font-bold text-indigo-950 mt-0.5">
-                            ทั้งหมด {summaryMetrics.total} งาน · รอทำ{' '}
-                            <span className="text-amber-700">
-                              {summaryMetrics.pendingCount} งาน
-                            </span>{' '}
-                            · เสร็จแล้ว{' '}
-                            <span className="text-emerald-700">
-                              {summaryMetrics.completedCount} งาน
-                            </span>
-                          </div>
-                        </div>
-
-                        {lineSettings.includeOpenAppButton !== false && (
-                          <div className="pt-1">
-                            <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
-                              เปิดดูปฏิทินของทีม
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {/* ขนาดตัวอักษร */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-medium text-slate-600 block">
+                              ขนาดตัวอักษร (Font Size)
+                            </label>
+                            <div className="grid grid-cols-3 gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                              {(
+                                [
+                                  { id: 'sm', label: 'เล็ก' },
+                                  { id: 'md', label: 'มาตรฐาน' },
+                                  { id: 'lg', label: 'ใหญ่' },
+                                ] as const
+                              ).map((opt) => {
+                                const active = (lineSettings.cardFontSize || 'md') === opt.id;
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() =>
+                                      onUpdateSettings({
+                                        ...lineSettings,
+                                        cardFontSize: opt.id,
+                                      })
+                                    }
+                                    className={`py-1 rounded text-[11px] font-semibold transition-colors ${
+                                      active
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
-                        )}
+
+                          {/* ความหนาหัวข้อและข้อมูล */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-medium text-slate-600 block">
+                              ความหนาฟอนต์ (Weight)
+                            </label>
+                            <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                              {(
+                                [
+                                  { id: 'regular', label: 'ตัวปกติ (คมชัด)' },
+                                  { id: 'bold', label: 'ตัวหนา (เน้น)' },
+                                ] as const
+                              ).map((opt) => {
+                                const active =
+                                  (lineSettings.cardTitleWeight || 'bold') === opt.id;
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() =>
+                                      onUpdateSettings({
+                                        ...lineSettings,
+                                        cardTitleWeight: opt.id,
+                                      })
+                                    }
+                                    className={`py-1 rounded text-[11px] font-semibold transition-colors ${
+                                      active
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* ระยะห่างบรรทัด */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-medium text-slate-600 block">
+                              ระยะห่างบรรทัด (Line Spacing)
+                            </label>
+                            <div className="grid grid-cols-3 gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                              {(
+                                [
+                                  { id: 'tight', label: 'ชิด' },
+                                  { id: 'normal', label: 'ปกติ' },
+                                  { id: 'relaxed', label: 'โปร่งสบาย' },
+                                ] as const
+                              ).map((opt) => {
+                                const active =
+                                  (lineSettings.cardLineSpacing || 'relaxed') === opt.id;
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() =>
+                                      onUpdateSettings({
+                                        ...lineSettings,
+                                        cardLineSpacing: opt.id,
+                                      })
+                                    }
+                                    className={`py-1 rounded text-[11px] font-semibold transition-colors ${
+                                      active
+                                        ? 'bg-indigo-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          💡 <strong>เคล็ดลับสำหรับ LINE บนคอมพิวเตอร์ (Windows):</strong> หากตัวอักษรภาษาไทยดูหนาหรือติดกันเกินไป แนะนำให้เลือก{' '}
+                          <strong className="text-slate-700">&quot;ตัวปกติ (คมชัด)&quot;</strong> คู่กับระยะห่าง{' '}
+                          <strong className="text-slate-700">&quot;โปร่งสบาย&quot;</strong> หรือเปลี่ยนฟอนต์หลักในแอป LINE ที่เมนู{' '}
+                          <span className="font-mono-tabular text-slate-700">Settings (⚙️) &gt; Chats &gt; Font</span>
+                        </p>
+                      </div>
+
+                      <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-white">
+                        <div
+                          style={{
+                            backgroundColor: sampleCategory?.color || '#2563EB',
+                          }}
+                          className="px-4 py-3 text-white"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="px-2 py-0.5 rounded bg-black/25 text-[10px] font-bold uppercase">
+                              🔥 HIGH PRIORITY REMINDER
+                            </span>
+                            <span className="text-xs font-mono-tabular font-bold">
+                              {samplePreviewTask.time} น.
+                            </span>
+                          </div>
+                          <div
+                            className={`mt-1.5 ${
+                              lineSettings.cardFontSize === 'sm'
+                                ? 'text-xs'
+                                : lineSettings.cardFontSize === 'lg'
+                                ? 'text-base'
+                                : 'text-sm'
+                            } ${
+                              lineSettings.cardTitleWeight === 'regular'
+                                ? 'font-normal'
+                                : 'font-bold'
+                            } ${
+                              lineSettings.cardLineSpacing === 'tight'
+                                ? 'leading-tight'
+                                : lineSettings.cardLineSpacing === 'normal'
+                                ? 'leading-snug'
+                                : 'leading-relaxed'
+                            }`}
+                          >
+                            {samplePreviewTask.title}
+                          </div>
+                        </div>
+                        <div
+                          className={`p-3.5 space-y-2.5 ${
+                            lineSettings.cardFontSize === 'sm'
+                              ? 'text-[11px]'
+                              : lineSettings.cardFontSize === 'lg'
+                              ? 'text-sm'
+                              : 'text-xs'
+                          }`}
+                        >
+                          <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 space-y-1">
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">🗓️ วันที่:</span>
+                              <span
+                                className={`${
+                                  lineSettings.cardTitleWeight === 'regular'
+                                    ? 'font-normal'
+                                    : 'font-bold'
+                                } text-slate-900`}
+                              >
+                                {samplePreviewTask.date} เวลา {samplePreviewTask.time} น.
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">🗂️ หมวดหมู่:</span>
+                              <span
+                                className={
+                                  lineSettings.cardTitleWeight === 'regular'
+                                    ? 'font-normal'
+                                    : 'font-bold'
+                                }
+                                style={{ color: sampleCategory?.color || '#2563EB' }}
+                              >
+                                {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-2.5">
+                            <div className="text-[10px] font-bold text-indigo-700 uppercase">
+                              📊 สรุปภาพรวมตารางงานประจำวัน
+                            </div>
+                            <div
+                              className={`${
+                                lineSettings.cardTitleWeight === 'regular'
+                                  ? 'font-normal'
+                                  : 'font-bold'
+                              } text-indigo-950 mt-0.5`}
+                            >
+                              ทั้งหมด {Math.max(1, summaryMetrics.total)} งาน · รอทำ{' '}
+                              <span className="text-amber-700">
+                                {summaryMetrics.total === 0 ? 1 : summaryMetrics.pendingCount} งาน
+                              </span>{' '}
+                              · เสร็จแล้ว{' '}
+                              <span className="text-emerald-700">
+                                {summaryMetrics.completedCount} งาน
+                              </span>
+                            </div>
+                          </div>
+
+                          {lineSettings.includeOpenAppButton !== false && (
+                            <div className="pt-1">
+                              <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
+                                เปิดดูปฏิทินของทีม
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}

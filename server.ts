@@ -527,6 +527,9 @@ function buildSingleTaskReminderFlexMessage(params: {
   includeDescription?: boolean;
   includeGoogleCalendarButton?: boolean;
   includeOpenAppButton?: boolean;
+  cardFontSize?: 'sm' | 'md' | 'lg';
+  cardTitleWeight?: 'bold' | 'regular';
+  cardLineSpacing?: 'tight' | 'normal' | 'relaxed';
   stats?: {
     total: number;
     pending: number;
@@ -539,6 +542,19 @@ function buildSingleTaskReminderFlexMessage(params: {
   const showDesc = params.includeDescription !== false && Boolean(params.description);
   const showCalBtn = params.includeGoogleCalendarButton !== false;
   const showAppBtn = params.includeOpenAppButton !== false;
+
+  const fontScale = params.cardFontSize || 'md';
+  const titleSize =
+    fontScale === 'lg' ? 'xl' : fontScale === 'sm' ? 'md' : isCompact ? 'md' : 'lg';
+  const bodySize = fontScale === 'lg' ? 'sm' : fontScale === 'sm' ? 'xxs' : 'xs';
+  const timeValueSize = fontScale === 'lg' ? 'md' : fontScale === 'sm' ? 'xs' : 'sm';
+  const textWeight = params.cardTitleWeight === 'regular' ? 'regular' : 'bold';
+  const lineSpacingPx =
+    params.cardLineSpacing === 'tight'
+      ? '2px'
+      : params.cardLineSpacing === 'normal'
+      ? '4px'
+      : '6px';
 
   const headerBg =
     /^#[0-9A-Fa-f]{6}$/.test(params.categoryColor || '') ? params.categoryColor! : '#4F46E5';
@@ -586,15 +602,15 @@ function buildSingleTaskReminderFlexMessage(params: {
           type: 'text',
           text: '🗓️ วันที่',
           color: '#64748B',
-          size: 'xs',
+          size: bodySize,
           flex: 2,
         },
         {
           type: 'text',
           text: `${readableDate} (${params.date})`,
           color: '#0F172A',
-          size: 'xs',
-          weight: 'bold',
+          size: bodySize,
+          weight: textWeight,
           flex: 5,
         },
       ],
@@ -608,15 +624,15 @@ function buildSingleTaskReminderFlexMessage(params: {
           type: 'text',
           text: '⏰ เวลา',
           color: '#64748B',
-          size: 'xs',
+          size: bodySize,
           flex: 2,
         },
         {
           type: 'text',
           text: `${params.time} น.`,
           color: '#059669',
-          size: 'sm',
-          weight: 'bold',
+          size: timeValueSize,
+          weight: textWeight,
           flex: 5,
         },
       ],
@@ -630,15 +646,15 @@ function buildSingleTaskReminderFlexMessage(params: {
           type: 'text',
           text: '🗂️ หมวดหมู่',
           color: '#64748B',
-          size: 'xs',
+          size: bodySize,
           flex: 2,
         },
         {
           type: 'text',
           text: params.categoryName || 'ทั่วไป',
           color: headerBg,
-          size: 'xs',
-          weight: 'bold',
+          size: bodySize,
+          weight: textWeight,
           flex: 5,
           wrap: true,
         },
@@ -698,8 +714,9 @@ function buildSingleTaskReminderFlexMessage(params: {
             type: 'text',
             text: params.taskTitle || 'รายการงานแจ้งเตือน',
             color: '#FFFFFF',
-            size: isCompact ? 'md' : 'lg',
-            weight: 'bold',
+            size: titleSize,
+            weight: textWeight,
+            lineSpacing: lineSpacingPx,
             wrap: true,
             margin: 'md',
           },
@@ -727,7 +744,8 @@ function buildSingleTaskReminderFlexMessage(params: {
                 {
                   type: 'text',
                   text: params.description,
-                  size: 'xs',
+                  size: bodySize,
+                  lineSpacing: lineSpacingPx,
                   color: '#475569',
                   wrap: true,
                 },
@@ -754,8 +772,9 @@ function buildSingleTaskReminderFlexMessage(params: {
                     {
                       type: 'text',
                       text: `ทั้งหมด ${summaryStats.total} งาน · รอทำ ${summaryStats.pending} งาน · เสร็จแล้ว ${summaryStats.completed} งาน`,
-                      size: 'xs',
-                      weight: 'bold',
+                      size: bodySize,
+                      weight: textWeight,
+                      lineSpacing: lineSpacingPx,
                       color: '#1E1B4B',
                       margin: 'xs',
                       wrap: true,
@@ -938,6 +957,9 @@ async function startServer() {
         includeDescription,
         includeGoogleCalendarButton,
         includeOpenAppButton,
+        cardFontSize,
+        cardTitleWeight,
+        cardLineSpacing,
       } = req.body || {};
 
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
@@ -990,6 +1012,9 @@ async function startServer() {
           includeDescription,
           includeGoogleCalendarButton,
           includeOpenAppButton,
+          cardFontSize,
+          cardTitleWeight,
+          cardLineSpacing,
           stats,
         });
       } else {
