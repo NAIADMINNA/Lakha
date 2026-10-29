@@ -2821,12 +2821,12 @@ export default function App() {
       </main>
 
       {/* Quiet Footer */}
-      <footer className="border-t border-slate-200 bg-white px-6 py-4 mt-12">
+      <footer className="border-t border-slate-200 bg-white px-4 sm:px-6 pt-4 pb-20 md:pb-4 mt-12">
         <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
           <span>
             SheetCal LINE — ระบบปฏิทินตารางงานร่วมกันของทีม แจ้งเตือนผ่าน LINE OA และฐานข้อมูล Google Sheets
           </span>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             <button
               type="button"
               onClick={() => setActiveSection('team')}
@@ -2858,6 +2858,73 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Thumb-Friendly Mobile Bottom Navigation Bar (< 768px) */}
+      <nav
+        aria-label="เมนูหลักบนมือถือ"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 grid grid-cols-5 gap-1 shadow-lg"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveSection('dashboard')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'dashboard'
+              ? 'text-indigo-600 bg-indigo-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <LayoutDashboard className="h-4 w-4 mb-0.5" />
+          <span>สรุปงาน</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('calendar')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'calendar'
+              ? 'text-indigo-600 bg-indigo-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <CalendarIcon className="h-4 w-4 mb-0.5" />
+          <span>ปฏิทิน</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('team')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'team'
+              ? 'text-emerald-600 bg-emerald-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Users className="h-4 w-4 mb-0.5" />
+          <span>ทีม ({teamMembers.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('line')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'line'
+              ? 'text-[#06C755] bg-emerald-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <MessageSquareText className="h-4 w-4 mb-0.5" />
+          <span>LINE OA</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('database')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'database' || activeSection === 'categories'
+              ? 'text-violet-600 bg-violet-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Cloud className="h-4 w-4 mb-0.5" />
+          <span>Google ชีต</span>
+        </button>
+      </nav>
 
       {/* Task Add/Edit Modal */}
       <TaskFormModal

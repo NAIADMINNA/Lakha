@@ -266,7 +266,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           ))}
         </div>
 
-        {/* Days Grid */}
+        {/* Days Grid (Responsive for Mobile, Tablet, and Desktop) */}
         <div className="grid grid-cols-7 divide-x divide-y divide-slate-200">
           {calendarCells.map((cell) => {
             const dayTasks = tasksByDate[cell.dateStr] || [];
@@ -277,7 +277,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               <div
                 key={cell.dateStr}
                 onClick={() => onSelectDate(cell.dateStr)}
-                className={`min-h-[108px] sm:min-h-[124px] p-2 transition-colors cursor-pointer flex flex-col justify-between ${
+                className={`min-h-[76px] sm:min-h-[112px] lg:min-h-[124px] p-1.5 sm:p-2 transition-colors cursor-pointer flex flex-col justify-between ${
                   !cell.isCurrentMonth
                     ? 'bg-slate-50/70 text-slate-400'
                     : isSelected
@@ -285,9 +285,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     : 'bg-white hover:bg-indigo-50/25'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-0.5">
                   <span
-                    className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-xs font-mono-tabular font-bold ${
+                    className={`inline-flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-md text-[11px] sm:text-xs font-mono-tabular font-bold ${
                       isToday
                         ? 'bg-[#06C755] text-white shadow-2xs'
                         : isSelected
@@ -300,13 +300,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     {cell.dayNumber}
                   </span>
                   {dayTasks.length > 0 && (
-                    <span className="text-[11px] font-mono-tabular text-indigo-600 font-semibold">
-                      {dayTasks.length} งาน
-                    </span>
+                    <>
+                      <span className="hidden sm:inline text-[11px] font-mono-tabular text-indigo-600 font-semibold">
+                        {dayTasks.length} งาน
+                      </span>
+                      <span className="sm:hidden inline-flex items-center justify-center px-1 rounded bg-indigo-100 text-indigo-700 text-[9px] font-mono-tabular font-bold">
+                        {dayTasks.length}
+                      </span>
+                    </>
                   )}
                 </div>
 
-                <div className="mt-1.5 space-y-1">
+                {/* Desktop & Tablet Task Pills */}
+                <div className="hidden sm:block mt-1.5 space-y-1">
                   {dayTasks.slice(0, 3).map((t) => {
                     const cat = categoryMap[t.categoryId];
                     const catColor = cat?.color || '#2563EB';
@@ -341,6 +347,34 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   {dayTasks.length > 3 && (
                     <div className="text-[11px] text-indigo-600 font-mono-tabular font-medium pl-1">
                       + อีก {dayTasks.length - 3} รายการ
+                    </div>
+                  )}
+                </div>
+
+                {/* Mobile Compact Task Bars & Dots (< 640px) */}
+                <div className="sm:hidden mt-1 space-y-0.5">
+                  {dayTasks.slice(0, 2).map((t) => {
+                    const cat = categoryMap[t.categoryId];
+                    const catColor = cat?.color || '#2563EB';
+                    const isDone = t.status === TaskStatus.COMPLETED;
+                    return (
+                      <div
+                        key={t.id}
+                        style={{
+                          backgroundColor: isDone ? '#E2E8F0' : `${catColor}22`,
+                          borderLeft: `2px solid ${isDone ? '#94A3B8' : catColor}`,
+                        }}
+                        className={`px-1 py-0.5 rounded-r text-[9px] font-medium truncate leading-tight ${
+                          isDone ? 'line-through text-slate-400' : 'text-slate-800'
+                        }`}
+                      >
+                        {t.title}
+                      </div>
+                    );
+                  })}
+                  {dayTasks.length > 2 && (
+                    <div className="text-[9px] text-indigo-600 font-mono-tabular font-bold leading-none pl-0.5">
+                      +{dayTasks.length - 2}
                     </div>
                   )}
                 </div>
