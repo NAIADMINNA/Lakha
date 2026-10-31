@@ -253,6 +253,41 @@ export default function App() {
   const [taskFilter, setTaskFilter] = useState<TaskFilterTab>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [uiStyleMode, setUiStyleMode] = useState<
+    'neumorphism' | 'neobrutalism' | 'clay' | 'minimal'
+  >(() => {
+    try {
+      const saved = localStorage.getItem('sheetcal_ui_style_v3');
+      if (
+        saved === 'neumorphism' ||
+        saved === 'neobrutalism' ||
+        saved === 'clay' ||
+        saved === 'minimal'
+      ) {
+        return saved;
+      }
+    } catch {
+      // Ignore
+    }
+    return 'neumorphism';
+  });
+
+  const handleToggleUiStyle = () => {
+    const next =
+      uiStyleMode === 'neumorphism'
+        ? 'neobrutalism'
+        : uiStyleMode === 'neobrutalism'
+        ? 'clay'
+        : uiStyleMode === 'clay'
+        ? 'minimal'
+        : 'neumorphism';
+    setUiStyleMode(next);
+    try {
+      localStorage.setItem('sheetcal_ui_style_v3', next);
+    } catch {
+      // Ignore
+    }
+  };
   const [quickLineInput, setQuickLineInput] = useState<string>('');
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => {
     try {
@@ -1965,7 +2000,17 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900">
+    <div
+      className={`min-h-screen flex flex-col text-slate-900 ${
+        uiStyleMode === 'neumorphism'
+          ? 'theme-neumorphism'
+          : uiStyleMode === 'neobrutalism'
+          ? 'theme-neobrutalism'
+          : uiStyleMode === 'clay'
+          ? 'theme-clay'
+          : 'bg-[#F8FAFC]'
+      }`}
+    >
       {/* Strict 3-Zone Top Navigation Bar Contract */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3.5 bg-white border-b border-slate-200">
         {/* Zone 1: Single text element wordmark */}
@@ -2209,6 +2254,31 @@ export default function App() {
               <Users className="h-3.5 w-3.5 text-emerald-600" />
               <span>สมาชิกที่ใช้ปฏิทินร่วมกัน {teamMembers.length} คน</span>
             </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={handleToggleUiStyle}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all ${
+                uiStyleMode === 'neumorphism'
+                  ? 'bg-[#E6ECF5] text-indigo-900 border border-white/80 shadow-[3px_3px_6px_#C6D0E0,-3px_-3px_6px_#FFFFFF]'
+                  : uiStyleMode === 'neobrutalism'
+                  ? 'bg-[#FEF08A] text-slate-950 border-2 border-slate-900 shadow-[2px_2px_0px_#0F172A]'
+                  : uiStyleMode === 'clay'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+              }`}
+              title="คลิกเพื่อสลับดีไซน์: Neumorphism ↔ Neo-Brutalism ↔ Claymorphism 3D ↔ Minimal Clean"
+            >
+              <span>
+                {uiStyleMode === 'neumorphism'
+                  ? '🎛️ ดีไซน์: Neumorphism'
+                  : uiStyleMode === 'neobrutalism'
+                  ? '⚡ ดีไซน์: Neo-Brutalism'
+                  : uiStyleMode === 'clay'
+                  ? '🎨 ดีไซน์: Claymorphism 3D'
+                  : '✨ ดีไซน์: Minimal Clean'}
+              </span>
+            </button>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -2270,7 +2340,7 @@ export default function App() {
       {statusBanner && (
         <div className="max-w-[1360px] w-full mx-auto px-6 pt-4">
           <div
-            className={`rounded-lg border px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-4 ${
+            className={`rounded-2xl border px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-4 ${
               statusBanner.type === 'error'
                 ? 'bg-red-50 border-red-200 text-red-800'
                 : statusBanner.type === 'success'
@@ -2309,71 +2379,111 @@ export default function App() {
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-6">
         {activeSection === 'dashboard' && (
           <div className="space-y-6">
-            {/* 4-Column Vibrant KPI Summary Strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white border border-slate-200 border-t-4 border-t-indigo-600 rounded-xl p-5 shadow-2xs">
-                <div className="text-xs font-semibold text-indigo-700">
+            {/* 4-Column KPI Summary Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div
+                className={
+                  uiStyleMode === 'neumorphism'
+                    ? 'neu-kpi-indigo p-5'
+                    : uiStyleMode === 'neobrutalism'
+                    ? 'brutal-kpi-indigo p-5'
+                    : uiStyleMode === 'clay'
+                    ? 'clay-kpi-indigo p-5'
+                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                }
+              >
+                <div className="text-xs font-bold text-indigo-950">
                   งานวันนี้
                 </div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-indigo-600 font-mono-tabular">
+                <div className="mt-2.5 flex items-baseline justify-between">
+                  <span className="text-3xl font-bold text-indigo-700 font-mono-tabular">
                     {metrics.todayCount}
                   </span>
-                  <span className="text-xs text-slate-600 font-mono-tabular font-medium">
+                  <span className="text-xs text-indigo-950/80 font-mono-tabular font-semibold">
                     ค้าง {metrics.todayPendingCount} รายการ
                   </span>
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 border-t-4 border-t-amber-500 rounded-xl p-5 shadow-2xs">
-                <div className="text-xs font-semibold text-amber-700">
+              <div
+                className={
+                  uiStyleMode === 'neumorphism'
+                    ? 'neu-kpi-amber p-5'
+                    : uiStyleMode === 'neobrutalism'
+                    ? 'brutal-kpi-amber p-5'
+                    : uiStyleMode === 'clay'
+                    ? 'clay-kpi-amber p-5'
+                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                }
+              >
+                <div className="text-xs font-bold text-amber-950">
                   งานค้างทั้งหมด
                 </div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-amber-600 font-mono-tabular">
+                <div className="mt-2.5 flex items-baseline justify-between">
+                  <span className="text-3xl font-bold text-amber-800 font-mono-tabular">
                     {metrics.pendingCount}
                   </span>
-                  <span className="text-xs text-rose-600 font-mono-tabular font-semibold">
+                  <span className="text-xs text-rose-700 font-mono-tabular font-semibold">
                     เลยกำหนด {metrics.overdueCount} งาน
                   </span>
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 border-t-4 border-t-emerald-500 rounded-xl p-5 shadow-2xs">
-                <div className="text-xs font-semibold text-emerald-700">
+              <div
+                className={
+                  uiStyleMode === 'neumorphism'
+                    ? 'neu-kpi-emerald p-5'
+                    : uiStyleMode === 'neobrutalism'
+                    ? 'brutal-kpi-emerald p-5'
+                    : uiStyleMode === 'clay'
+                    ? 'clay-kpi-emerald p-5'
+                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                }
+              >
+                <div className="text-xs font-bold text-emerald-950">
                   งานที่ทำเสร็จแล้ว
                 </div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-emerald-600 font-mono-tabular">
+                <div className="mt-2.5 flex items-baseline justify-between">
+                  <span className="text-3xl font-bold text-emerald-800 font-mono-tabular">
                     {metrics.completedCount}
                   </span>
-                  <span className="text-xs text-emerald-700 font-mono-tabular font-semibold">
+                  <span className="text-xs text-emerald-900 font-mono-tabular font-semibold">
                     สำเร็จ {metrics.completionRate}%
                   </span>
                 </div>
               </div>
 
-              <div className="bg-white border border-slate-200 border-t-4 border-t-rose-500 rounded-xl p-5 shadow-2xs">
-                <div className="text-xs font-semibold text-rose-700">
+              <div
+                className={
+                  uiStyleMode === 'neumorphism'
+                    ? 'neu-kpi-rose p-5'
+                    : uiStyleMode === 'neobrutalism'
+                    ? 'brutal-kpi-rose p-5'
+                    : uiStyleMode === 'clay'
+                    ? 'clay-kpi-rose p-5'
+                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                }
+              >
+                <div className="text-xs font-bold text-rose-950">
                   งานความสำคัญสูง
                 </div>
-                <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-rose-600 font-mono-tabular">
+                <div className="mt-2.5 flex items-baseline justify-between">
+                  <span className="text-3xl font-bold text-rose-700 font-mono-tabular">
                     {metrics.highPriorityCount}
                   </span>
-                  <span className="text-xs text-rose-600 font-medium">รายการเร่งด่วน</span>
+                  <span className="text-xs text-rose-900 font-semibold">รายการเร่งด่วน</span>
                 </div>
               </div>
             </div>
 
-            {/* Clean Quick Natural-Language LINE Command Input Bar with Vibrant Accent */}
-            <div className="bg-gradient-to-r from-emerald-50/70 via-white to-teal-50/50 border border-emerald-200 border-l-4 border-l-[#06C755] rounded-xl p-4 shadow-2xs">
+            {/* Quick Natural-Language LINE Command Input Bar */}
+            <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-2xs">
               <form
                 onSubmit={handleQuickLineSubmit}
                 className="flex flex-col sm:flex-row sm:items-center gap-3"
               >
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[#06C755] text-white text-[10px] font-bold shadow-2xs">
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[#06C755] text-white text-[10px] font-bold clay-btn-emerald">
                     LINE
                   </span>
                   <span className="text-xs font-semibold text-emerald-950 whitespace-nowrap">
@@ -2385,11 +2495,11 @@ export default function App() {
                   value={quickLineInput}
                   onChange={(e) => setQuickLineInput(e.target.value)}
                   placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมสรุปแผนงาน พรุ่งนี้ 10:30 #สูง"...'
-                  className="flex-1 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#06C755] focus:outline-none"
+                  className="flex-1 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#06C755] focus:outline-none"
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#06C755] rounded-lg hover:bg-[#05b04b] shadow-2xs transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#06C755] rounded-xl hover:bg-[#05b04b] transition-all whitespace-nowrap shrink-0"
                 >
                   <Send className="h-3.5 w-3.5" />
                   <span>บันทึกเข้าปฏิทิน</span>
@@ -2401,7 +2511,7 @@ export default function App() {
                     await handleTestLinePush();
                     setActiveSection('line');
                   }}
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-2xs transition-colors whitespace-nowrap shrink-0"
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all whitespace-nowrap shrink-0"
                 >
                   <Bell className="h-3.5 w-3.5" />
                   <span>📊 ส่งการ์ดสรุปงานเข้า LINE</span>
@@ -2412,15 +2522,15 @@ export default function App() {
             {/* Main Dashboard Split: Clean Task List (8 cols) + Shared Calendar & Categories Sidebar (4 cols) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left 8 Columns: Task Management Table */}
-              <div className="lg:col-span-8 bg-white border border-slate-200 border-t-4 border-t-indigo-600 rounded-xl overflow-hidden shadow-2xs">
-                <div className="p-4 border-b border-slate-200 bg-gradient-to-r from-indigo-50/40 via-white to-slate-50/40 space-y-3">
+              <div className="lg:col-span-8 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+                <div className="p-5 border-b border-slate-200/80 space-y-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <h2 className="text-base font-bold text-slate-900">
                       รายการงานในปฏิทินของทีม
                     </h2>
 
                     {/* Interactive Filter Tabs */}
-                    <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto">
+                    <div className="flex items-center gap-1 p-1.5 bg-slate-100 rounded-xl clay-inset overflow-x-auto">
                       {(
                         [
                           { id: 'all', label: `ทั้งหมด (${tasks.length})` },
@@ -2434,7 +2544,7 @@ export default function App() {
                           key={tab.id}
                           type="button"
                           onClick={() => setTaskFilter(tab.id)}
-                          className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap shrink-0 ${
                             taskFilter === tab.id
                               ? 'bg-indigo-600 text-white font-semibold shadow-2xs'
                               : 'text-slate-600 hover:text-slate-900'
@@ -2635,7 +2745,7 @@ export default function App() {
               {/* Right 4 Columns: Clean Shared Calendar Team Card & Category Breakdown */}
               <div className="lg:col-span-4 space-y-6">
                 {/* Shared Calendar Team Card */}
-                <div className="bg-white border border-slate-200 border-t-4 border-t-emerald-500 rounded-xl p-5 shadow-2xs">
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200">
                     <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
                       <Users className="h-4 w-4 text-emerald-600 shrink-0" />
@@ -2658,7 +2768,7 @@ export default function App() {
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <span
-                            className="h-6 w-6 rounded-md text-white font-bold text-[11px] inline-flex items-center justify-center shrink-0"
+                            className="h-6 w-6 rounded-lg text-white font-bold text-[11px] inline-flex items-center justify-center shrink-0 shadow-xs"
                             style={{
                               backgroundColor: member.avatarColor || '#0F172A',
                             }}
@@ -2690,7 +2800,7 @@ export default function App() {
                 </div>
 
                 {/* Category Summary Card */}
-                <div className="bg-white border border-slate-200 border-t-4 border-t-violet-500 rounded-xl p-5 shadow-2xs">
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200">
                     <h3 className="text-sm font-bold text-slate-900">
                       หมวดหมู่งานตามสี

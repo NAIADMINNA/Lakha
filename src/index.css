@@ -8,7 +8,7 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #F8FAFC;
+    background-color: #EEF2F9;
     color: #0F172A;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -22,6 +22,438 @@
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Neumorphism (Soft Extruded & Carved Tactile Monochromatic Surface UI)
+   ========================================================================== */
+
+.theme-neumorphism {
+  background-color: #E6ECF5;
+  color: #1E293B;
+}
+
+/* Soft Extruded Neumorphic Cards */
+.theme-neumorphism .bg-white.rounded-xl,
+.theme-neumorphism .bg-white.rounded-2xl {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow:
+    8px 8px 16px #C6D0E0,
+    -8px -8px 16px #FFFFFF;
+}
+
+/* Neumorphic Extruded KPI Cards with Subtle Accent Rim */
+.neu-kpi-indigo {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-left: 4px solid #4F46E5;
+  box-shadow:
+    8px 8px 16px #C6D0E0,
+    -8px -8px 16px #FFFFFF;
+}
+
+.neu-kpi-amber {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-left: 4px solid #D97706;
+  box-shadow:
+    8px 8px 16px #C6D0E0,
+    -8px -8px 16px #FFFFFF;
+}
+
+.neu-kpi-emerald {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-left: 4px solid #10B981;
+  box-shadow:
+    8px 8px 16px #C6D0E0,
+    -8px -8px 16px #FFFFFF;
+}
+
+.neu-kpi-rose {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-left: 4px solid #E11D48;
+  box-shadow:
+    8px 8px 16px #C6D0E0,
+    -8px -8px 16px #FFFFFF;
+}
+
+/* Carved / Recessed Neumorphic Wells (Inputs, Search, Segmented Filter Track) */
+.theme-neumorphism .clay-inset,
+.theme-neumorphism input[type="text"],
+.theme-neumorphism input[type="url"],
+.theme-neumorphism input[type="email"],
+.theme-neumorphism input[type="date"],
+.theme-neumorphism input[type="time"],
+.theme-neumorphism textarea,
+.theme-neumorphism select {
+  background-color: #E6ECF5;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow:
+    inset 4px 4px 8px #C5CFE0,
+    inset -4px -4px 8px #FFFFFF;
+}
+
+.theme-neumorphism input[type="text"]:focus,
+.theme-neumorphism input[type="url"]:focus,
+.theme-neumorphism input[type="email"]:focus,
+.theme-neumorphism input[type="date"]:focus,
+.theme-neumorphism input[type="time"]:focus,
+.theme-neumorphism textarea:focus,
+.theme-neumorphism select:focus {
+  background-color: #EBF1FA;
+  border-color: rgba(99, 102, 241, 0.55);
+  box-shadow:
+    inset 5px 5px 10px #C2CCDE,
+    inset -5px -5px 10px #FFFFFF,
+    0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+/* Tactile Neumorphic Buttons */
+.theme-neumorphism button.bg-indigo-600,
+.theme-neumorphism button.bg-\[\#06C755\],
+.theme-neumorphism button.bg-emerald-600,
+.theme-neumorphism button.bg-violet-600,
+.theme-neumorphism button.bg-amber-600 {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    5px 5px 12px #C2CCDE,
+    -4px -4px 10px #FFFFFF;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.theme-neumorphism button.bg-indigo-600:hover:not(:disabled),
+.theme-neumorphism button.bg-\[\#06C755\]:hover:not(:disabled),
+.theme-neumorphism button.bg-emerald-600:hover:not(:disabled),
+.theme-neumorphism button.bg-violet-600:hover:not(:disabled),
+.theme-neumorphism button.bg-amber-600:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    7px 7px 14px #BCC7DB,
+    -5px -5px 12px #FFFFFF;
+}
+
+.theme-neumorphism button.bg-indigo-600:active:not(:disabled),
+.theme-neumorphism button.bg-\[\#06C755\]:active:not(:disabled),
+.theme-neumorphism button.bg-emerald-600:active:not(:disabled),
+.theme-neumorphism button.bg-violet-600:active:not(:disabled),
+.theme-neumorphism button.bg-amber-600:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow:
+    inset 3px 3px 6px rgba(15, 23, 42, 0.25),
+    inset -2px -2px 5px rgba(255, 255, 255, 0.2);
+}
+
+.theme-neumorphism button.bg-emerald-50,
+.theme-neumorphism button.bg-indigo-50 {
+  background: linear-gradient(145deg, #F0F5FC, #DCE3EE);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    4px 4px 9px #C6D0E0,
+    -4px -4px 9px #FFFFFF;
+}
+
+/* Neumorphic Top Header */
+.theme-neumorphism header.sticky {
+  background-color: rgba(230, 236, 245, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 6px 16px #C6D0E0;
+}
+
+/* ==========================================================================
+   Neo-Brutalism (Bold Ink Borders + Hard Offset Shadows + Pop Color Blocks)
+   ========================================================================== */
+
+.theme-neobrutalism {
+  background-color: #FFFDF7;
+  background-image: radial-gradient(#CBD5E1 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Structural Cards in Neo-Brutalism */
+.theme-neobrutalism .bg-white.rounded-xl,
+.theme-neobrutalism .bg-white.rounded-2xl {
+  background-color: #FFFFFF;
+  border-radius: 12px;
+  border: 2px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+/* Bold Pop-Brutalist KPI Cards */
+.brutal-kpi-indigo {
+  background-color: #E0E7FF;
+  border-radius: 12px;
+  border: 2px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+.brutal-kpi-amber {
+  background-color: #FEF08A;
+  border-radius: 12px;
+  border: 2px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+.brutal-kpi-emerald {
+  background-color: #BBF7D0;
+  border-radius: 12px;
+  border: 2px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+.brutal-kpi-rose {
+  background-color: #FECDD3;
+  border-radius: 12px;
+  border: 2px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+/* Mechanical Press Neo-Brutalist Buttons */
+.theme-neobrutalism button.bg-indigo-600,
+.theme-neobrutalism button.bg-\[\#06C755\],
+.theme-neobrutalism button.bg-emerald-600,
+.theme-neobrutalism button.bg-emerald-50,
+.theme-neobrutalism button.bg-indigo-50,
+.theme-neobrutalism button.bg-violet-600,
+.theme-neobrutalism button.bg-amber-600 {
+  border-radius: 8px;
+  border: 2px solid #0F172A;
+  box-shadow: 3px 3px 0px #0F172A;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.theme-neobrutalism button.bg-indigo-600:hover:not(:disabled),
+.theme-neobrutalism button.bg-\[\#06C755\]:hover:not(:disabled),
+.theme-neobrutalism button.bg-emerald-600:hover:not(:disabled),
+.theme-neobrutalism button.bg-emerald-50:hover:not(:disabled),
+.theme-neobrutalism button.bg-indigo-50:hover:not(:disabled),
+.theme-neobrutalism button.bg-violet-600:hover:not(:disabled),
+.theme-neobrutalism button.bg-amber-600:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+.theme-neobrutalism button.bg-indigo-600:active:not(:disabled),
+.theme-neobrutalism button.bg-\[\#06C755\]:active:not(:disabled),
+.theme-neobrutalism button.bg-emerald-600:active:not(:disabled),
+.theme-neobrutalism button.bg-emerald-50:active:not(:disabled),
+.theme-neobrutalism button.bg-indigo-50:active:not(:disabled),
+.theme-neobrutalism button.bg-violet-600:active:not(:disabled),
+.theme-neobrutalism button.bg-amber-600:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px #0F172A;
+}
+
+/* Neo-Brutalist Inputs & Selects */
+.theme-neobrutalism input[type="text"],
+.theme-neobrutalism input[type="url"],
+.theme-neobrutalism input[type="email"],
+.theme-neobrutalism input[type="date"],
+.theme-neobrutalism input[type="time"],
+.theme-neobrutalism textarea,
+.theme-neobrutalism select {
+  background-color: #FFFFFF;
+  border-radius: 8px;
+  border: 2px solid #0F172A;
+  box-shadow: 2px 2px 0px #0F172A;
+}
+
+.theme-neobrutalism input[type="text"]:focus,
+.theme-neobrutalism input[type="url"]:focus,
+.theme-neobrutalism input[type="email"]:focus,
+.theme-neobrutalism input[type="date"]:focus,
+.theme-neobrutalism input[type="time"]:focus,
+.theme-neobrutalism textarea:focus,
+.theme-neobrutalism select:focus {
+  background-color: #FEFCE8;
+  border-color: #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+}
+
+/* Neo-Brutalist Filter Track & Header */
+.theme-neobrutalism .clay-inset {
+  background-color: #F1F5F9;
+  border-radius: 10px;
+  border: 2px solid #0F172A;
+  box-shadow: inset 2px 2px 0px rgba(15, 23, 42, 0.08);
+}
+
+.theme-neobrutalism header.sticky {
+  background-color: #FFFFFF;
+  border-bottom: 2px solid #0F172A;
+  box-shadow: 0 3px 0px #0F172A;
+}
+
+/* ==========================================================================
+   Claymorphism (3D Soft Tactile Clay UI) Design System
+   ========================================================================== */
+
+.theme-clay {
+  background: radial-gradient(circle at 12% 10%, #EEF2FF 0%, #EDF3FA 45%, #E8F0F8 100%);
+}
+
+/* Elevated Puffy Clay Card */
+.theme-clay .clay-surface,
+.theme-clay .bg-white.rounded-xl,
+.theme-clay .bg-white.rounded-2xl {
+  background: linear-gradient(145deg, #FFFFFF 0%, #F6F9FE 100%);
+  border-radius: 22px;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    10px 14px 28px rgba(100, 116, 139, 0.14),
+    -6px -6px 18px rgba(255, 255, 255, 0.95),
+    inset 0 3px 6px rgba(255, 255, 255, 0.95),
+    inset 0 -4px 8px rgba(148, 163, 184, 0.18);
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Soft Tinted Clay KPI Cards */
+.clay-kpi-indigo {
+  background: linear-gradient(145deg, #F5F7FF 0%, #E8EDFF 100%);
+  border-radius: 24px;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    10px 14px 26px rgba(79, 70, 229, 0.13),
+    -6px -6px 16px rgba(255, 255, 255, 0.95),
+    inset 0 3px 6px rgba(255, 255, 255, 0.95),
+    inset 0 -5px 10px rgba(99, 102, 241, 0.16);
+}
+
+.clay-kpi-amber {
+  background: linear-gradient(145deg, #FFFDF5 0%, #FEF3C7 100%);
+  border-radius: 24px;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    10px 14px 26px rgba(217, 119, 6, 0.13),
+    -6px -6px 16px rgba(255, 255, 255, 0.95),
+    inset 0 3px 6px rgba(255, 255, 255, 0.95),
+    inset 0 -5px 10px rgba(245, 158, 11, 0.18);
+}
+
+.clay-kpi-emerald {
+  background: linear-gradient(145deg, #F2FDF7 0%, #DCFCE7 100%);
+  border-radius: 24px;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    10px 14px 26px rgba(16, 185, 129, 0.13),
+    -6px -6px 16px rgba(255, 255, 255, 0.95),
+    inset 0 3px 6px rgba(255, 255, 255, 0.95),
+    inset 0 -5px 10px rgba(16, 185, 129, 0.18);
+}
+
+.clay-kpi-rose {
+  background: linear-gradient(145deg, #FFF5F7 0%, #FFE4E8 100%);
+  border-radius: 24px;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    10px 14px 26px rgba(225, 29, 72, 0.13),
+    -6px -6px 16px rgba(255, 255, 255, 0.95),
+    inset 0 3px 6px rgba(255, 255, 255, 0.95),
+    inset 0 -5px 10px rgba(244, 63, 94, 0.17);
+}
+
+/* Tactile 3D Clay Buttons */
+.theme-clay button.bg-indigo-600,
+.theme-clay .clay-btn-indigo {
+  background: linear-gradient(160deg, #6366F1 0%, #4F46E5 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 8px 16px -3px rgba(79, 70, 229, 0.38),
+    inset 0 3px 5px rgba(255, 255, 255, 0.42),
+    inset 0 -4px 6px rgba(30, 27, 75, 0.28);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.theme-clay button.bg-indigo-600:hover:not(:disabled),
+.theme-clay .clay-btn-indigo:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 11px 20px -3px rgba(79, 70, 229, 0.44),
+    inset 0 3px 6px rgba(255, 255, 255, 0.48),
+    inset 0 -4px 6px rgba(30, 27, 75, 0.28);
+}
+
+.theme-clay button.bg-indigo-600:active:not(:disabled),
+.theme-clay .clay-btn-indigo:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow:
+    0 4px 10px -2px rgba(79, 70, 229, 0.32),
+    inset 0 2px 4px rgba(30, 27, 75, 0.22);
+}
+
+.theme-clay button.bg-\[\#06C755\],
+.theme-clay button.bg-emerald-600,
+.theme-clay .clay-btn-emerald {
+  background: linear-gradient(160deg, #10D462 0%, #05B04B 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 8px 16px -3px rgba(6, 199, 85, 0.36),
+    inset 0 3px 5px rgba(255, 255, 255, 0.45),
+    inset 0 -4px 6px rgba(4, 90, 38, 0.28);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.theme-clay button.bg-\[\#06C755\]:hover:not(:disabled),
+.theme-clay button.bg-emerald-600:hover:not(:disabled),
+.theme-clay .clay-btn-emerald:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.theme-clay button.bg-\[\#06C755\]:active:not(:disabled),
+.theme-clay button.bg-emerald-600:active:not(:disabled),
+.theme-clay .clay-btn-emerald:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Recessed Clay Input Wells & Segmented Tracks */
+.theme-clay .clay-inset,
+.theme-clay input[type="text"],
+.theme-clay input[type="url"],
+.theme-clay input[type="email"],
+.theme-clay input[type="date"],
+.theme-clay input[type="time"],
+.theme-clay textarea,
+.theme-clay select {
+  background-color: #F4F7FC;
+  border-radius: 14px;
+  border: 1px solid rgba(203, 213, 225, 0.7);
+  box-shadow:
+    inset 3px 3px 7px rgba(148, 163, 184, 0.22),
+    inset -3px -3px 7px rgba(255, 255, 255, 0.95);
+}
+
+.theme-clay input[type="text"]:focus,
+.theme-clay input[type="url"]:focus,
+.theme-clay input[type="email"]:focus,
+.theme-clay textarea:focus,
+.theme-clay select:focus {
+  background-color: #FFFFFF;
+  border-color: #6366F1;
+  box-shadow:
+    inset 2px 2px 5px rgba(99, 102, 241, 0.12),
+    0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+/* Floating Clay Header */
+.theme-clay header.sticky {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 8px 24px -6px rgba(100, 116, 139, 0.12),
+    inset 0 -2px 4px rgba(148, 163, 184, 0.12);
 }
 
 /* Official Sign in with Google button styling */

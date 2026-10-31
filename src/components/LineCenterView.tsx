@@ -16,6 +16,7 @@ import {
   Send,
   Settings2,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import {
   Category,
@@ -107,8 +108,120 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     ok: boolean;
     steps: { step: string; status: 'ok' | 'warn' | 'error'; detail: string }[];
   } | null>(null);
+  const [isClearingRichMenu, setIsClearingRichMenu] = useState(false);
+  const [richMenuClearStatus, setRichMenuClearStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<'checking' | 'fullstack' | 'static_web'>('checking');
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const handleClearLineRichMenu = async (silent = false) => {
+    const token = lineSettings.channelAccessToken.trim();
+    const targetUserId = lineSettings.targetUserId.trim();
+    const trimmedGas = gasUrl.trim();
+
+    if (!token && !silent) {
+      setActiveSettingsTab('api');
+      setRichMenuClearStatus({
+        ok: false,
+        message:
+          '⚠️ กรุณาวาง LINE Channel Access Token ในช่องตั้งค่าด้านล่างก่อน แล้วกดปุ่ม "ลบ Rich Menu ออกจาก LINE OA" อีกครั้ง (หรือหากเป็นริชเมนูที่เปิดไว้ในเว็บ manager.line.biz ให้เข้าไปปิดที่เมนู "ริชเมนู" ในเว็บ LINE OA Manager ได้เลยครับ)',
+      });
+      return;
+    }
+
+    if (!silent) {
+      setIsClearingRichMenu(true);
+      setRichMenuClearStatus(null);
+    }
+
+    try {
+      // 1. Try server-side endpoint (/api/line/richmenu/clear)
+      const res = await fetch('/api/line/richmenu/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelAccessToken: token,
+          targetUserId,
+        }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = await res.json();
+        if (!silent) {
+          setRichMenuClearStatus({
+            ok: Boolean(data.ok),
+            message:
+              data.message ||
+              '✅ ลบและยกเลิกการผูก Rich Menu บน LINE OA สำเร็จแล้ว! กรุณากดออกจากห้องแชทบอทในแอป LINE แล้วกดเข้าใหม่อีกครั้ง',
+          });
+          setIsClearingRichMenu(false);
+        }
+        return;
+      }
+    } catch {
+      // Fallback to Google Apps Script bridge when running on GitHub Pages
+    }
+
+    // 2. Static Hosting / GitHub Pages fallback via Google Apps Script Bridge
+    if (trimmedGas.startsWith('https://script.google.com/macros/s/')) {
+      try {
+        const gasRes = await fetch(trimmedGas, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'clear_richmenu',
+            channelAccessToken: token,
+            targetUserId,
+          }),
+        });
+        const gasText = await gasRes.text();
+        let gasData: Record<string, unknown> = {};
+        try {
+          gasData = JSON.parse(gasText);
+        } catch {
+          gasData = {};
+        }
+
+        if (!silent) {
+          if (gasData.mode === 'gas_clear_richmenu' && gasData.ok) {
+            setRichMenuClearStatus({
+              ok: true,
+              message: `✅ สั่งลบ Rich Menu ผ่าน Google Apps Script สำเร็จแล้ว (ลบไป ${
+                gasData.deletedCount || 0
+              } รายการ)! กรุณาปิดห้องแชทในแอป LINE แล้วเปิดเข้าใหม่อีกครั้ง (หมายเหตุ: หากยังแสดงอยู่ แปลว่าเป็นริชเมนูที่สร้างในเว็บ manager.line.biz ให้ไปปิดที่เมนู "ริชเมนู" ในเว็บ LINE OA Manager ครับ)`,
+            });
+          } else {
+            setRichMenuClearStatus({
+              ok: true,
+              message:
+                'ส่งคำสั่งยกเลิก Rich Menu แล้ว — หากคุณใช้บน GitHub Pages กรุณาคัดลอกโค้ด Apps Script ด้านล่างไปอัปเดตเป็น New version หรือเข้าไปปิดสวิตช์ริชเมนูที่เว็บ manager.line.biz > เมนู "ริชเมนู (Rich menus)" ครับ',
+            });
+          }
+        }
+      } catch {
+        if (!silent) {
+          setRichMenuClearStatus({
+            ok: false,
+            message:
+              'ไม่สามารถติดต่อ Google Apps Script เพื่อลบ Rich Menu ได้ กรุณาตรวจสอบลิงก์ Apps Script หรือเข้าไปปิดริชเมนูที่เว็บ manager.line.biz > เมนู "ริชเมนู"',
+          });
+        }
+      }
+    }
+
+    if (!silent) {
+      setIsClearingRichMenu(false);
+    }
+  };
+
+  useEffect(() => {
+    if (lineSettings.channelAccessToken.trim().length >= 80) {
+      handleClearLineRichMenu(true).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineSettings.channelAccessToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -749,8 +862,33 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 </span>
               </button>
             )}
+
+            <button
+              type="button"
+              disabled={isClearingRichMenu}
+              onClick={() => handleClearLineRichMenu(false)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors whitespace-nowrap"
+              title="สั่งลบ Rich Menu ที่ค้างอยู่ในแอป LINE ออกทันที"
+            >
+              <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+              <span>
+                {isClearingRichMenu ? 'กำลังลบ Rich Menu...' : '🗑️ ลบ Rich Menu ออกจาก LINE'}
+              </span>
+            </button>
           </div>
         </div>
+
+        {richMenuClearStatus && (
+          <div
+            className={`mt-3 p-3 rounded-lg border text-xs leading-relaxed ${
+              richMenuClearStatus.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                : 'bg-amber-50 border-amber-200 text-amber-950'
+            }`}
+          >
+            {richMenuClearStatus.message}
+          </div>
+        )}
 
         {/* 4 Mini Summary KPI Strip inside LINE Center */}
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2317,8 +2455,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                     )}
                 </div>
 
-                {/* Interactive LINE Connection Diagnostic Box */}
-                <div className="pt-2">
+                {/* Interactive LINE Connection Diagnostic & Rich Menu Cleanup Box */}
+                <div className="pt-2 space-y-2">
                   <button
                     type="button"
                     disabled={isDiagnosingLine}
@@ -2332,6 +2470,32 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         : '🔍 ตรวจสอบสถานะ Token & ทดสอบยิงเข้า LINE จริง'}
                     </span>
                   </button>
+
+                  <button
+                    type="button"
+                    disabled={isClearingRichMenu}
+                    onClick={() => handleClearLineRichMenu(false)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-semibold text-rose-800 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                    <span>
+                      {isClearingRichMenu
+                        ? 'กำลังส่งคำสั่งลบ Rich Menu ออกจาก LINE OA...'
+                        : '🗑️ ลบ Rich Menu ที่ค้างในแอป LINE OA ทันที'}
+                    </span>
+                  </button>
+
+                  {richMenuClearStatus && (
+                    <div
+                      className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                        richMenuClearStatus.ok
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                          : 'bg-amber-50 border-amber-200 text-amber-950'
+                      }`}
+                    >
+                      {richMenuClearStatus.message}
+                    </div>
+                  )}
 
                   {lineDiagnosticResult && (
                     <div className="mt-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">

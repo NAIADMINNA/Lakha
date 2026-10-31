@@ -1389,13 +1389,59 @@ function writeSheetTasksFromWeb(tasksList) {
   }
 }
 
+function clearAllRichMenusFromLine(rawToken, targetUserId) {
+  var token = String(rawToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
+  if (!token || token.indexOf('วาง_LINE_') !== -1) {
+    return { ok: false, deletedCount: 0, message: 'Missing LINE Channel Access Token' };
+  }
+  var deletedCount = 0;
+  try {
+    UrlFetchApp.fetch('https://api.line.me/v2/bot/user/all/richmenu', {
+      method: 'delete',
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (targetUserId && /^U[0-9a-fA-F]{32}$/.test(String(targetUserId).trim())) {
+      UrlFetchApp.fetch('https://api.line.me/v2/bot/user/' + encodeURIComponent(String(targetUserId).trim()) + '/richmenu', {
+        method: 'delete',
+        headers: { 'Authorization': 'Bearer ' + token },
+        muteHttpExceptions: true
+      });
+    }
+    var listResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/richmenu/list', {
+      method: 'get',
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (listResp.getResponseCode() >= 200 && listResp.getResponseCode() < 300) {
+      var listData = JSON.parse(listResp.getContentText() || '{}');
+      var menus = listData.richmenus || [];
+      for (var i = 0; i < menus.length; i++) {
+        if (menus[i] && menus[i].richMenuId) {
+          var delResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/richmenu/' + encodeURIComponent(menus[i].richMenuId), {
+            method: 'delete',
+            headers: { 'Authorization': 'Bearer ' + token },
+            muteHttpExceptions: true
+          });
+          if (delResp.getResponseCode() >= 200 && delResp.getResponseCode() < 300) {
+            deletedCount++;
+          }
+        }
+      }
+    }
+    return { ok: true, deletedCount: deletedCount };
+  } catch (err) {
+    return { ok: false, deletedCount: deletedCount, message: String(err) };
+  }
+}
+
 function doGet(e) {
   var tasks = readSheetTasksForWeb();
   return ContentService
     .createTextOutput(JSON.stringify({
       status: 'verified',
       version: '2.5-gas-bridge',
-      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks'],
+      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu'],
       tasks: tasks,
       message: 'SheetCal LINE Webhook & Push Bridge Ready'
     }))
@@ -1407,13 +1453,25 @@ function doPost(e) {
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     var payload = JSON.parse(rawContents);
 
+    // คำสั่งลบ Rich Menu ทั้งหมดออกจาก LINE OA
+    if (payload.action === 'clear_richmenu') {
+      var rmRes = clearAllRichMenusFromLine(payload.channelAccessToken, payload.targetUserId);
+      return ContentService.createTextOutput(JSON.stringify({
+        status: rmRes.ok ? 'ok' : 'error',
+        mode: 'gas_clear_richmenu',
+        version: '2.5-gas-bridge',
+        ok: rmRes.ok,
+        deletedCount: rmRes.deletedCount
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) หรือดึงข้อมูลตารางงานจาก Google Sheets โดยไม่ต้องล็อกอิน Gmail
     if (payload.action === 'check_bridge' || payload.action === 'get_tasks') {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
         version: '2.5-gas-bridge',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks'],
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu'],
         tasks: readSheetTasksForWeb()
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -1433,6 +1491,7 @@ function doPost(e) {
     if (payload.action === 'push_line') {
       var token = String(payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
       var targetId = String(payload.to || '').trim();
+      clearAllRichMenusFromLine(token, targetId);
       var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
       var isValidTarget = /^[UCR][0-9a-fA-F]{32}$/.test(targetId);
       var sentSuccess = false;

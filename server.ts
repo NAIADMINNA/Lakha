@@ -805,6 +805,148 @@ let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
 
+async function purgeAllLineRichMenus(
+  rawToken: string,
+  targetUserId?: string
+): Promise<{
+  ok: boolean;
+  deletedCount: number;
+  deletedIds: string[];
+  defaultUnlinked: boolean;
+  userUnlinked: boolean;
+  message: string;
+}> {
+  const token = sanitizeToken(rawToken || runtimeChannelAccessToken || '');
+  if (!token) {
+    return {
+      ok: false,
+      deletedCount: 0,
+      deletedIds: [],
+      defaultUnlinked: false,
+      userUnlinked: false,
+      message: 'กรุณาวาง LINE Channel Access Token ในแท็บ "LINE Token" ก่อนสั่งลบ Rich Menu',
+    };
+  }
+
+  const deletedIds: string[] = [];
+  let defaultUnlinked = false;
+  let userUnlinked = false;
+
+  try {
+    // 1. Cancel default rich menu for all users
+    const unlinkAllRes = await fetch('https://api.line.me/v2/bot/user/all/richmenu', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    defaultUnlinked = unlinkAllRes.ok || unlinkAllRes.status === 404;
+
+    // 2. Unlink rich menu from specific user ID if provided
+    const uidCandidates = Array.from(
+      new Set(
+        [targetUserId?.trim(), runtimeDefaultUserId?.trim()].filter(
+          (id): id is string => Boolean(id && /^U[0-9a-fA-F]{32}$/.test(id))
+        )
+      )
+    );
+    for (const uid of uidCandidates) {
+      const unlinkUserRes = await fetch(
+        `https://api.line.me/v2/bot/user/${encodeURIComponent(uid)}/richmenu`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (unlinkUserRes.ok || unlinkUserRes.status === 404) {
+        userUnlinked = true;
+      }
+    }
+
+    // 3. List all rich menus created via Messaging API and delete every single one
+    const listRes = await fetch('https://api.line.me/v2/bot/richmenu/list', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!listRes.ok) {
+      const errJson = await listRes.json().catch(() => ({}));
+      return {
+        ok: false,
+        deletedCount: 0,
+        deletedIds: [],
+        defaultUnlinked,
+        userUnlinked,
+        message: `ไม่สามารถเชื่อมต่อ LINE Rich Menu API ได้ (${
+          errJson?.message || `HTTP ${listRes.status}`
+        }) — กรุณาตรวจสอบ LINE Channel Access Token`,
+      };
+    }
+
+    const listData = (await listRes.json().catch(() => ({}))) as {
+      richmenus?: { richMenuId?: string; name?: string }[];
+    };
+    const menus = Array.isArray(listData.richmenus) ? listData.richmenus : [];
+
+    for (const rm of menus) {
+      if (rm.richMenuId) {
+        const delRes = await fetch(
+          `https://api.line.me/v2/bot/richmenu/${encodeURIComponent(rm.richMenuId)}`,
+          {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        if (delRes.ok) {
+          deletedIds.push(rm.richMenuId);
+        }
+      }
+    }
+
+    // 4. Also clear any rich menu aliases if present
+    const aliasListRes = await fetch('https://api.line.me/v2/bot/richmenu/alias/list', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => null);
+    if (aliasListRes && aliasListRes.ok) {
+      const aliasData = (await aliasListRes.json().catch(() => ({}))) as {
+        aliases?: { richMenuAliasId?: string }[];
+      };
+      for (const al of aliasData.aliases || []) {
+        if (al.richMenuAliasId) {
+          await fetch(
+            `https://api.line.me/v2/bot/richmenu/alias/${encodeURIComponent(al.richMenuAliasId)}`,
+            {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` },
+            }
+          ).catch(() => {});
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      defaultUnlinked,
+      userUnlinked,
+      message:
+        deletedIds.length > 0
+          ? `✅ ลบ Rich Menu ออกจากระบบ LINE OA สำเร็จแล้ว (${deletedIds.length} รายการ) และยกเลิกการผูกกับผู้ใช้ทั้งหมดเรียบร้อย! กรุณากดออกจากห้องแชทบอทในแอป LINE แล้วกดเข้าห้องแชทใหม่อีกครั้งเพื่อรีเฟรชหน้าจอ`
+          : `✅ ยกเลิกการผูก Rich Menu ของ Messaging API ทั้งหมดแล้ว (ไม่พบ Rich Menu ค้างในฝั่ง API) — 💡 หมายเหตุ: หากในแอป LINE ยังเห็นริชเมนูอยู่ แปลว่าเป็นริชเมนูที่ตั้งค่าไว้ในเว็บ LINE Official Account Manager (manager.line.biz) ให้เข้าไปที่เว็บ manager.line.biz > เมนู "ริชเมนู (Rich menus)" แล้วกดปิดการใช้งาน (Inactive/ลบ) จากนั้นปิด-เปิดห้องแชทใน LINE ใหม่ครับ`,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    return {
+      ok: false,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      defaultUnlinked,
+      userUnlinked,
+      message: `เกิดข้อผิดพลาดขณะลบ Rich Menu: ${msg}`,
+    };
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -848,6 +990,7 @@ async function startServer() {
   });
 
   // Save runtime LINE OA credentials from the Web UI so the Webhook can reply automatically
+  // Also automatically unlinks/purges any lingering Messaging API Rich Menus!
   app.post('/api/line/config', (req, res) => {
     const { channelAccessToken, targetUserId } = req.body || {};
     if (typeof channelAccessToken === 'string') {
@@ -856,7 +999,29 @@ async function startServer() {
     if (typeof targetUserId === 'string') {
       runtimeDefaultUserId = targetUserId.trim();
     }
+    if (runtimeChannelAccessToken) {
+      purgeAllLineRichMenus(runtimeChannelAccessToken, runtimeDefaultUserId).catch(() => {});
+    }
     res.json({ ok: true });
+  });
+
+  // Explicit endpoint to clear/delete all Rich Menus from the user's LINE Official Account
+  app.post('/api/line/richmenu/clear', async (req, res) => {
+    const { channelAccessToken, targetUserId } = req.body || {};
+    const result = await purgeAllLineRichMenus(
+      channelAccessToken || runtimeChannelAccessToken,
+      targetUserId || runtimeDefaultUserId
+    );
+    res.status(200).json(result);
+  });
+
+  app.delete('/api/line/richmenu', async (req, res) => {
+    const { channelAccessToken, targetUserId } = req.body || {};
+    const result = await purgeAllLineRichMenus(
+      channelAccessToken || runtimeChannelAccessToken,
+      targetUserId || runtimeDefaultUserId
+    );
+    res.status(200).json(result);
   });
 
   // Real LINE Official Account Webhook Endpoint
@@ -876,12 +1041,17 @@ async function startServer() {
       const appUrl = rawBaseUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
       for (const event of events) {
+        const senderUserId = event.source?.userId || '';
+        const senderId = senderUserId || event.source?.groupId || '';
+        if (senderId) {
+          runtimeDefaultUserId = senderId;
+        }
+        if (runtimeChannelAccessToken && senderUserId) {
+          purgeAllLineRichMenus(runtimeChannelAccessToken, senderUserId).catch(() => {});
+        }
+
         if (event.type === 'message' && event.message?.type === 'text') {
           const userText = String(event.message.text || '').trim();
-          const senderId = event.source?.userId || event.source?.groupId || '';
-          if (senderId) {
-            runtimeDefaultUserId = senderId;
-          }
 
           if (userText) {
             pendingWebhookMessages.push({
@@ -977,6 +1147,9 @@ async function startServer() {
         });
         return;
       }
+
+      // Automatically clean up any lingering Messaging API Rich Menu in the background
+      purgeAllLineRichMenus(token, targetUserId).catch(() => {});
 
       const rawAppUrl =
         originUrl && String(originUrl).startsWith('https://')
