@@ -362,13 +362,14 @@ export default function App() {
     } catch {
       // Ignore
     }
-    // Sync token & targetUserId to server so real LINE Webhook can auto-reply
+    // Sync token, targetUserId & targetGroupId to server so real LINE Webhook can auto-reply
     fetch('/api/line/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channelAccessToken: lineSettings.channelAccessToken,
         targetUserId: lineSettings.targetUserId,
+        targetGroupId: lineSettings.targetGroupId || '',
       }),
     }).catch(() => {});
   }, [lineSettings]);
@@ -808,6 +809,8 @@ export default function App() {
             body: JSON.stringify({
               channelAccessToken: lineSettings.channelAccessToken,
               to: lineSettings.targetUserId,
+              targetGroupId: lineSettings.targetGroupId || '',
+              teamNotificationMode: lineSettings.teamNotificationMode || 'both',
               text: reminderText,
               taskTitle: task.title,
               description: includeDesc ? task.description || reminderText : '',
@@ -850,6 +853,8 @@ export default function App() {
               action: 'push_line',
               channelAccessToken: lineSettings.channelAccessToken.trim(),
               to: lineSettings.targetUserId.trim(),
+              targetGroupId: (lineSettings.targetGroupId || '').trim(),
+              teamNotificationMode: lineSettings.teamNotificationMode || 'both',
               text: reminderText,
               taskTitle: task.title,
               description: includeDesc ? task.description || reminderText : '',
@@ -1203,6 +1208,8 @@ export default function App() {
               body: JSON.stringify({
                 channelAccessToken: lineSettings.channelAccessToken.trim(),
                 to: lineSettings.targetUserId.trim(),
+                targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                teamNotificationMode: lineSettings.teamNotificationMode || 'both',
                 text: parsed.replyText,
                 date: summaryDate,
                 dateTime: parsed.flexSummary?.dateTime || summaryDate,
@@ -1228,6 +1235,8 @@ export default function App() {
                     action: 'push_line',
                     channelAccessToken: lineSettings.channelAccessToken.trim(),
                     to: lineSettings.targetUserId.trim(),
+                    targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                    teamNotificationMode: lineSettings.teamNotificationMode || 'both',
                     text: parsed.replyText,
                     date: summaryDate,
                     dateTime: parsed.flexSummary?.dateTime || summaryDate,
@@ -1257,7 +1266,9 @@ export default function App() {
       lineSettings.enabled,
       lineSettings.messageFormat,
       lineSettings.publicCalendarUrl,
+      lineSettings.targetGroupId,
       lineSettings.targetUserId,
+      lineSettings.teamNotificationMode,
       pushCollaborativeWorkspace,
       sheetMeta,
       showNotice,
@@ -1269,6 +1280,62 @@ export default function App() {
     ]
   );
 
+  // Helper to manually or automatically detect LINE Group ID (C... / R...) from backend webhook or Google Apps Script Bridge
+  const handleDetectLineGroupId = useCallback(async (): Promise<string | null> => {
+    let foundGroup = '';
+    try {
+      const res = await fetch('/api/line/webhook-events');
+      if (res.ok) {
+        const data = await res.json();
+        if (
+          typeof data.detectedGroupId === 'string' &&
+          /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
+        ) {
+          foundGroup = data.detectedGroupId.trim();
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    if (!foundGroup) {
+      const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+      if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+        try {
+          const gasRes = await fetch(savedGasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'check_bridge' }),
+          });
+          if (gasRes.ok) {
+            const gasData = await gasRes.json();
+            if (
+              typeof gasData.detectedGroupId === 'string' &&
+              /^[CR][0-9a-fA-F]{32}$/.test(gasData.detectedGroupId.trim())
+            ) {
+              foundGroup = gasData.detectedGroupId.trim();
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    if (foundGroup) {
+      setLineSettings((prev) => ({
+        ...prev,
+        targetGroupId: foundGroup,
+      }));
+      showNotice(
+        'success',
+        `ดึงรหัสห้องแชทกลุ่ม LINE (${foundGroup.slice(0, 10)}...) สำเร็จแล้ว! พร้อมส่งแจ้งเตือนเข้ากลุ่มทันที`
+      );
+      return foundGroup;
+    }
+    return null;
+  }, [showNotice]);
+
   // Poll real LINE Webhook events from /api/line/webhook-events every 4 seconds
   useEffect(() => {
     const pollTimer = setInterval(async () => {
@@ -1276,6 +1343,16 @@ export default function App() {
         const res = await fetch('/api/line/webhook-events');
         if (!res.ok) return;
         const data = await res.json();
+        if (
+          typeof data.detectedGroupId === 'string' &&
+          /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim()) &&
+          !lineSettings.targetGroupId
+        ) {
+          setLineSettings((prev) => ({
+            ...prev,
+            targetGroupId: data.detectedGroupId.trim(),
+          }));
+        }
         if (data.detectedUserId && !lineSettings.targetUserId) {
           setLineSettings((prev) => ({
             ...prev,
@@ -1284,6 +1361,11 @@ export default function App() {
         }
         if (Array.isArray(data.events) && data.events.length > 0) {
           for (const ev of data.events) {
+            if (ev.senderId && /^[CR][0-9a-fA-F]{32}$/.test(ev.senderId)) {
+              setLineSettings((prev) =>
+                prev.targetGroupId ? prev : { ...prev, targetGroupId: ev.senderId }
+              );
+            }
             if (ev.text) {
               handleSendLineChatCommand(ev.text);
             }
@@ -1295,7 +1377,7 @@ export default function App() {
     }, 4000);
 
     return () => clearInterval(pollTimer);
-  }, [handleSendLineChatCommand, lineSettings.targetUserId]);
+  }, [handleSendLineChatCommand, lineSettings.targetGroupId, lineSettings.targetUserId]);
 
   // Zero-Login Auto-Pull via Google Apps Script Bridge (works on mobile/LINE without Gmail OAuth login!)
   useEffect(() => {
@@ -1311,6 +1393,15 @@ export default function App() {
         });
         if (!res.ok) return;
         const data = await res.json();
+        if (
+          typeof data.detectedGroupId === 'string' &&
+          /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
+        ) {
+          const detectedGrp = data.detectedGroupId.trim();
+          setLineSettings((prev) =>
+            prev.targetGroupId ? prev : { ...prev, targetGroupId: detectedGrp }
+          );
+        }
         if (Array.isArray(data.tasks) && data.tasks.length > 0) {
           setTasks((prev) => {
             const existingIds = new Set(prev.map((p) => p.id));
@@ -1565,6 +1656,8 @@ export default function App() {
           body: JSON.stringify({
             channelAccessToken: lineSettings.channelAccessToken.trim(),
             to: lineSettings.targetUserId.trim(),
+            targetGroupId: (lineSettings.targetGroupId || '').trim(),
+            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
             text: memberInviteText,
             taskTitle: `สมาชิกใหม่: ${newMember.name} (${roleLabel})`,
             description: `${newMember.email}${newMember.department ? ` · ${newMember.department}` : ''} · สมาชิกรวม ${nextMembers.length} คน`,
@@ -1602,6 +1695,8 @@ export default function App() {
             action: 'push_line',
             channelAccessToken: lineSettings.channelAccessToken.trim(),
             to: lineSettings.targetUserId.trim(),
+            targetGroupId: (lineSettings.targetGroupId || '').trim(),
+            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
             text: memberInviteText,
             taskTitle: `สมาชิกใหม่: ${newMember.name} (${roleLabel})`,
             description: `${newMember.email}${newMember.department ? ` · ${newMember.department}` : ''} · สมาชิกรวม ${nextMembers.length} คน`,
@@ -1770,6 +1865,8 @@ export default function App() {
           body: JSON.stringify({
             channelAccessToken: lineSettings.channelAccessToken,
             to: lineSettings.targetUserId,
+            targetGroupId: (lineSettings.targetGroupId || '').trim(),
+            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
             text: summaryText,
             date: todayStr,
             dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
@@ -1797,6 +1894,8 @@ export default function App() {
             action: 'push_line',
             channelAccessToken: lineSettings.channelAccessToken.trim(),
             to: lineSettings.targetUserId.trim(),
+            targetGroupId: (lineSettings.targetGroupId || '').trim(),
+            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
             text: summaryText,
             date: todayStr,
             dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
@@ -2898,6 +2997,12 @@ export default function App() {
             spreadsheetId={sheetMeta?.spreadsheetId}
             spreadsheetUrl={sheetMeta?.spreadsheetUrl}
             lastCollabSyncAt={lastCollabSyncAt}
+            lineSettings={lineSettings}
+            isSendingPush={isSendingPush}
+            onUpdateLineSettings={setLineSettings}
+            onTestPushNotification={handleTestLinePush}
+            onDetectGroupId={handleDetectLineGroupId}
+            onOpenLineCenter={() => setActiveSection('line')}
             onInviteMember={handleInviteMember}
             onUpdateMemberRole={handleUpdateMemberRole}
             onRemoveMember={handleRemoveMember}

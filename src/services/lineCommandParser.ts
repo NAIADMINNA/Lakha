@@ -753,7 +753,25 @@ export function parseLineChatMessage(
     };
   }
 
-  // 5. Help command
+  // 5. Help or Group ID check command
+  if (
+    lower === 'เชื่อมกลุ่ม' ||
+    lower === 'รหัสกลุ่ม' ||
+    lower === 'เช็คกลุ่ม' ||
+    lower === 'เช็ครหัส' ||
+    lower === 'groupid' ||
+    lower === 'group id'
+  ) {
+    return {
+      action: 'help',
+      replyText:
+        '👥 วิธีเชื่อมต่อ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม (Group Chat)":\n' +
+        '1. เปิดเว็บ LINE Official Account Manager (manager.line.biz) > ตั้งค่า (Settings) > การตั้งค่าบัญชี > หัวข้อ "แชทกลุ่มและแชทแบบหลายคน" เลือกเป็น "อนุญาตให้บัญชีเข้าร่วมกลุ่ม"\n' +
+        '2. เชิญบอท LINE OA เข้ากลุ่ม LINE ของทีม\n' +
+        '3. พิมพ์คำว่า "เชื่อมกลุ่ม" หรือข้อความใดก็ได้ในห้องแชทกลุ่ม LINE 1 ครั้ง บอทจะตอบกลับพร้อมรหัส Group ID (C... 33 ตัวอักษร) และระบบจะดึงรหัสกลุ่มมาผูกให้อัตโนมัติทันที!',
+    };
+  }
+
   if (lower === 'วิธีใช้' || lower === 'help' || lower === 'คำสั่ง') {
     return {
       action: 'help',
@@ -763,6 +781,7 @@ export function parseLineChatMessage(
         '• "ส่งมอบโปรเจกต์ 28/10/69 เวลา 14:00"\n' +
         '• "นัดลูกค้า 5 พ.ย. บ่ายสอง #ด่วน"\n' +
         '• พิมพ์ "สรุปงานวันนี้" หรือ "งานค้าง" เพื่อดูการ์ดสรุปตารางงาน\n' +
+        '• พิมพ์ "เชื่อมกลุ่ม" หรือ "รหัสกลุ่ม" ในกลุ่ม LINE เพื่อผูกการแจ้งเตือนเข้าห้องแชทกลุ่มของทีม\n' +
         '• พิมพ์ "เสร็จแล้ว [ชื่องาน]" เพื่อขีดฆ่างานที่ทำเสร็จ',
     };
   }
@@ -1435,15 +1454,49 @@ function clearAllRichMenusFromLine(rawToken, targetUserId) {
   }
 }
 
+function getSavedGroupId() {
+  try {
+    var gid = PropertiesService.getScriptProperties().getProperty('LAST_GROUP_ID') || '';
+    if (/^[CR][0-9a-fA-F]{32}$/.test(gid)) return gid;
+  } catch (err) {}
+  return '';
+}
+
+function setSavedGroupId(gid) {
+  try {
+    if (gid && /^[CR][0-9a-fA-F]{32}$/.test(String(gid).trim())) {
+      PropertiesService.getScriptProperties().setProperty('LAST_GROUP_ID', String(gid).trim());
+    }
+  } catch (err) {}
+}
+
+function getSavedUserId() {
+  try {
+    var uid = PropertiesService.getScriptProperties().getProperty('LAST_USER_ID') || '';
+    if (/^U[0-9a-fA-F]{32}$/.test(uid)) return uid;
+  } catch (err) {}
+  return '';
+}
+
+function setSavedUserId(uid) {
+  try {
+    if (uid && /^U[0-9a-fA-F]{32}$/.test(String(uid).trim())) {
+      PropertiesService.getScriptProperties().setProperty('LAST_USER_ID', String(uid).trim());
+    }
+  } catch (err) {}
+}
+
 function doGet(e) {
   var tasks = readSheetTasksForWeb();
   return ContentService
     .createTextOutput(JSON.stringify({
       status: 'verified',
       version: '2.5-gas-bridge',
-      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu'],
+      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
+      detectedGroupId: getSavedGroupId(),
+      detectedUserId: getSavedUserId(),
       tasks: tasks,
-      message: 'SheetCal LINE Webhook & Push Bridge Ready'
+      message: 'SheetCal LINE Webhook & Push Bridge Ready (Supports 1-on-1 & Group Chat)'
     }))
     .setMimeType(ContentService.MimeType.JSON);
 }
@@ -1465,13 +1518,15 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) หรือดึงข้อมูลตารางงานจาก Google Sheets โดยไม่ต้องล็อกอิน Gmail
+    // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) หรือดึงข้อมูลตารางงาน + รหัสกลุ่ม LINE (Group ID C...)
     if (payload.action === 'check_bridge' || payload.action === 'get_tasks') {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
         version: '2.5-gas-bridge',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu'],
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
+        detectedGroupId: getSavedGroupId(),
+        detectedUserId: getSavedUserId(),
         tasks: readSheetTasksForWeb()
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -1487,14 +1542,28 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // รองรับการส่งแจ้งเตือน LINE Push / Broadcast จากหน้าเว็บโดยตรง (กรณีรันบน GitHub Pages / Static Hosting)
+    // รองรับการส่งแจ้งเตือน LINE Push (ทั้งเข้าห้องแชทกลุ่ม Group ID C... และรายบุคคล U...) หรือ Broadcast
     if (payload.action === 'push_line') {
       var token = String(payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
       var targetId = String(payload.to || '').trim();
+      var explicitGroupId = String(payload.targetGroupId || '').trim();
+      var notifyMode = String(payload.teamNotificationMode || 'both');
+
+      if (/^[CR][0-9a-fA-F]{32}$/.test(explicitGroupId)) {
+        setSavedGroupId(explicitGroupId);
+      } else if (/^[CR][0-9a-fA-F]{32}$/.test(targetId)) {
+        setSavedGroupId(targetId);
+      }
+
+      var effectiveGroupId = /^[CR][0-9a-fA-F]{32}$/.test(explicitGroupId)
+        ? explicitGroupId
+        : (/^[CR][0-9a-fA-F]{32}$/.test(targetId) ? targetId : getSavedGroupId());
+
       clearAllRichMenusFromLine(token, targetId);
       var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
-      var isValidTarget = /^[UCR][0-9a-fA-F]{32}$/.test(targetId);
+      var isValidUserTarget = /^U[0-9a-fA-F]{32}$/.test(targetId);
       var sentSuccess = false;
+      var sentGroupSuccess = false;
       var deliveryMethod = 'none';
       var lastCode = 0;
       var lastError = '';
@@ -1601,7 +1670,32 @@ function doPost(e) {
         }];
       }
 
-      if (isValidTarget) {
+      // 1. ส่งเข้าห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat C... / R...) หากมีรหัสกลุ่ม
+      if (effectiveGroupId && (notifyMode === 'group' || notifyMode === 'both')) {
+        var grpResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'post',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          payload: JSON.stringify({
+            to: effectiveGroupId,
+            messages: messagesPayload
+          }),
+          muteHttpExceptions: true
+        });
+        lastCode = grpResp.getResponseCode();
+        if (lastCode >= 200 && lastCode < 300) {
+          sentSuccess = true;
+          sentGroupSuccess = true;
+          deliveryMethod = 'group_push';
+        } else {
+          lastError = grpResp.getContentText();
+        }
+      }
+
+      // 2. ส่งเข้าแชทส่วนตัว U... (กรณีระบุ User ID)
+      if (isValidUserTarget && notifyMode !== 'group') {
         var pushResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
           method: 'post',
           headers: {
@@ -1617,13 +1711,14 @@ function doPost(e) {
         lastCode = pushResp.getResponseCode();
         if (lastCode >= 200 && lastCode < 300) {
           sentSuccess = true;
-          deliveryMethod = 'push';
+          deliveryMethod = sentGroupSuccess ? 'group_and_user_push' : 'push';
         } else {
           lastError = pushResp.getContentText();
         }
       }
 
-      if (!sentSuccess) {
+      // 3. ส่งแบบ Broadcast หาเพื่อนทุกคน (รูปแบบที่ 1 หรือเมื่อยังไม่ได้ส่งสำเร็จ)
+      if ((!sentSuccess || (notifyMode === 'both' && !isValidUserTarget)) && notifyMode !== 'group') {
         var bcResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
           method: 'post',
           headers: {
@@ -1638,8 +1733,8 @@ function doPost(e) {
         lastCode = bcResp.getResponseCode();
         if (lastCode >= 200 && lastCode < 300) {
           sentSuccess = true;
-          deliveryMethod = 'broadcast';
-        } else {
+          deliveryMethod = sentGroupSuccess ? 'group_and_broadcast' : 'broadcast';
+        } else if (!sentSuccess) {
           // Retry plain text if Flex failed
           var bcTextResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
             method: 'post',
@@ -1668,6 +1763,7 @@ function doPost(e) {
         version: '2.5-gas-bridge',
         ok: sentSuccess,
         deliveryMethod: deliveryMethod,
+        detectedGroupId: effectiveGroupId || getSavedGroupId(),
         botName: botName,
         lineHttpCode: lastCode,
         lineError: lastError
@@ -1679,7 +1775,8 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'verified',
         version: '2.5-gas-bridge',
-        capabilities: ['webhook', 'push_line']
+        detectedGroupId: getSavedGroupId(),
+        capabilities: ['webhook', 'push_line', 'group_chat']
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -1693,11 +1790,52 @@ function doPost(e) {
     var logSheet = ss.getSheetByName('LineLogs') || ss.insertSheet('LineLogs');
 
     events.forEach(function(event) {
+      var srcGroupId = (event.source && (event.source.groupId || event.source.roomId))
+        ? String(event.source.groupId || event.source.roomId).trim()
+        : '';
+      var srcUserId = (event.source && event.source.userId)
+        ? String(event.source.userId).trim()
+        : '';
+
+      if (srcGroupId) {
+        setSavedGroupId(srcGroupId);
+      }
+      if (srcUserId) {
+        setSavedUserId(srcUserId);
+      }
+
+      // กรณีเชิญบอทเข้าห้องแชทกลุ่ม LINE (join / memberJoined) -> ตอบกลับพร้อมแสดง Group ID (C...) ทันที
+      if ((event.type === 'join' || event.type === 'memberJoined') && srcGroupId && event.replyToken) {
+        replyLineMessages(event.replyToken, [{
+          type: 'text',
+          text: '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat) สำเร็จแล้ว!\n\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\n' + srcGroupId + '\n\n💡 คุณสามารถพิมพ์สั่งงานในกลุ่มนี้ได้ทันที เช่น "ประชุมทีม พรุ่งนี้ 10:00 #สูง" หรือพิมพ์ "สรุปงานวันนี้" และระบบได้บันทึกรหัสกลุ่มนี้ไว้ส่งแจ้งเตือนรวมให้ทั้งทีมเรียบร้อยแล้วครับ'
+        }]);
+        return;
+      }
+
       if (event.type === 'message' && event.message.type === 'text') {
         var userMessage = event.message.text.trim();
+        var lowerMsg = userMessage.toLowerCase();
         var replyToken = event.replyToken;
         var now = new Date();
         var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+
+        if (
+          lowerMsg === 'เชื่อมกลุ่ม' ||
+          lowerMsg === 'รหัสกลุ่ม' ||
+          lowerMsg === 'เช็คกลุ่ม' ||
+          lowerMsg === 'เช็ครหัส' ||
+          lowerMsg === 'groupid' ||
+          lowerMsg === 'group id'
+        ) {
+          replyLineMessages(replyToken, [{
+            type: 'text',
+            text: srcGroupId
+              ? '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2) สำเร็จแล้ว!\n\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\n' + srcGroupId + '\n\n(คุณสามารถคัดลอกรหัส C... ด้านบนไปวางในช่อง LINE Group ID บนหน้าเว็บ หรือกดปุ่ม "ดึงรหัสกลุ่มอัตโนมัติ" บนหน้าเว็บได้เลยครับ)'
+              : 'ℹ️ ขณะนี้คุณพิมพ์อยู่ในแชทส่วนตัว (1-on-1)\n🔑 รหัส User ID ของคุณคือ:\n' + (srcUserId || '-') + '\n\n💡 หากต้องการใช้ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม" กรุณาเชิญบอทเข้ากลุ่ม LINE ของทีม แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่มครับ'
+          }]);
+          return;
+        }
 
         if (
           userMessage === 'สรุปงานตามเวลา' ||
@@ -1747,7 +1885,7 @@ function doPost(e) {
             now.toISOString(),
             'incoming_command',
             userMessage,
-            parsed.title,
+            parsed.title + (srcGroupId ? ' [Group:' + srcGroupId + ']' : ''),
             'line_messaging_api',
             'delivered'
           ]);
@@ -1777,7 +1915,7 @@ function doPost(e) {
               backgroundColor: parsed.priority === 'high' ? '#DC2626' : '#059669',
               paddingAll: '16px',
               contents: [
-                { type: 'text', text: '✅ บันทึกลงปฏิทินเรียบร้อย', color: '#FFFFFF', size: 'xs', weight: 'bold' },
+                { type: 'text', text: srcGroupId ? '✅ บันทึกงานจากกลุ่ม LINE เรียบร้อย' : '✅ บันทึกลงปฏิทินเรียบร้อย', color: '#FFFFFF', size: 'xs', weight: 'bold' },
                 { type: 'text', text: parsed.title, color: '#FFFFFF', size: 'lg', weight: 'bold', wrap: true, margin: 'xs' }
               ]
             },

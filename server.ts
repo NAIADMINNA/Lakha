@@ -802,6 +802,7 @@ function buildSingleTaskReminderFlexMessage(params: {
 
 let runtimeChannelAccessToken = sanitizeToken(process.env.LINE_CHANNEL_ACCESS_TOKEN || '');
 let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
+let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
 
@@ -992,17 +993,28 @@ async function startServer() {
   // Save runtime LINE OA credentials from the Web UI so the Webhook can reply automatically
   // Also automatically unlinks/purges any lingering Messaging API Rich Menus!
   app.post('/api/line/config', (req, res) => {
-    const { channelAccessToken, targetUserId } = req.body || {};
+    const { channelAccessToken, targetUserId, targetGroupId } = req.body || {};
     if (typeof channelAccessToken === 'string') {
       runtimeChannelAccessToken = sanitizeToken(channelAccessToken);
     }
     if (typeof targetUserId === 'string') {
-      runtimeDefaultUserId = targetUserId.trim();
+      const trimmedTarget = targetUserId.trim();
+      runtimeDefaultUserId = trimmedTarget;
+      if (/^[CR][0-9a-fA-F]{32}$/.test(trimmedTarget)) {
+        runtimeDetectedGroupId = trimmedTarget;
+      }
+    }
+    if (typeof targetGroupId === 'string' && /^[CR][0-9a-fA-F]{32}$/.test(targetGroupId.trim())) {
+      runtimeDetectedGroupId = targetGroupId.trim();
     }
     if (runtimeChannelAccessToken) {
       purgeAllLineRichMenus(runtimeChannelAccessToken, runtimeDefaultUserId).catch(() => {});
     }
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      detectedGroupId: runtimeDetectedGroupId || undefined,
+      detectedUserId: runtimeDefaultUserId || undefined,
+    });
   });
 
   // Explicit endpoint to clear/delete all Rich Menus from the user's LINE Official Account
@@ -1024,7 +1036,7 @@ async function startServer() {
     res.status(200).json(result);
   });
 
-  // Real LINE Official Account Webhook Endpoint
+  // Real LINE Official Account Webhook Endpoint (supports 1-on-1 AND Group Chat Format 2)
   app.post('/api/line/webhook', async (req, res) => {
     try {
       const events = Array.isArray(req.body?.events) ? req.body.events : [];
@@ -1041,17 +1053,163 @@ async function startServer() {
       const appUrl = rawBaseUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
       for (const event of events) {
-        const senderUserId = event.source?.userId || '';
-        const senderId = senderUserId || event.source?.groupId || '';
-        if (senderId) {
-          runtimeDefaultUserId = senderId;
+        const senderGroupId = String(
+          event.source?.groupId || event.source?.roomId || ''
+        ).trim();
+        const senderUserId = String(event.source?.userId || '').trim();
+        // IMPORTANT: In a LINE Group Chat, event.source contains BOTH groupId (C...) and userId (U...).
+        // We MUST prioritize senderGroupId so Group Chat notifications (Format 2) capture C.../R... properly!
+        const senderId = senderGroupId || senderUserId;
+
+        if (senderGroupId) {
+          runtimeDetectedGroupId = senderGroupId;
+          runtimeDefaultUserId = senderGroupId;
+        } else if (senderUserId && !runtimeDefaultUserId) {
+          runtimeDefaultUserId = senderUserId;
         }
+
         if (runtimeChannelAccessToken && senderUserId) {
           purgeAllLineRichMenus(runtimeChannelAccessToken, senderUserId).catch(() => {});
         }
 
+        // Case A: Bot is invited to a LINE Group Chat or Multi-person Room (event.type === 'join')
+        if ((event.type === 'join' || event.type === 'memberJoined') && senderGroupId) {
+          if (runtimeChannelAccessToken && event.replyToken) {
+            const joinFlex = {
+              type: 'flex',
+              altText: `✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีมสำเร็จ! Group ID: ${senderGroupId}`,
+              contents: {
+                type: 'bubble',
+                size: 'mega',
+                header: {
+                  type: 'box',
+                  layout: 'vertical',
+                  backgroundColor: '#06C755',
+                  paddingAll: '16px',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: '👥 TEAM LINE GROUP CONNECTED',
+                      color: '#FFFFFF',
+                      size: 'xxs',
+                      weight: 'bold',
+                    },
+                    {
+                      type: 'text',
+                      text: 'เชื่อมต่อกลุ่ม LINE ของทีมสำเร็จ!',
+                      color: '#FFFFFF',
+                      size: 'lg',
+                      weight: 'bold',
+                      margin: 'xs',
+                      wrap: true,
+                    },
+                  ],
+                },
+                body: {
+                  type: 'box',
+                  layout: 'vertical',
+                  paddingAll: '16px',
+                  spacing: 'sm',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: 'ระบบบันทึก Group ID ของห้องแชทกลุ่มนี้สำหรับ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม" เรียบร้อยแล้ว',
+                      size: 'xs',
+                      color: '#334155',
+                      wrap: true,
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      backgroundColor: '#F1F5F9',
+                      cornerRadius: '8px',
+                      paddingAll: '10px',
+                      margin: 'sm',
+                      contents: [
+                        {
+                          type: 'text',
+                          text: '🔑 รหัสกลุ่ม (LINE Group ID):',
+                          size: 'xxs',
+                          weight: 'bold',
+                          color: '#475569',
+                        },
+                        {
+                          type: 'text',
+                          text: senderGroupId,
+                          size: 'xs',
+                          weight: 'bold',
+                          color: '#0F172A',
+                          wrap: true,
+                          margin: 'xs',
+                        },
+                      ],
+                    },
+                    {
+                      type: 'text',
+                      text: '💡 พิมพ์สั่งงานในกลุ่มได้ทันที เช่น "ประชุมทีม พรุ่งนี้ 10:00 #สูง" หรือพิมพ์ "สรุปงานวันนี้"',
+                      size: 'xxs',
+                      color: '#059669',
+                      wrap: true,
+                      margin: 'sm',
+                    },
+                  ],
+                },
+              },
+            };
+
+            await fetch('https://api.line.me/v2/bot/message/reply', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${runtimeChannelAccessToken}`,
+              },
+              body: JSON.stringify({
+                replyToken: event.replyToken,
+                messages: [joinFlex],
+              }),
+            }).catch(() => {});
+          }
+          continue;
+        }
+
+        // Case B: Text message in 1-on-1 chat or Group Chat
         if (event.type === 'message' && event.message?.type === 'text') {
           const userText = String(event.message.text || '').trim();
+          const lowerText = userText.toLowerCase();
+
+          // Special command to check/link Group ID in LINE Group Chat
+          if (
+            lowerText === 'เชื่อมกลุ่ม' ||
+            lowerText === 'รหัสกลุ่ม' ||
+            lowerText === 'เช็คกลุ่ม' ||
+            lowerText === 'เช็ครหัส' ||
+            lowerText === 'groupid' ||
+            lowerText === 'group id'
+          ) {
+            if (runtimeChannelAccessToken && event.replyToken) {
+              const idToShow = senderGroupId || senderUserId || 'ไม่พบรหัส';
+              const isGroup = Boolean(senderGroupId);
+              await fetch('https://api.line.me/v2/bot/message/reply', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${runtimeChannelAccessToken}`,
+                },
+                body: JSON.stringify({
+                  replyToken: event.replyToken,
+                  messages: [
+                    {
+                      type: 'text',
+                      text: isGroup
+                        ? `✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2) สำเร็จแล้ว!\n\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\n${senderGroupId}\n\n(ระบบได้ส่งรหัส Group ID นี้ไปยังหน้าเว็บอัตโนมัติแล้ว หรือคุณสามารถคัดลอกรหัส C... ด้านบนไปวางในช่อง LINE Group ID บนหน้าเว็บได้เลยครับ)`
+                        : `ℹ️ ขณะนี้คุณพิมพ์อยู่ในแชทส่วนตัว (1-on-1)\n🔑 รหัส User ID ของคุณคือ:\n${idToShow}\n\n💡 หากต้องการใช้ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม" กรุณาเชิญบอทเข้ากลุ่ม LINE ของทีม แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่มครับ`,
+                    },
+                  ],
+                }),
+              }).catch(() => {});
+            }
+            continue;
+          }
 
           if (userText) {
             pendingWebhookMessages.push({
@@ -1066,10 +1224,12 @@ async function startServer() {
             const todayStr = new Date().toISOString().slice(0, 10);
             const flexReply = buildSingleTaskReminderFlexMessage({
               taskTitle: userText.replace(/^(เพิ่มงาน|จดงาน|บันทึกงาน)\s*/i, ''),
-              description: 'บันทึกลงปฏิทิน SheetCal LINE และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
+              description: senderGroupId
+                ? `บันทึกลงปฏิทินทีมจากห้องแชทกลุ่ม (${senderGroupId.slice(0, 8)}...) เรียบร้อยแล้ว`
+                : 'บันทึกลงปฏิทิน SheetCal LINE และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
               date: todayStr,
               time: '09:00',
-              categoryName: 'บันทึกผ่านแชท LINE OA',
+              categoryName: senderGroupId ? 'งานกลุ่ม LINE ของทีม' : 'บันทึกผ่านแชท LINE OA',
               categoryColor: '#06C755',
               priority: userText.includes('#สูง') || userText.includes('#ด่วน') ? 'high' : 'medium',
               appUrl,
@@ -1096,21 +1256,24 @@ async function startServer() {
     }
   });
 
-  // Poll endpoint for the Web App to consume real LINE Webhook messages
+  // Poll endpoint for the Web App to consume real LINE Webhook messages & detected Group ID
   app.get('/api/line/webhook-events', (_req, res) => {
     const items = pendingWebhookMessages.splice(0, pendingWebhookMessages.length);
     res.json({
       events: items,
       detectedUserId: runtimeDefaultUserId || undefined,
+      detectedGroupId: runtimeDetectedGroupId || undefined,
     });
   });
 
-  // Server-side proxy to send rich LINE Official Account Flex Messages or Custom Text (Push or Broadcast)
+  // Server-side proxy to send rich LINE Official Account Flex Messages or Custom Text (Push to Group/User or Broadcast)
   app.post('/api/line/push', async (req, res) => {
     try {
       const {
         channelAccessToken,
         to,
+        targetGroupId,
+        teamNotificationMode,
         text,
         taskTitle,
         description,
@@ -1133,10 +1296,26 @@ async function startServer() {
       } = req.body || {};
 
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
-      const targetUserId = String(to || runtimeDefaultUserId || '').trim();
+      const rawTo = String(to || '').trim();
+      const rawGroupId = String(targetGroupId || '').trim();
+
+      const effectiveGroupId = /^[CR][0-9a-fA-F]{32}$/.test(rawGroupId)
+        ? rawGroupId
+        : /^[CR][0-9a-fA-F]{32}$/.test(rawTo)
+        ? rawTo
+        : /^[CR][0-9a-fA-F]{32}$/.test(runtimeDetectedGroupId)
+        ? runtimeDetectedGroupId
+        : '';
+
+      const effectiveUserId = /^U[0-9a-fA-F]{32}$/.test(rawTo)
+        ? rawTo
+        : /^U[0-9a-fA-F]{32}$/.test(runtimeDefaultUserId)
+        ? runtimeDefaultUserId
+        : '';
 
       if (token) runtimeChannelAccessToken = token;
-      if (targetUserId) runtimeDefaultUserId = targetUserId;
+      if (effectiveGroupId) runtimeDetectedGroupId = effectiveGroupId;
+      if (rawTo) runtimeDefaultUserId = rawTo;
 
       if (!token) {
         res.status(200).json({
@@ -1149,7 +1328,7 @@ async function startServer() {
       }
 
       // Automatically clean up any lingering Messaging API Rich Menu in the background
-      purgeAllLineRichMenus(token, targetUserId).catch(() => {});
+      purgeAllLineRichMenus(token, effectiveUserId || rawTo).catch(() => {});
 
       const rawAppUrl =
         originUrl && String(originUrl).startsWith('https://')
@@ -1175,7 +1354,9 @@ async function startServer() {
         flexMessage = buildSingleTaskReminderFlexMessage({
           taskTitle,
           description: description || text,
-          date: date || (dateTime ? String(dateTime).slice(0, 10) : new Date().toISOString().slice(0, 10)),
+          date:
+            date ||
+            (dateTime ? String(dateTime).slice(0, 10) : new Date().toISOString().slice(0, 10)),
           time: time || '09:00',
           categoryName: categoryName || 'ทั่วไป',
           categoryColor: categoryColor || '#4F46E5',
@@ -1207,10 +1388,69 @@ async function startServer() {
       };
 
       const messages = [flexMessage];
-      const isValidLineTargetId = /^[UCR][0-9a-fA-F]{32}$/.test(targetUserId);
-      let pushErrorDetail = '';
+      const mode: 'broadcast' | 'group' | 'both' =
+        teamNotificationMode === 'group' || teamNotificationMode === 'broadcast'
+          ? teamNotificationMode
+          : 'both';
 
-      if (isValidLineTargetId) {
+      let sentToGroupOk = false;
+      let groupErrorDetail = '';
+
+      // 1. Send to LINE Group Chat (Format 2: Group ID C... or Room ID R...) if configured/detected
+      if (effectiveGroupId && (mode === 'group' || mode === 'both')) {
+        const groupPushRes = await fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            to: effectiveGroupId,
+            messages,
+          }),
+        });
+
+        if (groupPushRes.ok) {
+          sentToGroupOk = true;
+        } else {
+          const groupErrJson = await groupPushRes.json().catch(() => ({}));
+          groupErrorDetail = groupErrJson?.message || `HTTP ${groupPushRes.status}`;
+
+          // Fallback plain text to Group Chat
+          const groupTextRes = await fetch('https://api.line.me/v2/bot/message/push', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              to: effectiveGroupId,
+              messages: [fallbackTextMessage],
+            }),
+          });
+          if (groupTextRes.ok) {
+            sentToGroupOk = true;
+          }
+        }
+
+        if (sentToGroupOk && mode === 'group') {
+          res.status(200).json({
+            ok: true,
+            simulated: false,
+            mode: 'group_push',
+            detectedGroupId: effectiveGroupId,
+            message: `ส่งการ์ดแจ้งเตือนเข้า "ห้องแชทกลุ่ม LINE ของทีม" (Group ID: ${effectiveGroupId.slice(
+              0,
+              8
+            )}...) สำเร็จแล้ว!`,
+          });
+          return;
+        }
+      }
+
+      // 2. Send to specific 1-on-1 User ID (U...) if specified and not purely broadcast
+      let pushErrorDetail = groupErrorDetail;
+      if (effectiveUserId && mode !== 'group') {
         const pushRes = await fetch('https://api.line.me/v2/bot/message/push', {
           method: 'POST',
           headers: {
@@ -1218,7 +1458,7 @@ async function startServer() {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            to: targetUserId,
+            to: effectiveUserId,
             messages,
           }),
         });
@@ -1227,8 +1467,17 @@ async function startServer() {
           res.status(200).json({
             ok: true,
             simulated: false,
-            mode: 'push',
-            message: `ส่งการ์ดแจ้งเตือนเข้าแอป LINE Official Account (Push ไปยัง ${targetUserId.slice(0, 8)}...) สำเร็จแล้ว!`,
+            mode: sentToGroupOk ? 'group_and_user_push' : 'push',
+            detectedGroupId: effectiveGroupId || undefined,
+            message: sentToGroupOk
+              ? `ส่งการ์ดแจ้งเตือนเข้าทั้ง "ห้องแชทกลุ่ม LINE ของทีม" (${effectiveGroupId.slice(
+                  0,
+                  8
+                )}...) และแชทส่วนตัวสำเร็จแล้ว!`
+              : `ส่งการ์ดแจ้งเตือนเข้าแอป LINE Official Account (Push ไปยัง ${effectiveUserId.slice(
+                  0,
+                  8
+                )}...) สำเร็จแล้ว!`,
           });
           return;
         }
@@ -1244,7 +1493,7 @@ async function startServer() {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            to: targetUserId,
+            to: effectiveUserId,
             messages: [fallbackTextMessage],
           }),
         });
@@ -1254,13 +1503,14 @@ async function startServer() {
             ok: true,
             simulated: false,
             mode: 'push_text',
+            detectedGroupId: effectiveGroupId || undefined,
             message: `ส่งข้อความแจ้งเตือนเข้าแอป LINE Official Account สำเร็จแล้ว!`,
           });
           return;
         }
       }
 
-      // Fallback to Broadcast API (sends to all friends of the LINE OA)
+      // 3. Fallback / Format 1: Broadcast API (sends to all 1-on-1 friends of the LINE OA)
       const broadcastRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
         method: 'POST',
         headers: {
@@ -1274,7 +1524,6 @@ async function startServer() {
 
       if (!broadcastRes.ok) {
         const errData = await broadcastRes.json().catch(() => ({}));
-        // Retry Broadcast with plain text fallback
         const broadcastTextRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
           method: 'POST',
           headers: {
@@ -1290,35 +1539,58 @@ async function startServer() {
           res.status(200).json({
             ok: true,
             simulated: false,
-            mode: 'broadcast_text',
-            message: 'ส่งข้อความแจ้งเตือนเข้าแอป LINE (Broadcast) สำเร็จแล้ว!',
+            mode: sentToGroupOk ? 'group_and_broadcast_text' : 'broadcast_text',
+            detectedGroupId: effectiveGroupId || undefined,
+            message: sentToGroupOk
+              ? `ส่งแจ้งเตือนเข้าทั้ง "ห้องแชทกลุ่ม LINE ของทีม" (${effectiveGroupId.slice(
+                  0,
+                  8
+                )}...) และแชทส่วนตัวทุกคน (Broadcast) สำเร็จแล้ว!`
+              : 'ส่งข้อความแจ้งเตือนเข้าแอป LINE (Broadcast) สำเร็จแล้ว!',
           });
           return;
         }
 
-        const invalidIdHint =
-          targetUserId && !isValidLineTargetId
-            ? ` (หมายเหตุ: LINE User ID "${targetUserId}" ไม่ใช่รหัส 33 ตัวอักษรที่ขึ้นต้นด้วย U)`
-            : '';
+        if (sentToGroupOk) {
+          res.status(200).json({
+            ok: true,
+            simulated: false,
+            mode: 'group_push',
+            detectedGroupId: effectiveGroupId,
+            message: `ส่งการ์ดแจ้งเตือนเข้า "ห้องแชทกลุ่ม LINE ของทีม" (${effectiveGroupId.slice(
+              0,
+              8
+            )}...) สำเร็จแล้ว!`,
+          });
+          return;
+        }
 
         res.status(200).json({
           ok: false,
           simulated: true,
           message: `ไม่สามารถส่งผ่าน LINE API ได้ (${
             pushErrorDetail || errData?.message || `HTTP ${broadcastRes.status}`
-          })${invalidIdHint} — กรุณากดปุ่ม "ตรวจสอบสถานะ Token & ทดสอบยิงเข้า LINE" ในแท็บตั้งค่า API`,
+          }) — กรุณาตรวจสอบ Token หรือเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์ "เชื่อมกลุ่ม"`,
         });
         return;
       }
 
+      const missingGroupNotice =
+        mode === 'group' && !effectiveGroupId
+          ? ' (⚠️ หมายเหตุ: ขณะนี้ส่งเข้าแชทส่วนตัวแบบ Broadcast แทน เนื่องจากยังไม่ได้ผูก Group ID C... ของห้องแชทกลุ่ม — กรุณาเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในกลุ่ม 1 ครั้ง)'
+          : '';
+
       res.status(200).json({
         ok: true,
         simulated: false,
-        mode: 'broadcast',
-        message:
-          targetUserId && !isValidLineTargetId
-            ? 'ส่งการ์ดแจ้งเตือนเข้าแอป LINE สำเร็จแล้ว (ส่งแบบ Broadcast เนื่องจาก LINE User ID ไม่ใช่รหัส U 33 ตัวอักษร)'
-            : 'ส่งการ์ดแจ้งเตือน Flex Message ดีไซน์ใหม่เข้าแอป LINE ของคุณสำเร็จแล้ว!',
+        mode: sentToGroupOk ? 'group_and_broadcast' : 'broadcast',
+        detectedGroupId: effectiveGroupId || undefined,
+        message: sentToGroupOk
+          ? `ส่งการ์ดแจ้งเตือนเข้าทั้ง "ห้องแชทกลุ่ม LINE ของทีม" (${effectiveGroupId.slice(
+              0,
+              8
+            )}...) และแชทส่วนตัวของสมาชิกทุกคนสำเร็จแล้ว!`
+          : `ส่งการ์ดแจ้งเตือน Flex Message เข้าแอป LINE สำเร็จแล้ว!${missingGroupNotice}`,
       });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -1331,13 +1603,19 @@ async function startServer() {
   });
 
   /**
-   * Diagnose LINE Channel Access Token, Bot Info, User ID format/friendship, and test delivery
+   * Diagnose LINE Channel Access Token, Bot Info, User ID / Group ID format, and test delivery
    */
   app.post('/api/line/diagnose', async (req, res) => {
     try {
-      const { channelAccessToken, targetUserId, sendTest } = req.body || {};
+      const { channelAccessToken, targetUserId, targetGroupId, sendTest } = req.body || {};
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
       const rawUserId = String(targetUserId || '').trim();
+      const rawGroupId = String(
+        targetGroupId ||
+          (/^[CR][0-9a-fA-F]{32}$/.test(rawUserId) ? rawUserId : '') ||
+          runtimeDetectedGroupId ||
+          ''
+      ).trim();
 
       const steps: {
         step: string;
@@ -1352,7 +1630,8 @@ async function startServer() {
             {
               step: '1. ตรวจสอบ LINE Channel Access Token',
               status: 'error',
-              detail: 'ยังไม่ได้ระบุ LINE Channel Access Token กรุณานำ Token (Long-lived) จาก LINE Developers Console > Messaging API มาวาง',
+              detail:
+                'ยังไม่ได้ระบุ LINE Channel Access Token กรุณานำ Token (Long-lived) จาก LINE Developers Console > Messaging API มาวาง',
             },
           ],
         });
@@ -1372,7 +1651,9 @@ async function startServer() {
         steps.push({
           step: '1. ตรวจสอบ LINE Channel Access Token',
           status: 'error',
-          detail: `Token ไม่ถูกต้องหรือหมดอายุ (${errBody?.message || `HTTP ${botInfoRes.status}`}) — กรุณาไปที่ LINE Developers Console > เลือก Channel แบบ Messaging API > ออก Channel access token (long-lived) ใหม่`,
+          detail: `Token ไม่ถูกต้องหรือหมดอายุ (${
+            errBody?.message || `HTTP ${botInfoRes.status}`
+          }) — กรุณาไปที่ LINE Developers Console > เลือก Channel แบบ Messaging API > ออก Channel access token (long-lived) ใหม่`,
         });
         res.status(200).json({ ok: false, steps });
         return;
@@ -1382,69 +1663,105 @@ async function startServer() {
         displayName?: string;
         basicId?: string;
         userId?: string;
+        chatMode?: string;
       };
 
       steps.push({
         step: '1. ตรวจสอบ LINE Channel Access Token',
         status: 'ok',
-        detail: `เชื่อมต่อสำเร็จ! ชื่อบอท LINE OA: "${botInfo.displayName || 'ไม่ระบุ'}" (LINE ID บอท: ${botInfo.basicId || '-'})`,
+        detail: `เชื่อมต่อสำเร็จ! ชื่อบอท LINE OA: "${
+          botInfo.displayName || 'ไม่ระบุ'
+        }" (LINE ID บอท: ${botInfo.basicId || '-'})`,
       });
 
-      // Step 2: Check User ID format & profile
-      const isValidFormat = /^[UCR][0-9a-fA-F]{32}$/.test(rawUserId);
-      if (!rawUserId) {
-        steps.push({
-          step: '2. ตรวจสอบ LINE User ID (ผู้รับ)',
-          status: 'ok',
-          detail: `ไม่ได้ระบุ User ID เฉพาะเจาะจง — ระบบจะใช้โหมด Broadcast ส่งแจ้งเตือนหาทุกคนที่แอดบอท "${botInfo.displayName || ''}" (${botInfo.basicId || ''}) เป็นเพื่อน`,
-        });
-      } else if (!isValidFormat) {
-        steps.push({
-          step: '2. ตรวจสอบรูปแบบ LINE User ID',
-          status: 'warn',
-          detail: `ค่าที่กรอก ("${rawUserId}") ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร! รหัสที่ถูกต้องต้องขึ้นต้นด้วยตัว U ตามด้วยตัวเลข/ตัวอักษร 32 ตัว (เช่น U4af4980629...) ดูได้จาก LINE Developers Console > แท็บ Basic settings > Your user ID (ไม่ใช่ LINE ID ส่วนตัวที่ใช้แอดเพื่อน) — ระบบจะสลับไปส่งแบบ Broadcast แทนอัตโนมัติ`,
-        });
-      } else {
-        // Verify if the bot can access this user's profile (means user has added the bot as a friend and hasn't blocked it)
-        if (rawUserId.startsWith('U')) {
-          const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${rawUserId}`, {
+      // Step 2: Check Group ID (Format 2: Team Group Chat) & User ID (Format 1: Broadcast / 1-on-1)
+      const isValidGroup = /^[CR][0-9a-fA-F]{32}$/.test(rawGroupId);
+      if (isValidGroup) {
+        const groupSummaryRes = await fetch(
+          `https://api.line.me/v2/bot/group/${rawGroupId}/summary`,
+          {
             method: 'GET',
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          if (profileRes.ok) {
-            const profileData = (await profileRes.json()) as { displayName?: string };
-            steps.push({
-              step: '2. ตรวจสอบ LINE User ID และการเป็นเพื่อนกับบอท',
-              status: 'ok',
-              detail: `รูปแบบ User ID ถูกต้อง และพบผู้ใช้ "${profileData.displayName || rawUserId}" เป็นเพื่อนกับบอท LINE OA เรียบร้อยแล้ว!`,
-            });
-          } else {
-            steps.push({
-              step: '2. ตรวจสอบ LINE User ID และการเป็นเพื่อนกับบอท',
-              status: 'warn',
-              detail: `รูปแบบรหัส U... ถูกต้อง แต่บอทไม่พบโปรไฟล์ผู้ใช้นี้ (สาเหตุ: คุณอาจยังไม่ได้สแกน QR Code แอดบอท ${botInfo.basicId || ''} เป็นเพื่อนในแอป LINE หรือบล็อกบอทไว้ หรือเป็น User ID คนละ Provider)`,
-            });
+            headers: { Authorization: `Bearer ${token}` },
           }
+        ).catch(() => null);
+
+        if (groupSummaryRes && groupSummaryRes.ok) {
+          const groupSummary = (await groupSummaryRes.json().catch(() => ({}))) as {
+            groupName?: string;
+          };
+          steps.push({
+            step: '2. ตรวจสอบห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat)',
+            status: 'ok',
+            detail: `เชื่อมต่อกลุ่ม LINE "${
+              groupSummary.groupName || rawGroupId
+            }" (รหัสกลุ่ม: ${rawGroupId}) สำเร็จ! บอทอยู่ในกลุ่มพร้อมส่งแจ้งเตือนรวมให้สมาชิกทั้งทีม`,
+          });
         } else {
           steps.push({
-            step: '2. ตรวจสอบรหัสกลุ่ม/ห้องแชท (Group / Room ID)',
-            status: 'ok',
-            detail: `รูปแบบรหัส ${rawUserId.slice(0, 8)}... ถูกต้อง (อย่าลืมเชิญบอท ${botInfo.basicId || ''} เข้ากลุ่ม LINE ก่อนส่งข้อความ)`,
+            step: '2. ตรวจสอบห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat)',
+            status: 'warn',
+            detail: `พบรหัสกลุ่ม ${rawGroupId} แต่บอทยังไม่ได้อยู่ในกลุ่มนี้ หรือถูกเตะออกจากกลุ่ม — กรุณาเชิญบอท "${
+              botInfo.displayName || ''
+            }" (${botInfo.basicId || ''}) เข้ากลุ่ม LINE อีกครั้ง`,
           });
         }
+      } else {
+        steps.push({
+          step: '2. สถานะห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat)',
+          status: 'warn',
+          detail: `ยังไม่ได้ผูก Group ID (รหัส C... 33 ตัวอักษร) — 💡 สำคัญ: การส่งแบบ Broadcast ของ LINE จะส่งเข้าเฉพาะ "แชทส่วนตัว (1-on-1)" เท่านั้น ไม่สามารถส่งเข้ากลุ่มอัตโนมัติได้หากไม่มี Group ID! วิธีผูกกลุ่ม: 1) เปิดอนุญาตให้บอทเข้ากลุ่มใน manager.line.biz 2) เชิญบอท ${
+            botInfo.basicId || ''
+          } เข้ากลุ่ม LINE 3) พิมพ์คำว่า "เชื่อมกลุ่ม" ในกลุ่ม LINE แล้วกดปุ่ม "ดึงรหัสกลุ่ม C... อัตโนมัติ"`,
+        });
       }
 
       // Step 3: Send actual test message if requested
       if (sendTest) {
         const testMsg = {
           type: 'text',
-          text: `✅ [SheetCal LINE Diagnostic]\nทดสอบการเชื่อมต่อแจ้งเตือนสำเร็จ!\n🤖 บอท: ${botInfo.displayName || 'LINE OA'} (${botInfo.basicId || ''})\n⏰ เวลาทดสอบ: ${new Date().toLocaleTimeString('th-TH')} น.`,
+          text: `✅ [SheetCal LINE Diagnostic]\nทดสอบการเชื่อมต่อแจ้งเตือนสำเร็จ!\n🤖 บอท: ${
+            botInfo.displayName || 'LINE OA'
+          } (${botInfo.basicId || ''})\n⏰ เวลาทดสอบ: ${new Date().toLocaleTimeString('th-TH')} น.`,
         };
 
         let sentOk = false;
-        if (isValidFormat) {
+
+        if (isValidGroup) {
+          const groupPushRes = await fetch('https://api.line.me/v2/bot/message/push', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              to: rawGroupId,
+              messages: [testMsg],
+            }),
+          });
+          if (groupPushRes.ok) {
+            sentOk = true;
+            steps.push({
+              step: '3. ทดสอบยิงข้อความเข้า "ห้องแชทกลุ่ม LINE ของทีม" (Group Push)',
+              status: 'ok',
+              detail: `ส่งข้อความเข้าห้องแชทกลุ่ม LINE (${rawGroupId.slice(
+                0,
+                10
+              )}...) สำเร็จแล้ว! สมาชิกทุกคนในกลุ่มเห็นข้อความพร้อมกันทันที`,
+            });
+          } else {
+            const grpErr = await groupPushRes.json().catch(() => ({}));
+            steps.push({
+              step: '3. ทดสอบยิงข้อความเข้า "ห้องแชทกลุ่ม LINE ของทีม"',
+              status: 'error',
+              detail: `ส่งเข้ากลุ่ม ${rawGroupId.slice(0, 10)}... ไม่สำเร็จ (${
+                grpErr?.message || `HTTP ${groupPushRes.status}`
+              }) กรุณาตรวจสอบว่าบอทยังอยู่ในกลุ่ม LINE นี้`,
+            });
+          }
+        }
+
+        const isValidUser = /^U[0-9a-fA-F]{32}$/.test(rawUserId);
+        if (isValidUser) {
           const pushRes = await fetch('https://api.line.me/v2/bot/message/push', {
             method: 'POST',
             headers: {
@@ -1460,16 +1777,11 @@ async function startServer() {
           if (pushRes.ok) {
             sentOk = true;
             steps.push({
-              step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง (Push API)',
+              step: '3. ทดสอบส่งข้อความเข้าแชทส่วนตัว (Push API)',
               status: 'ok',
-              detail: `ส่งข้อความเข้าแอป LINE ของคุณสำเร็จแล้ว! กรุณาเช็กข้อความในแชทบอท "${botInfo.displayName || ''}" บนมือถือ`,
-            });
-          } else {
-            const pushErr = await pushRes.json().catch(() => ({}));
-            steps.push({
-              step: '3. ทดสอบส่งแบบ Push API',
-              status: 'warn',
-              detail: `ส่งแบบ Push ไปยัง ${rawUserId.slice(0, 10)}... ไม่สำเร็จ (${pushErr?.message || `HTTP ${pushRes.status}`}) — กำลังลองส่งแบบ Broadcast แทน...`,
+              detail: `ส่งข้อความเข้าแชทส่วนตัวสำเร็จแล้ว! กรุณาเช็กข้อความในแชทบอท "${
+                botInfo.displayName || ''
+              }"`,
             });
           }
         }
@@ -1489,25 +1801,37 @@ async function startServer() {
           if (bcRes.ok) {
             sentOk = true;
             steps.push({
-              step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง (Broadcast API)',
+              step: '3. ทดสอบส่งข้อความเข้าแชทส่วนตัวทุกคน (Broadcast API)',
               status: 'ok',
-              detail: `ส่งข้อความแบบ Broadcast สำเร็จแล้ว! (หากคุณแอดบอท "${botInfo.displayName || ''}" ${botInfo.basicId || ''} เป็นเพื่อนใน LINE แล้ว ข้อความจะเด้งขึ้นทันที)`,
+              detail: `ส่งข้อความแบบ Broadcast เข้าแชทส่วนตัวของเพื่อนทุกคนสำเร็จแล้ว! (หมายเหตุ: Broadcast ของ LINE จะเข้าเฉพาะแชท 1-on-1 หากต้องการให้เข้ากลุ่ม LINE ด้วย กรุณาผูก Group ID C... ด้านบน)`,
             });
           } else {
             const bcErr = await bcRes.json().catch(() => ({}));
             steps.push({
               step: '3. ทดสอบส่งข้อความเข้าแอป LINE จริง',
               status: 'error',
-              detail: `ส่งไม่สำเร็จ (${bcErr?.message || `HTTP ${bcRes.status}`}) กรุณาตรวจสอบโควต้าข้อความรายเดือนของ LINE OA หรือการตั้งค่า Messaging API`,
+              detail: `ส่งไม่สำเร็จ (${
+                bcErr?.message || `HTTP ${bcRes.status}`
+              }) กรุณาตรวจสอบโควต้าข้อความรายเดือนของ LINE OA หรือการตั้งค่า Messaging API`,
             });
           }
         }
 
-        res.status(200).json({ ok: sentOk, botInfo, steps });
+        res.status(200).json({
+          ok: sentOk,
+          botInfo,
+          detectedGroupId: runtimeDetectedGroupId || undefined,
+          steps,
+        });
         return;
       }
 
-      res.status(200).json({ ok: true, botInfo, steps });
+      res.status(200).json({
+        ok: true,
+        botInfo,
+        detectedGroupId: runtimeDetectedGroupId || undefined,
+        steps,
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       res.status(200).json({
@@ -1596,15 +1920,33 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    let viteMiddleware: express.RequestHandler | null = null;
+    const vitePromise = createViteServer({
       server: {
         middlewareMode: true,
         hmr: false,
         watch: null,
       },
       appType: 'spa',
+    }).then((vite) => {
+      viteMiddleware = vite.middlewares;
+      return vite;
     });
-    app.use(vite.middlewares);
+
+    app.use(async (req, res, next) => {
+      try {
+        if (!viteMiddleware) {
+          await vitePromise;
+        }
+        if (viteMiddleware) {
+          viteMiddleware(req, res, next);
+        } else {
+          next();
+        }
+      } catch (err) {
+        next(err);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
@@ -1619,3 +1961,4 @@ async function startServer() {
 }
 
 startServer();
+

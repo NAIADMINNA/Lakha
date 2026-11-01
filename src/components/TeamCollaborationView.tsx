@@ -1,15 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Bell,
   Check,
+  CheckCircle2,
   Copy,
   ExternalLink,
   Link2,
+  MessageSquare,
+  RefreshCw,
+  Settings,
   Trash2,
   UserPlus,
   Users,
 } from 'lucide-react';
 import {
   Category,
+  LineSettings,
   Task,
   TaskStatus,
   TeamMember,
@@ -24,6 +30,12 @@ interface TeamCollaborationViewProps {
   spreadsheetId?: string;
   spreadsheetUrl?: string;
   lastCollabSyncAt?: string | null;
+  lineSettings: LineSettings;
+  isSendingPush?: boolean;
+  onUpdateLineSettings: (newSettings: LineSettings) => void;
+  onTestPushNotification: () => Promise<void>;
+  onDetectGroupId?: () => Promise<string | null>;
+  onOpenLineCenter?: () => void;
   onInviteMember: (member: Omit<TeamMember, 'id' | 'invitedAt' | 'status'>) => void;
   onUpdateMemberRole: (memberId: string, role: TeamRole) => void;
   onRemoveMember: (member: TeamMember) => void;
@@ -48,6 +60,12 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   spreadsheetId,
   spreadsheetUrl,
   lastCollabSyncAt,
+  lineSettings,
+  isSendingPush = false,
+  onUpdateLineSettings,
+  onTestPushNotification,
+  onDetectGroupId,
+  onOpenLineCenter,
   onInviteMember,
   onUpdateMemberRole,
   onRemoveMember,
@@ -58,6 +76,21 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   const [inviteRole, setInviteRole] = useState<TeamRole>('editor');
   const [inviteColor, setInviteColor] = useState(AVATAR_COLORS[0]);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
+  const [isDetectingGroup, setIsDetectingGroup] = useState(false);
+  const [groupDetectNotice, setGroupDetectNotice] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  const activeMode = lineSettings.teamNotificationMode || 'both';
+  const rawGroupId = (lineSettings.targetGroupId || '').trim();
+  const fallbackGroupFromTarget = /^[CR][0-9a-fA-F]{32}$/.test(
+    (lineSettings.targetUserId || '').trim()
+  )
+    ? lineSettings.targetUserId.trim()
+    : '';
+  const effectiveGroupId = rawGroupId || fallbackGroupFromTarget;
+  const isValidGroupId = /^[CR][0-9a-fA-F]{32}$/.test(effectiveGroupId);
 
   const shareableCalendarUrl = useMemo(() => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';
@@ -91,6 +124,29 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
       setTimeout(() => setCopiedShareLink(false), 2500);
     } catch {
       // Fallback
+    }
+  };
+
+  const handleAutoDetectGroupId = async () => {
+    if (!onDetectGroupId) return;
+    setIsDetectingGroup(true);
+    setGroupDetectNotice(null);
+    try {
+      const detected = await onDetectGroupId();
+      if (detected && /^[CR][0-9a-fA-F]{32}$/.test(detected)) {
+        setGroupDetectNotice({
+          ok: true,
+          message: `✅ ดึงรหัสห้องแชทกลุ่ม LINE สำเร็จ: ${detected} — พร้อมส่งแจ้งเตือนเข้ากลุ่ม LINE ทันที!`,
+        });
+      } else {
+        setGroupDetectNotice({
+          ok: false,
+          message:
+            '⚠️ ยังไม่พบสัญญาณจากกลุ่ม LINE — กรุณาเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่ม 1 ครั้ง (บอทจะตอบกลับรหัส C... ทันที) จากนั้นกดปุ่มดึงรหัสอีกครั้งครับ',
+        });
+      }
+    } finally {
+      setIsDetectingGroup(false);
     }
   };
 
@@ -160,7 +216,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
 
       {/* Main 2-Column Clean Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left 7 Columns: Share Link + Team Member Directory */}
+        {/* Left 7 Columns: Share Link + Interactive LINE Group Chat Control + Team Member Directory */}
         <div className="lg:col-span-7 space-y-6">
           {/* Card 1: Share Calendar Link */}
           <div className="bg-white border border-slate-200 border-t-4 border-t-emerald-500 rounded-xl p-6 space-y-4 shadow-2xs">
@@ -225,7 +281,273 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
             </div>
           </div>
 
-          {/* Card 2: Shared Calendar Team Members List */}
+          {/* Card 2: Interactive LINE Team Notification Panel (Format 1 Broadcast & Format 2 Group Chat) */}
+          <div className="bg-white border-2 border-emerald-300 border-t-4 border-t-[#06C755] rounded-xl p-6 space-y-5 shadow-2xs">
+            <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-200">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-[#06C755] shrink-0" />
+                  <span>ตั้งค่าการแจ้งเตือน LINE สำหรับสมาชิกในปฏิทินทีม</span>
+                </h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  เลือกได้ว่าจะให้แจ้งเตือนแยกแชทส่วนตัว (รูปแบบที่ 1), แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2) หรือส่งทั้งคู่พร้อมกัน
+                </p>
+              </div>
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${
+                  isValidGroupId
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                    : 'bg-amber-50 text-amber-800 border-amber-300'
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    isValidGroupId ? 'bg-[#06C755]' : 'bg-amber-500'
+                  }`}
+                />
+                {isValidGroupId
+                  ? 'เชื่อมห้องแชทกลุ่ม LINE (C...) แล้ว'
+                  : 'ยังไม่ได้ระบุ Group ID (C...)'}
+              </span>
+            </div>
+
+            {/* Mode Selector Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateLineSettings({
+                    ...lineSettings,
+                    teamNotificationMode: 'broadcast',
+                  })
+                }
+                className={`text-left rounded-xl border p-3.5 transition-all ${
+                  activeMode === 'broadcast'
+                    ? 'border-[#06C755] bg-emerald-50/70 ring-2 ring-[#06C755]/25'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900">
+                    รูปแบบที่ 1: แชทส่วนตัว
+                  </span>
+                  {activeMode === 'broadcast' && (
+                    <CheckCircle2 className="h-4 w-4 text-[#06C755]" />
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                  ส่งการ์ดแจ้งเตือนแยกเข้าแชทส่วนตัวของทุกคนที่แอดเพื่อน LINE OA (Broadcast)
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateLineSettings({
+                    ...lineSettings,
+                    teamNotificationMode: 'group',
+                  })
+                }
+                className={`text-left rounded-xl border p-3.5 transition-all ${
+                  activeMode === 'group'
+                    ? 'border-[#06C755] bg-emerald-50/70 ring-2 ring-[#06C755]/25'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-900">
+                    รูปแบบที่ 2: ห้องแชทกลุ่ม
+                  </span>
+                  {activeMode === 'group' && (
+                    <CheckCircle2 className="h-4 w-4 text-[#06C755]" />
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                  ยิงการ์ดแจ้งเตือนรวมเข้า <strong>ห้องแชทกลุ่ม LINE ของทีม (C...)</strong> ห้องเดียวเห็นพร้อมกันทั้งทีม
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateLineSettings({
+                    ...lineSettings,
+                    teamNotificationMode: 'both',
+                  })
+                }
+                className={`text-left rounded-xl border p-3.5 transition-all ${
+                  activeMode === 'both'
+                    ? 'border-[#06C755] bg-emerald-50/70 ring-2 ring-[#06C755]/25'
+                    : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-900">
+                    ส่งทั้ง 2 รูปแบบ (แนะนำ)
+                  </span>
+                  {activeMode === 'both' && (
+                    <CheckCircle2 className="h-4 w-4 text-[#06C755]" />
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                  ส่งเข้า <strong>ห้องแชทกลุ่ม LINE (C...)</strong> และส่ง Broadcast แชทส่วนตัวควบคู่กัน
+                </p>
+              </button>
+            </div>
+
+            {/* Interactive Group ID Input & Auto-Detect Box */}
+            <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-bold text-emerald-950">
+                  รหัสห้องแชทกลุ่ม LINE ของทีม — Group ID (ขึ้นต้นด้วย C ความยาว 33 ตัวอักษร)
+                </label>
+                {effectiveGroupId && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateLineSettings({
+                        ...lineSettings,
+                        targetGroupId: '',
+                      })
+                    }
+                    className="text-[11px] font-semibold text-rose-600 hover:underline"
+                  >
+                    ล้างรหัสกลุ่ม
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={lineSettings.targetGroupId || fallbackGroupFromTarget}
+                  onChange={(e) =>
+                    onUpdateLineSettings({
+                      ...lineSettings,
+                      targetGroupId: e.target.value.trim(),
+                    })
+                  }
+                  placeholder="เช่น C1234567890abcdef1234567890abcdef (กดปุ่มดึงรหัสอัตโนมัติด้านขวาได้)"
+                  className={`flex-1 rounded-lg border px-3 py-2 text-xs font-mono-tabular text-slate-900 bg-white focus:outline-none ${
+                    effectiveGroupId && !isValidGroupId
+                      ? 'border-amber-400 bg-amber-50/40'
+                      : 'border-emerald-300 focus:border-[#06C755]'
+                  }`}
+                />
+                <button
+                  type="button"
+                  disabled={isDetectingGroup}
+                  onClick={handleAutoDetectGroupId}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-900 bg-white border border-emerald-300 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 text-emerald-700 ${
+                      isDetectingGroup ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>
+                    {isDetectingGroup
+                      ? 'กำลังค้นหา Group ID...'
+                      : '🔄 ดึงรหัสกลุ่ม C... อัตโนมัติ'}
+                  </span>
+                </button>
+              </div>
+
+              {effectiveGroupId && !isValidGroupId && (
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 leading-relaxed">
+                  ⚠️ รหัสที่กรอกยังไม่ใช่รหัส LINE Group ID 33 ตัวอักษร (ต้องขึ้นต้นด้วยตัวพิมพ์ใหญ่{' '}
+                  <code className="font-bold">C</code> หรือ <code className="font-bold">R</code>{' '}
+                  ตามด้วยตัวเลขและ a-f รวม 33 ตัว) — แนะนำให้พิมพ์คำว่า{' '}
+                  <code className="font-bold bg-white px-1.5 py-0.5 rounded border">
+                    เชื่อมกลุ่ม
+                  </code>{' '}
+                  ในห้องแชทกลุ่ม LINE ของทีม แล้วบอทจะตอบกลับรหัส <code className="font-bold">C...</code>{' '}
+                  ให้คัดลอกมาวาง หรือกดปุ่ม <strong>"ดึงรหัสกลุ่ม C... อัตโนมัติ"</strong> ได้เลยครับ
+                </div>
+              )}
+
+              {groupDetectNotice && (
+                <div
+                  className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                    groupDetectNotice.ok
+                      ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950'
+                      : 'bg-amber-50 border-amber-200 text-amber-950'
+                  }`}
+                >
+                  {groupDetectNotice.message}
+                </div>
+              )}
+
+              {/* Action Buttons: Test Group Push & Open LINE Settings */}
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isSendingPush}
+                  onClick={() => onTestPushNotification()}
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#06C755] rounded-lg hover:bg-[#05b04b] transition-colors shadow-2xs"
+                >
+                  <Bell className="h-3.5 w-3.5" />
+                  <span>
+                    {isSendingPush
+                      ? 'กำลังส่งการ์ดทดสอบเข้ากลุ่ม LINE...'
+                      : '🔔 ทดสอบยิงแจ้งเตือนเข้าห้องแชทกลุ่ม LINE ทันที'}
+                  </span>
+                </button>
+
+                {onOpenLineCenter && (
+                  <button
+                    type="button"
+                    onClick={onOpenLineCenter}
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                  >
+                    <Settings className="h-3.5 w-3.5 text-slate-600" />
+                    <span>ตั้งค่า Webhook / โค้ด Apps Script v2.6</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 3-Step Checklist Why Group Chat Might Not Receive & How to Fix in 1 Minute */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs text-slate-700">
+              <div className="font-bold text-slate-900">
+                💡 วิธีเชื่อมต่อ "รูปแบบที่ 2: ห้องแชทกลุ่ม LINE ของทีม (Group Chat)" ให้สำเร็จ 100%
+              </div>
+              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-slate-700">
+                <li>
+                  <strong className="text-slate-900">เปิดสิทธิ์ให้บอทเข้ากลุ่มได้:</strong> เข้าเว็บ{' '}
+                  <a
+                    href="https://manager.line.biz"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-600 font-semibold underline"
+                  >
+                    manager.line.biz
+                  </a>{' '}
+                  &gt; เลือกบัญชี LINE OA &gt; <strong>ตั้งค่า (Settings)</strong> &gt;{' '}
+                  <strong>ตั้งค่าบัญชี (Account settings)</strong> &gt; หัวข้อ{' '}
+                  <em>"แชทแบบกลุ่มและแชทแบบหลายคน"</em> ให้ติ๊กเลือก{' '}
+                  <span className="font-bold text-emerald-700">
+                    "อนุญาตให้บัญชีเข้าร่วมกลุ่มและแชทแบบหลายคน"
+                  </span>
+                </li>
+                <li>
+                  <strong className="text-slate-900">เชิญบอทเข้ากลุ่ม & พิมพ์คำสั่ง:</strong> เชิญบอท LINE OA เข้าห้องแชทกลุ่มของทีม แล้วพิมพ์ข้อความในกลุ่มว่า{' '}
+                  <code className="font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-300 text-emerald-800">
+                    เชื่อมกลุ่ม
+                  </code>{' '}
+                  บอทจะตอบกลับรหัส <code className="font-bold">Group ID (C...)</code> ในห้องแชทกลุ่มทันที
+                </li>
+                <li>
+                  <strong className="text-slate-900">ดึงรหัสเข้าเว็บ (หรือวางรหัส C...):</strong> กดปุ่ม{' '}
+                  <strong>"🔄 ดึงรหัสกลุ่ม C... อัตโนมัติ"</strong> ด้านบน (หรือคัดลอกรหัส{' '}
+                  <code className="font-bold">C...</code> ที่บอทตอบในกลุ่มมาวางในช่องด้านบน) แล้วกด{' '}
+                  <strong>"🔔 ทดสอบยิงแจ้งเตือนเข้าห้องแชทกลุ่ม LINE ทันที"</strong> ได้เลยครับ!
+                </li>
+              </ol>
+            </div>
+          </div>
+
+          {/* Card 3: Shared Calendar Team Members List */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-2xs">
             <div className="flex items-center justify-between pb-4 border-b border-slate-200">
               <div>
@@ -444,41 +766,9 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
               )}
             </div>
           </div>
-
-          {/* LINE Team Notification Guide Card */}
-          <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5 space-y-3 shadow-2xs">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-emerald-950 flex items-center gap-2">
-                <span className="inline-flex h-2 w-2 rounded-full bg-[#06C755]" />
-                การแจ้งเตือน LINE สำหรับสมาชิกในปฏิทินทีม
-              </h3>
-              <span className="text-[11px] font-semibold text-[#06C755] bg-white px-2 py-0.5 rounded-md border border-emerald-200">
-                รองรับ 2 รูปแบบ
-              </span>
-            </div>
-
-            <div className="space-y-2 text-xs text-slate-700 leading-relaxed">
-              <div className="bg-white/90 border border-emerald-100 rounded-lg p-3">
-                <p className="font-semibold text-slate-900">
-                  1. แจ้งเตือนแยกเข้าแชทส่วนตัวของทุกคน (Broadcast อัตโนมัติ)
-                </p>
-                <p className="text-slate-600 mt-0.5">
-                  เพียงให้สมาชิกในทีมแอดเพื่อน <span className="font-semibold text-emerald-700">LINE OA ของทีม</span> และเว้นช่อง Target ID ว่างไว้ ระบบจะส่งการ์ดแจ้งเตือนงานและสรุปงานประจำวันให้สมาชิกทุกคนพร้อมกันอัตโนมัติ
-                </p>
-              </div>
-
-              <div className="bg-white/90 border border-emerald-100 rounded-lg p-3">
-                <p className="font-semibold text-slate-900">
-                  2. แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม (Group Chat)
-                </p>
-                <p className="text-slate-600 mt-0.5">
-                  เชิญบอท LINE OA เข้า <span className="font-semibold text-emerald-700">กลุ่ม LINE ของทีม</span> แล้วพิมพ์ข้อความในกลุ่ม 1 ครั้ง ระบบจะจับ <code className="text-[11px] bg-slate-100 px-1 py-0.5 rounded">Group ID (C...)</code> เพื่อส่งการ์ดแจ้งเตือนและสรุปงานเข้ากลุ่มเดียวกันทั้งทีม
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
 };
+

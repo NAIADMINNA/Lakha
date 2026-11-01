@@ -247,7 +247,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     setLineDiagnosticResult(null);
     const token = lineSettings.channelAccessToken.trim();
     const rawUserId = lineSettings.targetUserId.trim();
+    const rawGroupId = (lineSettings.targetGroupId || '').trim();
+    const activeMode = lineSettings.teamNotificationMode || 'both';
     const isValidUserIdFormat = /^[UCR][0-9a-fA-F]{32}$/.test(rawUserId);
+    const isValidGroupIdFormat = /^[CR][0-9a-fA-F]{32}$/.test(rawGroupId);
     const trimmedGas = gasUrl.trim();
 
     try {
@@ -258,6 +261,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
         body: JSON.stringify({
           channelAccessToken: token,
           targetUserId: rawUserId,
+          targetGroupId: rawGroupId,
+          teamNotificationMode: activeMode,
           sendTest,
         }),
       });
@@ -289,19 +294,34 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             } catch {
               gasJson = {};
             }
-            if (gasJson.mode === 'gas_bridge_ready' || gasJson.version === '2.5-gas-bridge') {
+            const gasDetectedGroup =
+              typeof gasJson.detectedGroupId === 'string' ? gasJson.detectedGroupId.trim() : '';
+            if (gasDetectedGroup && /^[CR][0-9a-fA-F]{32}$/.test(gasDetectedGroup) && !rawGroupId) {
+              onUpdateSettings({
+                ...lineSettings,
+                targetGroupId: gasDetectedGroup,
+              });
+            }
+            if (
+              gasJson.mode === 'gas_bridge_ready' ||
+              gasJson.version === '2.6-group-bridge' ||
+              gasJson.version === '2.5-gas-bridge'
+            ) {
               serverSteps.push({
                 step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
                 status: 'ok',
-                detail:
-                  'ลิงก์ Google Apps Script ของคุณเป็นโค้ดเวอร์ชันล่าสุด (v2.5 Bridge Ready) พร้อมส่งแจ้งเตือนเข้า LINE เมื่อรันบน GitHub Pages แล้ว!',
+                detail: `ลิงก์ Google Apps Script ของคุณพร้อมส่งแจ้งเตือนเข้า LINE (${String(
+                  gasJson.version || 'Bridge Ready'
+                )})${
+                  gasDetectedGroup ? ` · ตรวจพบรหัสกลุ่มล่าสุด: ${gasDetectedGroup}` : ''
+                }`,
               });
             } else {
               serverSteps.push({
                 step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
                 status: 'warn',
                 detail:
-                  '⚠️ พบสาเหตุที่รันเป็นเว็บจริง (GitHub Pages) แล้วไม่แจ้งเตือน! ลิงก์ Google Apps Script ปัจจุบันของคุณยังเป็นโค้ดเวอร์ชันเก่า (รองรับแต่ขารับ Webhook แต่ยังไม่มีคำสั่ง push_line สำหรับส่งออกจากหน้าเว็บ) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy และอย่าลืม Push โค้ดเว็บล่าสุดขึ้น GitHub ด้วยครับ',
+                  '⚠️ พบสาเหตุที่รันเป็นเว็บจริง (GitHub Pages) แล้วไม่แจ้งเตือน! ลิงก์ Google Apps Script ปัจจุบันของคุณยังเป็นโค้ดเวอร์ชันเก่า — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
               });
             }
           } catch {
@@ -405,6 +425,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             diagnose: true,
             channelAccessToken: token,
             to: isValidUserIdFormat ? rawUserId : '',
+            targetGroupId: isValidGroupIdFormat ? rawGroupId : '',
+            teamNotificationMode: activeMode,
             text: `✅ [SheetCal LINE Diagnostic - Web]\nทดสอบส่งแจ้งเตือนจากหน้าเว็บจริงผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
           }),
         });
@@ -2391,10 +2413,172 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                   />
                 </div>
 
+                {/* รูปแบบที่ 1 & รูปแบบที่ 2: Team Notification Mode + LINE Group ID (C...) */}
+                <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="text-xs font-bold text-emerald-950">
+                      รูปแบบการแจ้งเตือนทีม (แชทส่วนตัว vs ห้องแชทกลุ่ม LINE ของทีม)
+                    </label>
+                    <span className="text-[11px] font-semibold text-[#06C755] bg-white px-2 py-0.5 rounded border border-emerald-200">
+                      รองรับ Group Chat (C...)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {[
+                      {
+                        id: 'broadcast' as const,
+                        title: '1. แยกแชทส่วนตัว',
+                        desc: 'Broadcast หาทุกคนที่แอดเพื่อน',
+                      },
+                      {
+                        id: 'group' as const,
+                        title: '2. ห้องแชทกลุ่ม (C...)',
+                        desc: 'ส่งรวมในกลุ่ม LINE ของทีม',
+                      },
+                      {
+                        id: 'both' as const,
+                        title: 'ส่งทั้ง 2 รูปแบบ',
+                        desc: 'เข้ากลุ่ม LINE + แชทส่วนตัว',
+                      },
+                    ].map((opt) => {
+                      const currentMode = lineSettings.teamNotificationMode || 'both';
+                      const selected = currentMode === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              teamNotificationMode: opt.id,
+                            })
+                          }
+                          className={`text-left rounded-lg border p-2.5 transition-all ${
+                            selected
+                              ? 'border-[#06C755] bg-white ring-2 ring-[#06C755]/25'
+                              : 'border-emerald-200/80 bg-white/60 hover:bg-white'
+                          }`}
+                        >
+                          <div className="text-xs font-bold text-slate-900">{opt.title}</div>
+                          <div className="text-[11px] text-slate-600 mt-0.5">{opt.desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-emerald-950">
+                        รหัสห้องแชทกลุ่ม LINE (Group ID สำหรับรูปแบบที่ 2 — ขึ้นต้นด้วย C ความยาว 33 ตัวอักษร)
+                      </label>
+                      {(lineSettings.targetGroupId || '').trim() && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              targetGroupId: '',
+                            })
+                          }
+                          className="text-[11px] font-semibold text-rose-600 hover:underline"
+                        >
+                          ล้างรหัสกลุ่ม
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={lineSettings.targetGroupId || ''}
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...lineSettings,
+                            targetGroupId: e.target.value.trim(),
+                          })
+                        }
+                        placeholder="เชิญบอทเข้ากลุ่ม พิมพ์ 'เชื่อมกลุ่ม' แล้วกดดึงรหัส C... อัตโนมัติ"
+                        className="flex-1 rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-slate-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          let foundGroup = '';
+                          try {
+                            const res = await fetch('/api/line/webhook-events');
+                            if (res.ok) {
+                              const d = await res.json();
+                              if (
+                                typeof d.detectedGroupId === 'string' &&
+                                /^[CR][0-9a-fA-F]{32}$/.test(d.detectedGroupId.trim())
+                              ) {
+                                foundGroup = d.detectedGroupId.trim();
+                              }
+                            }
+                          } catch {
+                            // Ignore
+                          }
+                          if (!foundGroup && gasUrl.trim().startsWith('https://script.google.com/macros/s/')) {
+                            try {
+                              const gRes = await fetch(gasUrl.trim(), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                                body: JSON.stringify({ action: 'check_bridge' }),
+                              });
+                              const gData = await gRes.json();
+                              if (
+                                typeof gData.detectedGroupId === 'string' &&
+                                /^[CR][0-9a-fA-F]{32}$/.test(gData.detectedGroupId.trim())
+                              ) {
+                                foundGroup = gData.detectedGroupId.trim();
+                              }
+                            } catch {
+                              // Ignore
+                            }
+                          }
+                          if (foundGroup) {
+                            onUpdateSettings({
+                              ...lineSettings,
+                              targetGroupId: foundGroup,
+                            });
+                            setRichMenuClearStatus({
+                              ok: true,
+                              message: `✅ ดึงรหัสห้องแชทกลุ่ม LINE สำเร็จ: ${foundGroup}`,
+                            });
+                          } else {
+                            setRichMenuClearStatus({
+                              ok: false,
+                              message:
+                                '⚠️ ยังไม่พบ Group ID (C...) — กรุณาเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่ม 1 ครั้ง (บอทจะตอบรหัส C... ในกลุ่มทันที) แล้วกดปุ่มนี้อีกครั้งครับ',
+                            });
+                          }
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-white border border-emerald-300 rounded-lg hover:bg-emerald-100 whitespace-nowrap shrink-0"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5 text-emerald-700" />
+                        <span>ดึงรหัสกลุ่ม C... อัตโนมัติ</span>
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-emerald-900 mt-1.5 leading-relaxed">
+                      💡 <strong>เคล็ดลับสำคัญ:</strong> ในเว็บ{' '}
+                      <a
+                        href="https://manager.line.biz"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-semibold"
+                      >
+                        manager.line.biz
+                      </a>{' '}
+                      &gt; ตั้งค่า &gt; ตั้งค่าบัญชี ต้องติ๊ก{' '}
+                      <strong>"อนุญาตให้บัญชีเข้าร่วมกลุ่มและแชทแบบหลายคน"</strong> ด้วยนะครับ บอทจึงจะเข้ากลุ่มและส่งแจ้งเตือนเข้ากลุ่มได้
+                    </p>
+                  </div>
+                </div>
+
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-medium text-slate-700">
-                      LINE User ID (ไม่บังคับ — ต้องขึ้นต้นด้วย U ความยาว 33 ตัวอักษร)
+                      LINE User ID ส่วนตัว (ไม่บังคับ — ขึ้นต้นด้วย U หรือ C ความยาว 33 ตัวอักษร)
                     </label>
                     {lineSettings.targetUserId.trim() && (
                       <button
@@ -2420,7 +2604,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         targetUserId: e.target.value,
                       })
                     }
-                    placeholder="เว้นว่างไว้เพื่อส่งแบบ Broadcast หรือใส่รหัส U... 33 ตัวอักษร"
+                    placeholder="เว้นว่างไว้เพื่อส่งแบบ Broadcast หรือใส่รหัส U... / C... 33 ตัวอักษร"
                     className={`w-full rounded-lg border px-3 py-1.5 text-xs font-mono-tabular text-slate-900 ${
                       lineSettings.targetUserId.trim() &&
                       !/^[UCR][0-9a-fA-F]{32}$/.test(lineSettings.targetUserId.trim())
@@ -2435,9 +2619,9 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         <code className="font-mono-tabular font-bold">
                           {lineSettings.targetUserId.trim()}
                         </code>
-                        ) ไม่ใช่รหัส Webhook User ID 33 ตัวอักษร (ที่ขึ้นต้นด้วย{' '}
-                        <code className="font-bold">U</code> จากหน้า LINE Developers &gt; Basic
-                        settings &gt; Your user ID) แต่เป็นไอดีไลน์ทั่วไป — แนะนำให้กด{' '}
+                        ) ไม่ใช่รหัส Webhook ID 33 ตัวอักษร (ที่ขึ้นต้นด้วย{' '}
+                        <code className="font-bold">U</code> หรือ <code className="font-bold">C</code>
+                        ) แต่เป็นไอดีไลน์ทั่วไป — แนะนำให้กด{' '}
                         <button
                           type="button"
                           onClick={() =>
@@ -2450,7 +2634,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         >
                           ล้างค่าช่องนี้
                         </button>{' '}
-                        เพื่อให้ระบบส่งแบบ <strong>Broadcast</strong> เข้าแชทบอทของคุณได้ทันทีครับ
+                        เพื่อให้ระบบส่งเข้ากลุ่ม LINE หรือส่งแบบ <strong>Broadcast</strong> ได้ทันทีครับ
                       </div>
                     )}
                 </div>

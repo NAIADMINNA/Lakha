@@ -78,6 +78,8 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   triggerStatuses: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS],
   channelAccessToken: '',
   targetUserId: '',
+  targetGroupId: '',
+  teamNotificationMode: 'both',
   autoSyncOnLineCommand: true,
   publicCalendarUrl: '',
   cardFontSize: 'md',

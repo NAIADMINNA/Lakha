@@ -118,6 +118,8 @@ export interface LineSettings {
   triggerStatuses: TaskStatus[];
   channelAccessToken: string;
   targetUserId: string;
+  targetGroupId?: string;
+  teamNotificationMode?: 'broadcast' | 'group' | 'both';
   autoSyncOnLineCommand: boolean;
   publicCalendarUrl?: string;
   cardFontSize?: 'sm' | 'md' | 'lg';
