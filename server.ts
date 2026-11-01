@@ -491,23 +491,45 @@ function buildDailyDigestFlexMessage(
       footer: {
         type: 'box',
         layout: 'vertical',
+        spacing: 'sm',
         paddingAll: '16px',
         backgroundColor: '#FFFFFF',
         borderWidth: '1px',
         borderColor: '#F1F5F9',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            color: '#06C755',
-            height: 'sm',
-            action: {
-              type: 'uri',
-              label: 'เปิดดูปฏิทินและจัดการงาน',
-              uri: appUrl,
+        contents: (() => {
+          const btns: Record<string, unknown>[] = [
+            {
+              type: 'button',
+              style: 'primary',
+              color: '#06C755',
+              height: 'sm',
+              action: {
+                type: 'uri',
+                label: 'เปิดดูปฏิทินและจัดการงาน',
+                uri: appUrl,
+              },
             },
-          },
-        ],
+          ];
+          try {
+            const parsed = new URL(appUrl);
+            const sheetParam = (parsed.searchParams.get('sheet') || '').trim();
+            if (sheetParam && !appUrl.includes('docs.google.com/spreadsheets')) {
+              btns.push({
+                type: 'button',
+                style: 'secondary',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: '📊 เปิดตารางงาน Google Sheets',
+                  uri: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetParam)}/edit`,
+                },
+              });
+            }
+          } catch {
+            // Ignore URL parse error
+          }
+          return btns;
+        })(),
       },
     },
   };
@@ -1046,11 +1068,10 @@ async function startServer() {
         return;
       }
 
-      const rawBaseUrl =
+      const appUrl =
         process.env.APP_URL && process.env.APP_URL.startsWith('http')
           ? process.env.APP_URL
           : 'https://calendar.google.com';
-      const appUrl = rawBaseUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
       for (const event of events) {
         const senderGroupId = String(
@@ -1177,14 +1198,14 @@ async function startServer() {
           const userText = String(event.message.text || '').trim();
           const lowerText = userText.toLowerCase();
 
-          // Special command to check/link Group ID in LINE Group Chat
+          // Special command to check/link Group ID in LINE Group Chat (supports substring matching e.g. "@bot เชื่อมกลุ่ม" or typos)
           if (
-            lowerText === 'เชื่อมกลุ่ม' ||
-            lowerText === 'รหัสกลุ่ม' ||
-            lowerText === 'เช็คกลุ่ม' ||
-            lowerText === 'เช็ครหัส' ||
-            lowerText === 'groupid' ||
-            lowerText === 'group id'
+            lowerText.includes('เชื่อมกลุ่ม') ||
+            lowerText.includes('รหัสกลุ่ม') ||
+            lowerText.includes('เช็คกลุ่ม') ||
+            lowerText.includes('เช็ครหัส') ||
+            lowerText.includes('groupid') ||
+            lowerText.includes('group id')
           ) {
             if (runtimeChannelAccessToken && event.replyToken) {
               const idToShow = senderGroupId || senderUserId || 'ไม่พบรหัส';
@@ -1225,7 +1246,7 @@ async function startServer() {
             const flexReply = buildSingleTaskReminderFlexMessage({
               taskTitle: userText.replace(/^(เพิ่มงาน|จดงาน|บันทึกงาน)\s*/i, ''),
               description: senderGroupId
-                ? `บันทึกลงปฏิทินทีมจากห้องแชทกลุ่ม (${senderGroupId.slice(0, 8)}...) เรียบร้อยแล้ว`
+                ? `บันทึกลงปฏิทินทีมเรียบร้อยแล้ว (🔑 Group ID: ${senderGroupId})`
                 : 'บันทึกลงปฏิทิน SheetCal LINE และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
               date: todayStr,
               time: '09:00',
@@ -1330,13 +1351,22 @@ async function startServer() {
       // Automatically clean up any lingering Messaging API Rich Menu in the background
       purgeAllLineRichMenus(token, effectiveUserId || rawTo).catch(() => {});
 
+      const refererHeader = String(req.headers.origin || req.headers.referer || '').trim();
       const rawAppUrl =
         originUrl && String(originUrl).startsWith('https://')
           ? String(originUrl)
+          : refererHeader.startsWith('https://')
+          ? refererHeader
           : process.env.APP_URL && process.env.APP_URL.startsWith('https://')
           ? process.env.APP_URL
           : 'https://calendar.google.com';
-      const appUrl = rawAppUrl.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
+      // Heal stale ais-pre- URLs (which return 404 when not published) back to active ais-dev- container URL
+      const appUrl =
+        /^https:\/\/ais-pre-/i.test(rawAppUrl) &&
+        (/^https:\/\/ais-dev-/i.test(refererHeader) ||
+          /^https:\/\/ais-dev-/i.test(process.env.APP_URL || ''))
+          ? rawAppUrl.replace(/^https:\/\/ais-pre-/i, 'https://ais-dev-')
+          : rawAppUrl;
 
       let flexMessage: unknown;
       if (Array.isArray(tasksList)) {
@@ -1899,15 +1929,20 @@ async function startServer() {
 
       const isJsonOk =
         bodyText.includes('"status":"verified"') || bodyText.includes('"status":"ok"');
+      const isV26 =
+        bodyText.includes('2.6-group-bridge') || bodyText.includes('gas_bridge_ready');
 
       res.status(200).json({
         ok: isJsonOk,
+        isV26,
         httpStatus: postRes.status,
         responsePreview: bodyText.slice(0, 300),
         message: isJsonOk
           ? testText
             ? `ส่งข้อความ "${testText}" เข้า Google Apps Script สำเร็จ (เขียนลง Google Sheets เรียบร้อย!)`
-            : 'ตรวจสอบสำเร็จ! ลิงก์ Google Apps Script ของคุณพร้อมรับข้อความจาก LINE 100% (ตอบกลับ {"status":"verified"})'
+            : isV26
+            ? '✅ ตรวจสอบสำเร็จ! ลิงก์ Google Apps Script ของคุณเป็นเวอร์ชันล่าสุด (v2.6 รองรับคำสั่ง "เชื่อมกลุ่ม" และการแจ้งเตือนกลุ่ม LINE ครบถ้วน 100%)'
+            : '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ดเวอร์ชันเก่า" (จึงทำให้พิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE แล้วบอทไม่ตอบกลับรหัส C...) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy'
           : `ได้รับการตอบกลับจาก Apps Script: ${bodyText.slice(0, 140)}`,
       });
     } catch (err: unknown) {
@@ -1915,6 +1950,176 @@ async function startServer() {
       res.status(200).json({
         ok: false,
         message: `ไม่สามารถติดต่อลิงก์ Google Apps Script ได้: ${msg}`,
+      });
+    }
+  });
+
+  /**
+   * Check Group ID & diagnose why typing "เชื่อมกลุ่ม" in LINE might not have replied
+   * (Checks LINE's /v2/bot/channel/webhook/endpoint AND the Google Apps Script bridge version)
+   */
+  app.post('/api/line/check-group-webhook', async (req, res) => {
+    try {
+      const { channelAccessToken, gasUrl, autoBindWebhook } = req.body || {};
+      const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
+      const cleanGasUrl = String(gasUrl || '').trim();
+      let detectedGroupId = /^[CR][0-9a-fA-F]{32}$/.test(runtimeDetectedGroupId)
+        ? runtimeDetectedGroupId
+        : '';
+      let webhookEndpoint = '';
+      let webhookActive = true;
+      let webhookBoundSuccess = false;
+      let isOutdatedGas = false;
+      let gasReachable = false;
+      let gasVersion = '';
+      let botBasicId = '';
+      let botDisplayName = '';
+
+      if (token) {
+        runtimeChannelAccessToken = token;
+
+        // If user provided a valid Google Apps Script /exec URL and requested binding (or by default when gasUrl is passed),
+        // automatically set it as the LINE Webhook Endpoint via PUT /v2/bot/channel/webhook/endpoint!
+        if (
+          cleanGasUrl.startsWith('https://script.google.com/macros/s/') &&
+          cleanGasUrl.endsWith('/exec') &&
+          autoBindWebhook !== false
+        ) {
+          const putRes = await fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ endpoint: cleanGasUrl }),
+          }).catch(() => null);
+          if (putRes && putRes.ok) {
+            webhookBoundSuccess = true;
+          }
+        }
+
+        // 1. Check Bot Info & Webhook Endpoint configured in LINE Developers Console
+        const [botRes, whRes] = await Promise.all([
+          fetch('https://api.line.me/v2/bot/info', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => null),
+          fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => null),
+        ]);
+
+        if (botRes && botRes.ok) {
+          const bData = (await botRes.json().catch(() => ({}))) as {
+            basicId?: string;
+            displayName?: string;
+          };
+          botBasicId = bData.basicId || '';
+          botDisplayName = bData.displayName || '';
+        }
+
+        if (whRes && whRes.ok) {
+          const wData = (await whRes.json().catch(() => ({}))) as {
+            endpoint?: string;
+            active?: boolean;
+          };
+          webhookEndpoint = String(wData.endpoint || '').trim();
+          webhookActive = Boolean(wData.active);
+        }
+      }
+
+      // 2. Check Google Apps Script URL (prioritize cleanGasUrl then LINE's configured webhookEndpoint)
+      const candidateGasUrls = Array.from(
+        new Set(
+          [cleanGasUrl, webhookEndpoint].filter((u) =>
+            u.startsWith('https://script.google.com/macros/s/')
+          )
+        )
+      );
+
+      for (const scriptUrl of candidateGasUrls) {
+        try {
+          const postRes = await fetch(scriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'check_bridge',
+              channelAccessToken: token || undefined,
+              events: [],
+            }),
+            redirect: 'manual',
+          });
+
+          let bodyText = '';
+          let finalStatus = postRes.status;
+          if (
+            (postRes.status === 301 ||
+              postRes.status === 302 ||
+              postRes.status === 303 ||
+              postRes.status === 307) &&
+            postRes.headers.get('location')
+          ) {
+            const redirectUrl = postRes.headers.get('location')!;
+            const getRes = await fetch(redirectUrl, { method: 'GET' });
+            finalStatus = getRes.status;
+            bodyText = await getRes.text();
+          } else {
+            bodyText = await postRes.text();
+          }
+
+          if (finalStatus >= 200 && finalStatus < 300) {
+            gasReachable = true;
+          }
+
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(bodyText);
+          } catch {
+            parsed = {};
+          }
+
+          if (
+            typeof parsed.detectedGroupId === 'string' &&
+            /^[CR][0-9a-fA-F]{32}$/.test(parsed.detectedGroupId.trim())
+          ) {
+            detectedGroupId = parsed.detectedGroupId.trim();
+            runtimeDetectedGroupId = detectedGroupId;
+          }
+
+          if (typeof parsed.version === 'string') {
+            gasVersion = parsed.version;
+          }
+
+          if (
+            parsed.status === 'verified' &&
+            parsed.mode !== 'gas_bridge_ready' &&
+            !String(parsed.version || '').includes('2.6')
+          ) {
+            isOutdatedGas = true;
+          }
+        } catch {
+          // Ignore single URL error
+        }
+      }
+
+      res.status(200).json({
+        ok: Boolean(detectedGroupId),
+        detectedGroupId: detectedGroupId || undefined,
+        webhookEndpoint: webhookEndpoint || undefined,
+        webhookActive,
+        webhookBoundSuccess,
+        gasReachable,
+        isOutdatedGas,
+        gasVersion: gasVersion || undefined,
+        botBasicId: botBasicId || undefined,
+        botDisplayName: botDisplayName || undefined,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      res.status(200).json({
+        ok: false,
+        error: msg,
       });
     }
   });

@@ -913,14 +913,19 @@ export function resolveTeamCalendarAppUrl(options?: {
 
   if (custom && /^https?:\/\//i.test(custom)) {
     rawBase = custom;
+    // Heal stale ais-pre- URLs that return 404 when running inside the active ais-dev- environment
+    if (
+      typeof window !== 'undefined' &&
+      /^https:\/\/ais-pre-/i.test(rawBase) &&
+      /^https:\/\/ais-dev-/i.test(window.location.origin)
+    ) {
+      rawBase = rawBase.replace(/^https:\/\/ais-pre-/i, 'https://ais-dev-');
+    }
   } else if (typeof window !== 'undefined') {
     rawBase = `${window.location.origin}${window.location.pathname}`;
   } else {
     rawBase = 'https://calendar.google.com';
   }
-
-  // Convert private AI Studio dev container URL (ais-dev-*) to shared preview URL (ais-pre-*)
-  rawBase = rawBase.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
 
   try {
     const parsedUrl = new URL(rawBase);
@@ -967,14 +972,15 @@ export function generateGoogleAppsScriptCode(
   channelAccessToken?: string,
   appUrl?: string
 ): string {
-  const sheetIdDisplay = spreadsheetId || 'วาง_SPREADSHEET_ID_ของคุณที่นี่';
+  const sheetIdDisplay = (spreadsheetId || 'วาง_SPREADSHEET_ID_ของคุณที่นี่')
+    .replace(/[\r\n']/g, '')
+    .trim();
   const tokenDisplay = channelAccessToken?.trim()
-    ? channelAccessToken.trim().replace(/^Bearer\s+/i, '')
+    ? channelAccessToken.trim().replace(/^Bearer\s+/i, '').replace(/[\r\n']/g, '').trim()
     : 'วาง_LINE_CHANNEL_ACCESS_TOKEN_ของคุณที่นี่';
-  const webAppUrl = (appUrl || 'https://calendar.google.com').replace(
-    /^https:\/\/ais-dev-/i,
-    'https://ais-pre-'
-  );
+  const webAppUrl = (appUrl || 'https://calendar.google.com')
+    .replace(/[\r\n']/g, '')
+    .trim();
 
   return `/**
  * ============================================================================
@@ -994,11 +1000,11 @@ const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
 const WEB_APP_URL = '${webAppUrl}';
 
 function getCalendarDeepLink(overrideBaseUrl, dateStr) {
-  var base = String(overrideBaseUrl || WEB_APP_URL || 'https://calendar.google.com').trim();
+  var base = String(overrideBaseUrl || WEB_APP_URL || '').trim();
+  var sheetDirect = getSpreadsheetDirectUrl();
   if (base.indexOf('http') !== 0) {
-    base = 'https://calendar.google.com';
+    base = sheetDirect || 'https://calendar.google.com';
   }
-  base = base.replace(/^https:\\/\\/ais-dev-/i, 'https://ais-pre-');
   if (base.indexOf('calendar.google.com') !== -1 || base.indexOf('docs.google.com') !== -1) {
     return base;
   }
@@ -1409,7 +1415,7 @@ function writeSheetTasksFromWeb(tasksList) {
 }
 
 function clearAllRichMenusFromLine(rawToken, targetUserId) {
-  var token = String(rawToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
+  var token = String(rawToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\\s+/i, '').trim();
   if (!token || token.indexOf('วาง_LINE_') !== -1) {
     return { ok: false, deletedCount: 0, message: 'Missing LINE Channel Access Token' };
   }
@@ -1454,6 +1460,27 @@ function clearAllRichMenusFromLine(rawToken, targetUserId) {
   }
 }
 
+function getSavedLineToken() {
+  var configured = String(LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\\s+/i, '').trim();
+  if (configured && configured.indexOf('วาง_LINE_') === -1 && configured.indexOf('PUT_YOUR_') === -1) {
+    return configured;
+  }
+  try {
+    var saved = PropertiesService.getScriptProperties().getProperty('SAVED_LINE_TOKEN') || '';
+    if (saved && saved.length > 40) return saved;
+  } catch (err) {}
+  return '';
+}
+
+function setSavedLineToken(rawToken) {
+  try {
+    var clean = String(rawToken || '').replace(/^Bearer\\s+/i, '').trim();
+    if (clean && clean.length > 40 && clean.indexOf('วาง_LINE_') === -1) {
+      PropertiesService.getScriptProperties().setProperty('SAVED_LINE_TOKEN', clean);
+    }
+  } catch (err) {}
+}
+
 function getSavedGroupId() {
   try {
     var gid = PropertiesService.getScriptProperties().getProperty('LAST_GROUP_ID') || '';
@@ -1486,17 +1513,36 @@ function setSavedUserId(uid) {
   } catch (err) {}
 }
 
+function openSafeSpreadsheet() {
+  try {
+    if (
+      SPREADSHEET_ID &&
+      SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1 &&
+      SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1
+    ) {
+      return SpreadsheetApp.openById(SPREADSHEET_ID);
+    }
+    return SpreadsheetApp.getActiveSpreadsheet();
+  } catch (err) {
+    try {
+      return SpreadsheetApp.getActiveSpreadsheet();
+    } catch (err2) {
+      return null;
+    }
+  }
+}
+
 function doGet(e) {
   var tasks = readSheetTasksForWeb();
   return ContentService
     .createTextOutput(JSON.stringify({
       status: 'verified',
-      version: '2.5-gas-bridge',
+      version: '2.6-group-bridge',
       capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
       detectedGroupId: getSavedGroupId(),
       detectedUserId: getSavedUserId(),
       tasks: tasks,
-      message: 'SheetCal LINE Webhook & Push Bridge Ready (Supports 1-on-1 & Group Chat)'
+      message: 'SheetCal LINE Webhook & Push Bridge Ready (v2.6 Supports 1-on-1 & Group Chat)'
     }))
     .setMimeType(ContentService.MimeType.JSON);
 }
@@ -1506,13 +1552,17 @@ function doPost(e) {
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     var payload = JSON.parse(rawContents);
 
+    if (payload.channelAccessToken) {
+      setSavedLineToken(payload.channelAccessToken);
+    }
+
     // คำสั่งลบ Rich Menu ทั้งหมดออกจาก LINE OA
     if (payload.action === 'clear_richmenu') {
-      var rmRes = clearAllRichMenusFromLine(payload.channelAccessToken, payload.targetUserId);
+      var rmRes = clearAllRichMenusFromLine(payload.channelAccessToken || getSavedLineToken(), payload.targetUserId);
       return ContentService.createTextOutput(JSON.stringify({
         status: rmRes.ok ? 'ok' : 'error',
         mode: 'gas_clear_richmenu',
-        version: '2.5-gas-bridge',
+        version: '2.6-group-bridge',
         ok: rmRes.ok,
         deletedCount: rmRes.deletedCount
       })).setMimeType(ContentService.MimeType.JSON);
@@ -1523,10 +1573,11 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
-        version: '2.5-gas-bridge',
+        version: '2.6-group-bridge',
         capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
+        hasToken: Boolean(getSavedLineToken()),
         tasks: readSheetTasksForWeb()
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -1537,14 +1588,14 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: savedOk ? 'ok' : 'error',
         mode: 'gas_sync_tasks',
-        version: '2.5-gas-bridge',
+        version: '2.6-group-bridge',
         ok: savedOk
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // รองรับการส่งแจ้งเตือน LINE Push (ทั้งเข้าห้องแชทกลุ่ม Group ID C... และรายบุคคล U...) หรือ Broadcast
     if (payload.action === 'push_line') {
-      var token = String(payload.channelAccessToken || LINE_CHANNEL_ACCESS_TOKEN || '').replace(/^Bearer\s+/i, '').trim();
+      var token = String(payload.channelAccessToken || getSavedLineToken() || '').replace(/^Bearer\\s+/i, '').trim();
       var targetId = String(payload.to || '').trim();
       var explicitGroupId = String(payload.targetGroupId || '').trim();
       var notifyMode = String(payload.teamNotificationMode || 'both');
@@ -1735,7 +1786,6 @@ function doPost(e) {
           sentSuccess = true;
           deliveryMethod = sentGroupSuccess ? 'group_and_broadcast' : 'broadcast';
         } else if (!sentSuccess) {
-          // Retry plain text if Flex failed
           var bcTextResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
             method: 'post',
             headers: {
@@ -1760,7 +1810,7 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: sentSuccess ? 'ok' : 'error',
         mode: 'gas_push_line',
-        version: '2.5-gas-bridge',
+        version: '2.6-group-bridge',
         ok: sentSuccess,
         deliveryMethod: deliveryMethod,
         detectedGroupId: effectiveGroupId || getSavedGroupId(),
@@ -1774,20 +1824,25 @@ function doPost(e) {
     if (events.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'verified',
-        version: '2.5-gas-bridge',
+        version: '2.6-group-bridge',
         detectedGroupId: getSavedGroupId(),
         capabilities: ['webhook', 'push_line', 'group_chat']
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1)
-      ? SpreadsheetApp.openById(SPREADSHEET_ID)
-      : SpreadsheetApp.getActiveSpreadsheet();
-    var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
-    if (taskSheet.getLastRow() === 0) {
-      taskSheet.appendRow(['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']);
+    // เปิด Google Sheets อย่างปลอดภัย (แม้ยังไม่ผูกชีต บอทก็ยังตอบรหัส Group ID C... ได้ 100%)
+    var ss = openSafeSpreadsheet();
+    var taskSheet = null;
+    var logSheet = null;
+    if (ss) {
+      try {
+        taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
+        if (taskSheet.getLastRow() === 0) {
+          taskSheet.appendRow(['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']);
+        }
+        logSheet = ss.getSheetByName('LineLogs') || ss.insertSheet('LineLogs');
+      } catch (sheetErr) {}
     }
-    var logSheet = ss.getSheetByName('LineLogs') || ss.insertSheet('LineLogs');
 
     events.forEach(function(event) {
       var srcGroupId = (event.source && (event.source.groupId || event.source.roomId))
@@ -1804,35 +1859,36 @@ function doPost(e) {
         setSavedUserId(srcUserId);
       }
 
-      // กรณีเชิญบอทเข้าห้องแชทกลุ่ม LINE (join / memberJoined) -> ตอบกลับพร้อมแสดง Group ID (C...) ทันที
+      // 1. กรณีเชิญบอทเข้าห้องแชทกลุ่ม LINE (join / memberJoined) -> ตอบกลับพร้อมแสดง Group ID (C...) ทันที
       if ((event.type === 'join' || event.type === 'memberJoined') && srcGroupId && event.replyToken) {
         replyLineMessages(event.replyToken, [{
           type: 'text',
-          text: '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat) สำเร็จแล้ว!\n\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\n' + srcGroupId + '\n\n💡 คุณสามารถพิมพ์สั่งงานในกลุ่มนี้ได้ทันที เช่น "ประชุมทีม พรุ่งนี้ 10:00 #สูง" หรือพิมพ์ "สรุปงานวันนี้" และระบบได้บันทึกรหัสกลุ่มนี้ไว้ส่งแจ้งเตือนรวมให้ทั้งทีมเรียบร้อยแล้วครับ'
+          text: '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat) สำเร็จแล้ว!\\n\\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\\n' + srcGroupId + '\\n\\n💡 คุณสามารถคัดลอกรหัส C... ด้านบนไปวางในหน้าเว็บ หรือกดปุ่ม "ดึงรหัสกลุ่ม C... อัตโนมัติ" บนหน้าเว็บได้ทันทีครับ!'
         }]);
         return;
       }
 
-      if (event.type === 'message' && event.message.type === 'text') {
-        var userMessage = event.message.text.trim();
+      if (event.type === 'message' && event.message && event.message.type === 'text') {
+        var userMessage = String(event.message.text || '').trim();
         var lowerMsg = userMessage.toLowerCase();
         var replyToken = event.replyToken;
         var now = new Date();
         var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
 
+        // 2. คำสั่งเชื่อมกลุ่ม / ขอรหัส Group ID (รองรับทั้งการพิมพ์ตรงๆ หรือมีข้อความอื่นปน เช่น "@บอท เชื่อมกลุ่ม")
         if (
-          lowerMsg === 'เชื่อมกลุ่ม' ||
-          lowerMsg === 'รหัสกลุ่ม' ||
-          lowerMsg === 'เช็คกลุ่ม' ||
-          lowerMsg === 'เช็ครหัส' ||
-          lowerMsg === 'groupid' ||
-          lowerMsg === 'group id'
+          lowerMsg.indexOf('เชื่อมกลุ่ม') !== -1 ||
+          lowerMsg.indexOf('รหัสกลุ่ม') !== -1 ||
+          lowerMsg.indexOf('เช็คกลุ่ม') !== -1 ||
+          lowerMsg.indexOf('เช็ครหัส') !== -1 ||
+          lowerMsg.indexOf('groupid') !== -1 ||
+          lowerMsg.indexOf('group id') !== -1
         ) {
           replyLineMessages(replyToken, [{
             type: 'text',
             text: srcGroupId
-              ? '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2) สำเร็จแล้ว!\n\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\n' + srcGroupId + '\n\n(คุณสามารถคัดลอกรหัส C... ด้านบนไปวางในช่อง LINE Group ID บนหน้าเว็บ หรือกดปุ่ม "ดึงรหัสกลุ่มอัตโนมัติ" บนหน้าเว็บได้เลยครับ)'
-              : 'ℹ️ ขณะนี้คุณพิมพ์อยู่ในแชทส่วนตัว (1-on-1)\n🔑 รหัส User ID ของคุณคือ:\n' + (srcUserId || '-') + '\n\n💡 หากต้องการใช้ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม" กรุณาเชิญบอทเข้ากลุ่ม LINE ของทีม แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่มครับ'
+              ? '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2) สำเร็จแล้ว!\\n\\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\\n' + srcGroupId + '\\n\\n(คัดลอกรหัส C... ด้านบนไปวางในช่อง LINE Group ID บนหน้าเว็บ หรือกดปุ่ม "ดึงรหัสกลุ่ม C... อัตโนมัติ" บนหน้าเว็บได้เลยครับ)'
+              : 'ℹ️ ขณะนี้คุณพิมพ์อยู่ในแชทส่วนตัว (1-on-1)\\n🔑 รหัส User ID ของคุณคือ:\\n' + (srcUserId || '-') + '\\n\\n💡 หากต้องการใช้ "รูปแบบที่ 2: แจ้งเตือนรวมในห้องแชทกลุ่ม LINE ของทีม" กรุณาเชิญบอทเข้ากลุ่ม LINE ของทีม แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่มครับ'
           }]);
           return;
         }
@@ -1844,9 +1900,9 @@ function doPost(e) {
           userMessage === 'งานวันนี้' ||
           userMessage === 'สรุปงาน' ||
           userMessage === 'งานค้าง' ||
-          /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่)\s+(.+)$/i.test(userMessage)
+          /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่)\\s+(.+)$/i.test(userMessage)
         ) {
-          var rows = taskSheet.getDataRange().getValues().slice(1);
+          var rows = taskSheet ? taskSheet.getDataRange().getValues().slice(1) : [];
           var queryDate = parseThaiCommand(userMessage).date || todayStr;
           var filtered = userMessage === 'งานค้าง'
             ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
@@ -1863,32 +1919,44 @@ function doPost(e) {
 
         var parsed = parseThaiCommand(userMessage);
         var newId = 'task-' + now.getTime();
+        var dayTotalCount = 1;
+        var dayPendingCount = 1;
 
-        taskSheet.appendRow([
-          newId,
-          parsed.title,
-          'บันทึกผ่านแชท LINE OA ("' + userMessage + '")',
-          "'" + parsed.date,
-          "'" + parsed.time,
-          'cat-work',
-          parsed.priority,
-          'pending',
-          30,
-          'FALSE',
-          'line',
-          now.toISOString()
-        ]);
+        if (taskSheet) {
+          try {
+            taskSheet.appendRow([
+              newId,
+              parsed.title,
+              'บันทึกผ่านแชท LINE OA ("' + userMessage + '")',
+              "'" + parsed.date,
+              "'" + parsed.time,
+              'cat-work',
+              parsed.priority,
+              'pending',
+              30,
+              'FALSE',
+              'line',
+              now.toISOString()
+            ]);
+            var allRows = taskSheet.getDataRange().getValues().slice(1);
+            var dayRows = allRows.filter(function(r) { return String(r[3]).replace(/^'/, '') === parsed.date; });
+            dayTotalCount = dayRows.length;
+            dayPendingCount = dayRows.filter(function(r) { return String(r[7]) !== 'completed'; }).length;
+          } catch (appendErr) {}
+        }
 
         if (logSheet) {
-          logSheet.appendRow([
-            'log-' + now.getTime(),
-            now.toISOString(),
-            'incoming_command',
-            userMessage,
-            parsed.title + (srcGroupId ? ' [Group:' + srcGroupId + ']' : ''),
-            'line_messaging_api',
-            'delivered'
-          ]);
+          try {
+            logSheet.appendRow([
+              'log-' + now.getTime(),
+              now.toISOString(),
+              'incoming_command',
+              userMessage,
+              parsed.title + (srcGroupId ? ' [Group:' + srcGroupId + ']' : ''),
+              'line_messaging_api',
+              'delivered'
+            ]);
+          } catch (logErr) {}
         }
 
         try {
@@ -1899,13 +1967,37 @@ function doPost(e) {
           });
         } catch (calErr) {}
 
-        var allRows = taskSheet.getDataRange().getValues().slice(1);
-        var dayRows = allRows.filter(function(r) { return String(r[3]).replace(/^'/, '') === parsed.date; });
-        var dayPending = dayRows.filter(function(r) { return String(r[7]) !== 'completed'; }).length;
+        var bodyContents = [
+          { type: 'text', text: '🗓️ วันที่: ' + parsed.date + '   ⏰ เวลา: ' + parsed.time + ' น.', size: 'xs', weight: 'bold', color: '#0F172A' },
+          { type: 'text', text: '⚡ ความสำคัญ: ' + (parsed.priority === 'high' ? 'สูง (เร่งด่วน)' : 'ปานกลาง'), size: 'xs', color: '#475569' },
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#EEF2FF',
+            cornerRadius: '8px',
+            paddingAll: '10px',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: '📊 สรุปตารางวันที่ ' + parsed.date, size: 'xxs', weight: 'bold', color: '#4338CA' },
+              { type: 'text', text: 'รวมทั้งหมด ' + dayTotalCount + ' งาน · รอดำเนินการ ' + dayPendingCount + ' งาน', size: 'xs', weight: 'bold', color: '#1E1B4B', margin: 'xs' }
+            ]
+          }
+        ];
+
+        if (srcGroupId) {
+          bodyContents.push({
+            type: 'text',
+            text: '🔑 Group ID: ' + srcGroupId,
+            size: 'xxs',
+            color: '#059669',
+            wrap: true,
+            margin: 'sm'
+          });
+        }
 
         var savedFlex = {
           type: 'flex',
-          altText: '✅ บันทึกงาน: ' + parsed.title + ' (' + parsed.date + ' ' + parsed.time + ' น.)',
+          altText: '✅ บันทึกงาน: ' + parsed.title + (srcGroupId ? ' (Group ID: ' + srcGroupId + ')' : ''),
           contents: {
             type: 'bubble',
             size: 'mega',
@@ -1924,36 +2016,35 @@ function doPost(e) {
               layout: 'vertical',
               paddingAll: '16px',
               spacing: 'sm',
-              contents: [
-                { type: 'text', text: '🗓️ วันที่: ' + parsed.date + '   ⏰ เวลา: ' + parsed.time + ' น.', size: 'xs', weight: 'bold', color: '#0F172A' },
-                { type: 'text', text: '⚡ ความสำคัญ: ' + (parsed.priority === 'high' ? 'สูง (เร่งด่วน)' : 'ปานกลาง'), size: 'xs', color: '#475569' },
-                {
-                  type: 'box',
-                  layout: 'vertical',
-                  backgroundColor: '#EEF2FF',
-                  cornerRadius: '8px',
-                  paddingAll: '10px',
-                  margin: 'md',
-                  contents: [
-                    { type: 'text', text: '📊 สรุปตารางวันที่ ' + parsed.date, size: 'xxs', weight: 'bold', color: '#4338CA' },
-                    { type: 'text', text: 'รวมทั้งหมด ' + dayRows.length + ' งาน · รอดำเนินการ ' + dayPending + ' งาน', size: 'xs', weight: 'bold', color: '#1E1B4B', margin: 'xs' }
-                  ]
-                }
-              ]
+              contents: bodyContents
             },
             footer: {
               type: 'box',
               layout: 'vertical',
+              spacing: 'sm',
               paddingAll: '12px',
-              contents: [
-                {
-                  type: 'button',
-                  style: 'primary',
-                  color: '#06C755',
-                  height: 'sm',
-                  action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: getCalendarDeepLink('', parsed.date) }
+              contents: (function() {
+                var targetCal = getCalendarDeepLink('', parsed.date);
+                var directSheet = getSpreadsheetDirectUrl();
+                var btns = [
+                  {
+                    type: 'button',
+                    style: 'primary',
+                    color: '#06C755',
+                    height: 'sm',
+                    action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCal }
+                  }
+                ];
+                if (directSheet && targetCal !== directSheet) {
+                  btns.push({
+                    type: 'button',
+                    style: 'secondary',
+                    height: 'sm',
+                    action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: directSheet }
+                  });
                 }
-              ]
+                return btns;
+              })()
             }
           }
         };
@@ -1962,20 +2053,26 @@ function doPost(e) {
     });
   } catch (err) {}
 
-  return ContentService.createTextOutput(JSON.stringify({ status: 'ok' })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', version: '2.6-group-bridge', detectedGroupId: getSavedGroupId() })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function replyLineMessages(replyToken, messages) {
-  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
-    method: 'post',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + LINE_CHANNEL_ACCESS_TOKEN
-    },
-    payload: JSON.stringify({
-      replyToken: replyToken,
-      messages: messages
-    })
-  });
+  var activeToken = getSavedLineToken();
+  if (!activeToken || !replyToken) return;
+  try {
+    UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
+      method: 'post',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + activeToken
+      },
+      payload: JSON.stringify({
+        replyToken: replyToken,
+        messages: messages
+      }),
+      muteHttpExceptions: true
+    });
+  } catch (err) {}
 }`;
 }
+

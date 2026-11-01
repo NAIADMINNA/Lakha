@@ -2504,15 +2504,30 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         type="button"
                         onClick={async () => {
                           let foundGroup = '';
+                          let isOutdatedGas = false;
+                          let webhookActive = true;
                           try {
-                            const res = await fetch('/api/line/webhook-events');
-                            if (res.ok) {
-                              const d = await res.json();
+                            const checkRes = await fetch('/api/line/check-group-webhook', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                channelAccessToken: lineSettings.channelAccessToken,
+                                gasUrl: gasUrl.trim(),
+                              }),
+                            });
+                            if (checkRes.ok) {
+                              const checkData = await checkRes.json();
                               if (
-                                typeof d.detectedGroupId === 'string' &&
-                                /^[CR][0-9a-fA-F]{32}$/.test(d.detectedGroupId.trim())
+                                typeof checkData.detectedGroupId === 'string' &&
+                                /^[CR][0-9a-fA-F]{32}$/.test(checkData.detectedGroupId.trim())
                               ) {
-                                foundGroup = d.detectedGroupId.trim();
+                                foundGroup = checkData.detectedGroupId.trim();
+                              }
+                              if (checkData.isOutdatedGas) {
+                                isOutdatedGas = true;
+                              }
+                              if (checkData.webhookActive === false) {
+                                webhookActive = false;
                               }
                             }
                           } catch {
@@ -2523,7 +2538,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               const gRes = await fetch(gasUrl.trim(), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                                body: JSON.stringify({ action: 'check_bridge' }),
+                                body: JSON.stringify({
+                                  action: 'check_bridge',
+                                  channelAccessToken: lineSettings.channelAccessToken,
+                                }),
                               });
                               const gData = await gRes.json();
                               if (
@@ -2531,6 +2549,11 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                 /^[CR][0-9a-fA-F]{32}$/.test(gData.detectedGroupId.trim())
                               ) {
                                 foundGroup = gData.detectedGroupId.trim();
+                              } else if (
+                                gData.status === 'verified' &&
+                                gData.mode !== 'gas_bridge_ready'
+                              ) {
+                                isOutdatedGas = true;
                               }
                             } catch {
                               // Ignore
@@ -2545,11 +2568,23 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               ok: true,
                               message: `✅ ดึงรหัสห้องแชทกลุ่ม LINE สำเร็จ: ${foundGroup}`,
                             });
+                          } else if (!webhookActive) {
+                            setRichMenuClearStatus({
+                              ok: false,
+                              message:
+                                '❌ สวิตช์ "Use webhook" ใน LINE Developers Console ยังปิดอยู่! กรุณาเปิดสวิตช์ Use webhook ให้เป็นสีเขียว แล้วพิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE อีกครั้งครับ',
+                            });
+                          } else if (isOutdatedGas) {
+                            setRichMenuClearStatus({
+                              ok: false,
+                              message:
+                                '❌ พบสาเหตุที่พิมพ์ "เชื่อมกลุ่ม" แล้วบอทไม่ตอบกลับรหัส Group ID: ลิงก์ Google Apps Script ด้านล่างของคุณยังเป็น "โค้ดเวอร์ชันเก่า"! วิธีแก้: 1) กดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่างสุด 2) นำไปวางทับใน Apps Script 3) กดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy แล้วพิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE อีกครั้งครับ',
+                            });
                           } else {
                             setRichMenuClearStatus({
                               ok: false,
                               message:
-                                '⚠️ ยังไม่พบ Group ID (C...) — กรุณาเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่ม 1 ครั้ง (บอทจะตอบรหัส C... ในกลุ่มทันที) แล้วกดปุ่มนี้อีกครั้งครับ',
+                                '⚠️ ยังไม่พบ Group ID (C...) — กรุณาคัดลอกโค้ด Apps Script ด้านล่างไปอัปเดตเป็น New version ก่อน แล้วเชิญบอทเข้ากลุ่ม LINE พิมพ์คำว่า "เชื่อมกลุ่ม" ในกลุ่ม 1 ครั้งครับ',
                             });
                           }
                         }}

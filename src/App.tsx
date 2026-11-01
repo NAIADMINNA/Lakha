@@ -198,7 +198,16 @@ export default function App() {
   const [lineSettings, setLineSettings] = useState<LineSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.LINE_SETTINGS);
-      if (saved) return { ...DEFAULT_LINE_SETTINGS, ...JSON.parse(saved) };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          typeof parsed.publicCalendarUrl === 'string' &&
+          /^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim())
+        ) {
+          parsed.publicCalendarUrl = '';
+        }
+        return { ...DEFAULT_LINE_SETTINGS, ...parsed };
+      }
       // Preserve token from v1 if present
       const legacy = localStorage.getItem('sheetcal_line_settings_v1');
       if (legacy) {

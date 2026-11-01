@@ -21,6 +21,11 @@ import {
   TeamMember,
   TeamRole,
 } from '../types';
+import {
+  formatLocalDateYMD,
+  generateGoogleAppsScriptCode,
+  resolveTeamCalendarAppUrl,
+} from '../services/lineCommandParser';
 
 interface TeamCollaborationViewProps {
   tasks: Task[];
@@ -93,14 +98,12 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   const isValidGroupId = /^[CR][0-9a-fA-F]{32}$/.test(effectiveGroupId);
 
   const shareableCalendarUrl = useMemo(() => {
-    const base = typeof window !== 'undefined' ? window.location.origin : '';
-    const params = new URLSearchParams();
-    params.set('workspace', workspaceId || 'team-default');
-    if (spreadsheetId) {
-      params.set('sheet', spreadsheetId);
-    }
-    return `${base}/?${params.toString()}`;
-  }, [workspaceId, spreadsheetId]);
+    return resolveTeamCalendarAppUrl({
+      customPublicUrl: lineSettings.publicCalendarUrl,
+      workspaceId: workspaceId || 'team-default',
+      spreadsheetId: spreadsheetId || '',
+    });
+  }, [lineSettings.publicCalendarUrl, workspaceId, spreadsheetId]);
 
   const sharedStats = useMemo(() => {
     const completed = tasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
@@ -117,6 +120,43 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
     };
   }, [tasks]);
 
+  const [copiedGasCode, setCopiedGasCode] = useState(false);
+  const [gasUrlInput, setGasUrlInput] = useState<string>(() => {
+    try {
+      return typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
+        : '';
+    } catch {
+      return '';
+    }
+  });
+
+  const handleCopyGasV26Code = async () => {
+    try {
+      const appUrl = resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        workspaceId,
+        spreadsheetId: spreadsheetId || '',
+        date: formatLocalDateYMD(),
+      });
+      const code = generateGoogleAppsScriptCode(
+        spreadsheetId || '',
+        lineSettings.channelAccessToken,
+        appUrl
+      );
+      await navigator.clipboard.writeText(code);
+      setCopiedGasCode(true);
+      setTimeout(() => setCopiedGasCode(false), 3000);
+      setGroupDetectNotice({
+        ok: true,
+        message:
+          '✅ คัดลอกโค้ด Apps Script v2.6 เรียบร้อยแล้ว! นำไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy จากนั้นพิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE ได้เลยครับ',
+      });
+    } catch {
+      // Ignore clipboard error
+    }
+  };
+
   const handleCopyShareLink = async () => {
     try {
       await navigator.clipboard.writeText(shareableCalendarUrl);
@@ -128,21 +168,104 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   };
 
   const handleAutoDetectGroupId = async () => {
-    if (!onDetectGroupId) return;
     setIsDetectingGroup(true);
     setGroupDetectNotice(null);
     try {
-      const detected = await onDetectGroupId();
+      let detected: string | null = null;
+      let isOutdatedGas = false;
+      let webhookActive = true;
+      let webhookEndpoint = '';
+      let webhookBoundSuccess = false;
+
+      const activeGasUrl =
+        gasUrlInput.trim() ||
+        (typeof localStorage !== 'undefined'
+          ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
+          : '');
+
+      if (activeGasUrl && typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem('sheetcal_gas_url_v1', activeGasUrl);
+        } catch {
+          // Ignore storage error
+        }
+      }
+
+      try {
+        const checkRes = await fetch('/api/line/check-group-webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channelAccessToken: lineSettings.channelAccessToken,
+            gasUrl: activeGasUrl,
+            autoBindWebhook: true,
+          }),
+        });
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (
+            typeof checkData.detectedGroupId === 'string' &&
+            /^[CR][0-9a-fA-F]{32}$/.test(checkData.detectedGroupId.trim())
+          ) {
+            const cleanGrp = checkData.detectedGroupId.trim();
+            detected = cleanGrp;
+            onUpdateLineSettings({
+              ...lineSettings,
+              targetGroupId: cleanGrp,
+            });
+          }
+          if (checkData.isOutdatedGas) {
+            isOutdatedGas = true;
+          }
+          if (checkData.webhookActive === false) {
+            webhookActive = false;
+          }
+          if (checkData.webhookBoundSuccess) {
+            webhookBoundSuccess = true;
+          }
+          if (typeof checkData.webhookEndpoint === 'string' && checkData.webhookEndpoint) {
+            webhookEndpoint = checkData.webhookEndpoint;
+            if (!gasUrlInput.trim()) {
+              setGasUrlInput(checkData.webhookEndpoint);
+            }
+          }
+        }
+      } catch {
+        // Fallback to onDetectGroupId
+      }
+
+      if (!detected && onDetectGroupId) {
+        detected = await onDetectGroupId();
+      }
+
       if (detected && /^[CR][0-9a-fA-F]{32}$/.test(detected)) {
         setGroupDetectNotice({
           ok: true,
           message: `✅ ดึงรหัสห้องแชทกลุ่ม LINE สำเร็จ: ${detected} — พร้อมส่งแจ้งเตือนเข้ากลุ่ม LINE ทันที!`,
         });
-      } else {
+      } else if (!webhookActive) {
+        setGroupDetectNotice({
+          ok: false,
+          message: `${
+            webhookBoundSuccess
+              ? '✅ ระบบผูก Webhook URL เข้ากับบอท LINE ให้แล้ว! แต่ '
+              : '❌ พบสาเหตุที่บอทตอบแต่ข้อความอัตโนมัติ ("ขอบคุณที่ส่งข้อความถึงเรา..."): '
+          }สวิตช์ "Webhook" ใน LINE OA ยังปิดอยู่! ให้เข้าเว็บ manager.line.biz > ตั้งค่า (รูปเฟืองมุมขวาบน) > การตั้งค่าการตอบกลับ (Response settings) > 1) ติ๊กเปิด "Webhook" 2) ติ๊กปิด "ข้อความตอบกลับอัตโนมัติ" แล้วพิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE อีกครั้งครับ`,
+        });
+      } else if (isOutdatedGas) {
         setGroupDetectNotice({
           ok: false,
           message:
-            '⚠️ ยังไม่พบสัญญาณจากกลุ่ม LINE — กรุณาเชิญบอทเข้ากลุ่ม LINE แล้วพิมพ์คำว่า "เชื่อมกลุ่ม" ในห้องแชทกลุ่ม 1 ครั้ง (บอทจะตอบกลับรหัส C... ทันที) จากนั้นกดปุ่มดึงรหัสอีกครั้งครับ',
+            '❌ ลิงก์ Google Apps Script ปัจจุบันยังเป็นโค้ดเวอร์ชันเก่า: กรุณากดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.6" ด้านล่างไปวางทับใน Apps Script > กด Deploy > New deployment > คัดลอกลิงก์ Web app URL (/exec) มาวางในช่องด้านล่างแล้วกดปุ่มผูก Webhook ครับ',
+        });
+      } else {
+        setGroupDetectNotice({
+          ok: false,
+          message: `${
+            webhookBoundSuccess
+              ? '✅ ผูกลิงก์ Webhook URL เข้ากับบอท LINE สำเร็จแล้ว! '
+              : '⚠️ ยังไม่พบรหัสกลุ่ม C... จาก LINE Webhook: '
+          }กรุณาตรวจในเว็บ manager.line.biz > ตั้งค่า > การตั้งค่าการตอบกลับ ว่าเปิดสวิตช์ "Webhook" และปิด "ข้อความตอบกลับอัตโนมัติ" แล้ว จากนั้นพิมพ์คำว่า "เชื่อมกลุ่ม" ในกลุ่ม LINE อีกครั้งครับ`,
         });
       }
     } finally {
@@ -478,7 +601,104 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                 </div>
               )}
 
-              {/* Action Buttons: Test Group Push & Open LINE Settings */}
+              {/* Direct Google Apps Script Web App URL input to auto-bind LINE Webhook Endpoint */}
+              <div className="pt-2 border-t border-emerald-200/80 space-y-1.5">
+                <label className="text-[11px] font-bold text-emerald-950 block">
+                  ลิงก์ Web App URL จาก Google Apps Script (วางแล้วกดปุ่มด้านบนเพื่อผูกเข้ากับ LINE Webhook อัตโนมัติโดยไม่ต้องเข้า LINE Developers Console)
+                </label>
+                <input
+                  type="text"
+                  value={gasUrlInput}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    setGasUrlInput(val);
+                    try {
+                      if (typeof localStorage !== 'undefined') {
+                        localStorage.setItem('sheetcal_gas_url_v1', val);
+                      }
+                    } catch {
+                      // Ignore
+                    }
+                  }}
+                  placeholder="วางลิงก์ https://script.google.com/macros/s/.../exec ที่ได้หลังกด Deploy"
+                  className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-slate-800 focus:outline-none focus:border-[#06C755]"
+                />
+              </div>
+
+              {/* Destination URL for the 'เปิดดูปฏิทินและจัดการงาน' button on the LINE Card */}
+              <div className="pt-2 border-t border-emerald-200/80 space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-1">
+                  <label className="text-[11px] font-bold text-emerald-950 block">
+                    🔗 ลิงก์เมื่อกดปุ่ม &quot;เปิดดูปฏิทินและจัดการงาน&quot; บนการ์ดในแอป LINE:
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateLineSettings({
+                          ...lineSettings,
+                          publicCalendarUrl: '',
+                        })
+                      }
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                        !lineSettings.publicCalendarUrl
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-50'
+                      }`}
+                    >
+                      เปิดหน้าเว็บปฏิทินนี้
+                    </button>
+                    {spreadsheetUrl && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateLineSettings({
+                            ...lineSettings,
+                            publicCalendarUrl: spreadsheetUrl,
+                          })
+                        }
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                          lineSettings.publicCalendarUrl === spreadsheetUrl
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50'
+                        }`}
+                      >
+                        📊 เปิดไฟล์ Google Sheets ของทีม
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateLineSettings({
+                          ...lineSettings,
+                          publicCalendarUrl: 'https://calendar.google.com',
+                        })
+                      }
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                        lineSettings.publicCalendarUrl === 'https://calendar.google.com'
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white text-indigo-800 border-emerald-200 hover:bg-emerald-50'
+                      }`}
+                    >
+                      📅 เปิดแอป Google Calendar
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="url"
+                  value={lineSettings.publicCalendarUrl || ''}
+                  onChange={(e) =>
+                    onUpdateLineSettings({
+                      ...lineSettings,
+                      publicCalendarUrl: e.target.value,
+                    })
+                  }
+                  placeholder="เว้นว่างเพื่อเปิดหน้าเว็บปฏิทินนี้โดยอัตโนมัติ หรือวางลิงก์เว็บจริง (เช่น GitHub Pages / Google Sheets)"
+                  className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-slate-800 focus:outline-none focus:border-[#06C755]"
+                />
+              </div>
+
+              {/* Action Buttons: Test Group Push, Copy GAS v2.6 Code & Open LINE Settings */}
               <div className="flex flex-wrap items-center gap-2.5 pt-1">
                 <button
                   type="button"
@@ -494,6 +714,24 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   </span>
                 </button>
 
+                <button
+                  type="button"
+                  onClick={handleCopyGasV26Code}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-indigo-900 bg-indigo-50 border border-indigo-300 rounded-lg hover:bg-indigo-100 transition-colors"
+                >
+                  {copiedGasCode ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      <span>คัดลอกโค้ด v2.6 แล้ว! นำไป Deploy ได้เลย</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5 text-indigo-700" />
+                      <span>📋 คัดลอกโค้ด Apps Script v2.6</span>
+                    </>
+                  )}
+                </button>
+
                 {onOpenLineCenter && (
                   <button
                     type="button"
@@ -501,20 +739,26 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                     className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
                   >
                     <Settings className="h-3.5 w-3.5 text-slate-600" />
-                    <span>ตั้งค่า Webhook / โค้ด Apps Script v2.6</span>
+                    <span>ตั้งค่า Webhook / ทดสอบลิงก์</span>
                   </button>
                 )}
               </div>
             </div>
 
-            {/* 3-Step Checklist Why Group Chat Might Not Receive & How to Fix in 1 Minute */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs text-slate-700">
-              <div className="font-bold text-slate-900">
-                💡 วิธีเชื่อมต่อ "รูปแบบที่ 2: ห้องแชทกลุ่ม LINE ของทีม (Group Chat)" ให้สำเร็จ 100%
+            {/* 3-Step Checklist Why Group Chat Replies with Auto-Response & How to Fix in 1 Minute */}
+            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-2.5 text-xs text-slate-800">
+              <div className="font-bold text-amber-950">
+                🚨 ทำไมพิมพ์ "เชื่อมกลุ่ม" แล้วบอทตอบว่า "ขอบคุณที่ส่งข้อความถึงเรา ต้องขออภัยเป็นอย่างยิ่งที่บัญชีนี้ไม่สามารถตอบข้อความใดๆ ได้"?
               </div>
-              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-slate-700">
+              <p className="text-[11px] text-slate-700 leading-relaxed">
+                <strong>หมายเหตุ:</strong> ไม่เกี่ยวกับการตั้งชื่อกลุ่มครับ (ไม่ต้องตั้งชื่อกลุ่มก็ดึงรหัส C... ได้) แต่ข้อความ <em>"ขอบคุณที่ส่งข้อความถึงเรา..."</em> คือ <strong>ข้อความตอบกลับอัตโนมัติของ LINE OA</strong> ซึ่งแปลว่าสวิตช์ <strong>Webhook</strong> ของบอทยังปิดอยู่ แก้ได้ใน 3 ขั้นตอนดังนี้:
+              </p>
+              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-slate-800">
                 <li>
-                  <strong className="text-slate-900">เปิดสิทธิ์ให้บอทเข้ากลุ่มได้:</strong> เข้าเว็บ{' '}
+                  <strong className="text-slate-900">
+                    เปิดสวิตช์ Webhook และปิดข้อความอัตโนมัติในเว็บ LINE OA:
+                  </strong>{' '}
+                  เข้าเว็บ{' '}
                   <a
                     href="https://manager.line.biz"
                     target="_blank"
@@ -523,25 +767,30 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   >
                     manager.line.biz
                   </a>{' '}
-                  &gt; เลือกบัญชี LINE OA &gt; <strong>ตั้งค่า (Settings)</strong> &gt;{' '}
-                  <strong>ตั้งค่าบัญชี (Account settings)</strong> &gt; หัวข้อ{' '}
-                  <em>"แชทแบบกลุ่มและแชทแบบหลายคน"</em> ให้ติ๊กเลือก{' '}
-                  <span className="font-bold text-emerald-700">
-                    "อนุญาตให้บัญชีเข้าร่วมกลุ่มและแชทแบบหลายคน"
-                  </span>
+                  &gt; เลือกบัญชีบอท (เช่น <strong>น้องเลขา</strong>) &gt; กด <strong>ตั้งค่า (Settings รูปเฟืองมุมขวาบน)</strong> &gt; เมนูซ้ายเลือก{' '}
+                  <strong className="text-indigo-700">การตั้งค่าการตอบกลับ (Response settings)</strong>:
+                  <ul className="list-disc list-inside pl-4 mt-1 space-y-0.5 text-[11px]">
+                    <li>
+                      หัวข้อ <strong>Webhook</strong>: ติ๊ก <span className="font-bold text-emerald-700">เปิด (Enabled)</span>
+                    </li>
+                    <li>
+                      หัวข้อ <strong>ข้อความตอบกลับอัตโนมัติ (Auto-response)</strong>: ติ๊ก <span className="font-bold text-rose-600">ปิด (Disabled)</span> เพื่อเอาข้อความ <em>"ต้องขออภัยเป็นอย่างยิ่ง..."</em> ออก
+                    </li>
+                  </ul>
                 </li>
                 <li>
-                  <strong className="text-slate-900">เชิญบอทเข้ากลุ่ม & พิมพ์คำสั่ง:</strong> เชิญบอท LINE OA เข้าห้องแชทกลุ่มของทีม แล้วพิมพ์ข้อความในกลุ่มว่า{' '}
-                  <code className="font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-300 text-emerald-800">
-                    เชื่อมกลุ่ม
+                  <strong className="text-slate-900">วางลิงก์ Web App URL (/exec) จาก Google Apps Script:</strong> หลังวางโค้ด v2.6 และกด Deploy ใน Google Apps Script แล้ว ให้คัดลอกลิงก์{' '}
+                  <code className="font-bold bg-white px-1.5 py-0.5 rounded border">
+                    https://script.google.com/macros/s/.../exec
                   </code>{' '}
-                  บอทจะตอบกลับรหัส <code className="font-bold">Group ID (C...)</code> ในห้องแชทกลุ่มทันที
+                  มาวางในช่องด้านบน แล้วกดปุ่ม <strong>"🔄 ดึงรหัสกลุ่ม C... อัตโนมัติ"</strong> (ระบบจะยิง API ผูกลิงก์นี้เข้ากับ LINE Webhook ของบอทให้อัตโนมัติทันที)
                 </li>
                 <li>
-                  <strong className="text-slate-900">ดึงรหัสเข้าเว็บ (หรือวางรหัส C...):</strong> กดปุ่ม{' '}
-                  <strong>"🔄 ดึงรหัสกลุ่ม C... อัตโนมัติ"</strong> ด้านบน (หรือคัดลอกรหัส{' '}
-                  <code className="font-bold">C...</code> ที่บอทตอบในกลุ่มมาวางในช่องด้านบน) แล้วกด{' '}
-                  <strong>"🔔 ทดสอบยิงแจ้งเตือนเข้าห้องแชทกลุ่ม LINE ทันที"</strong> ได้เลยครับ!
+                  <strong className="text-slate-900">พิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE อีกครั้ง:</strong> บอทจะตอบกลับรหัส{' '}
+                  <code className="font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-300 text-emerald-800">
+                    C... (33 ตัวอักษร)
+                  </code>{' '}
+                  ในห้องแชทกลุ่มทันที และกดปุ่ม <strong>"🔄 ดึงรหัสกลุ่ม C... อัตโนมัติ"</strong> ด้านบนได้เลยครับ!
                 </li>
               </ol>
             </div>
