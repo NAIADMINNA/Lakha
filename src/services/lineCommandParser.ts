@@ -14,6 +14,8 @@ export const REMINDER_TIMING_OPTIONS: {
   label: string;
   shortLabel: string;
 }[] = [
+  { minutes: 1, label: 'เมื่อถึงเวลาที่กำหนดพอดี (ตรงเวลา)', shortLabel: 'ตรงเวลา' },
+  { minutes: 5, label: 'ก่อนเริ่มงาน 5 นาที', shortLabel: '5 นาที' },
   { minutes: 15, label: 'ก่อนเริ่มงาน 15 นาที', shortLabel: '15 นาที' },
   { minutes: 30, label: 'ก่อนเริ่มงาน 30 นาที', shortLabel: '30 นาที' },
   { minutes: 60, label: 'ก่อนเริ่มงาน 1 ชั่วโมง', shortLabel: '1 ชั่วโมง' },
@@ -24,6 +26,8 @@ export const REMINDER_TIMING_OPTIONS: {
 
 export function formatRemindMinutesLabel(minutes: number): string {
   if (minutes <= 0) return 'ไม่แจ้งเตือนอัตโนมัติ';
+  if (minutes === 1) return 'เมื่อถึงเวลาที่กำหนดพอดี (ตรงเวลา)';
+  if (minutes === 5) return '5 นาทีก่อนเริ่มงาน';
   if (minutes === 15) return '15 นาทีก่อนเริ่มงาน';
   if (minutes === 30) return '30 นาทีก่อนเริ่มงาน';
   if (minutes === 60) return '1 ชั่วโมงก่อนเริ่มงาน';
@@ -232,7 +236,7 @@ const THAI_WEEKDAYS: { dayOfWeek: number; patterns: string[] }[] = [
   { dayOfWeek: 6, patterns: ['วันเสาร์', 'เสาร์นี้', 'เสาร์หน้า'] },
 ];
 
-function extractThaiDate(input: string): { dateStr: string; cleanedText: string } {
+export function extractThaiDate(input: string): { dateStr: string; cleanedText: string } {
   let text = input;
   const nowBangkok = getBangkokDateObject(0);
   const todayStr = formatPlainDateObjYMD(nowBangkok);
@@ -297,6 +301,13 @@ function extractThaiDate(input: string): { dateStr: string; cleanedText: string 
   }
 
   // 5. Relative Thai date words
+  const inDaysMatch = text.match(/อีก\s*(\d{1,3})\s*วัน/);
+  if (inDaysMatch) {
+    const offsetDays = Math.max(0, parseInt(inDaysMatch[1], 10));
+    const d = getBangkokDateObject(offsetDays);
+    text = text.replace(inDaysMatch[0], ' ');
+    return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+  }
   if (text.includes('มะรืนนี้') || text.includes('มะรืน')) {
     const d = getBangkokDateObject(2);
     text = text.replace(/มะรืนนี้|มะรืน/g, ' ');
@@ -335,7 +346,7 @@ function extractThaiDate(input: string): { dateStr: string; cleanedText: string 
   return { dateStr: todayStr, cleanedText: text };
 }
 
-function extractThaiTime(input: string): { timeStr: string; cleanedText: string } {
+export function extractThaiTime(input: string): { timeStr: string; cleanedText: string } {
   let text = input;
 
   const stdTimeMatch = text.match(/(?:เวลา\s*)?(\d{1,2})[:.](\d{2})(?:\s*น\.?)?/);
@@ -999,9 +1010,25 @@ const SPREADSHEET_ID = '${sheetIdDisplay}';
 const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
 const WEB_APP_URL = '${webAppUrl}';
 
+function getSelfWebAppUrl() {
+  try {
+    var u = ScriptApp.getService().getUrl();
+    if (u && String(u).indexOf('https://script.google.com/macros/s/') === 0) {
+      return String(u).trim();
+    }
+  } catch (err) {}
+  return '';
+}
+
 function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   var base = String(overrideBaseUrl || WEB_APP_URL || '').trim();
+  var selfGasUrl = getSelfWebAppUrl();
   var sheetDirect = getSpreadsheetDirectUrl();
+  // หากลิงก์เป็น ais-dev- (ซึ่งเปิดได้เฉพาะเจ้าของบัญชี AI Studio เท่านั้น สมาชิกคนอื่นในกลุ่มกดแล้วจะติดสิทธิ์หรือ Error)
+  // ให้สลับไปเปิดหน้าเว็บปฏิทินทีมบน Google Apps Script (Anyone) โดยอัตโนมัติ เพื่อให้ทุกคนในกลุ่ม LINE เปิดดูและจัดการงานได้ 100%
+  if ((!base || base.indexOf('http') !== 0 || base.indexOf('https://ais-dev-') === 0) && selfGasUrl) {
+    base = selfGasUrl;
+  }
   if (base.indexOf('http') !== 0) {
     base = sheetDirect || 'https://calendar.google.com';
   }
@@ -1010,7 +1037,10 @@ function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   }
   var sep = base.indexOf('?') === -1 ? '?' : '&';
   var url = base;
-  if (url.indexOf('section=') === -1) {
+  if (url.indexOf('script.google.com/macros/s/') !== -1 && url.indexOf('view=') === -1) {
+    url += sep + 'view=calendar';
+    sep = '&';
+  } else if (url.indexOf('section=') === -1) {
     url += sep + 'section=calendar';
     sep = '&';
   }
@@ -1035,40 +1065,153 @@ function getSpreadsheetDirectUrl() {
   return '';
 }
 
+function normalizeYearNum(yRaw, fallbackYear) {
+  var yNum = yRaw ? parseInt(yRaw, 10) : fallbackYear;
+  if (isNaN(yNum)) return fallbackYear;
+  if (yNum >= 2400) return yNum - 543;
+  if (yNum >= 60 && yNum < 100) return 2500 + yNum - 543;
+  if (yNum > 0 && yNum < 60) return 2000 + yNum;
+  return yNum;
+}
+
 function parseThaiCommand(rawText) {
   var text = String(rawText || '').trim();
   var now = new Date();
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  var currentYear = parseInt(Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy'), 10);
+  var currentMonth = parseInt(Utilities.formatDate(now, 'Asia/Bangkok', 'MM'), 10);
   var clean = text.replace(/^(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\\s*[:：-]?\\s*/i, '');
 
   var targetDate = todayStr;
-  var isoMatch = clean.match(/(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
-  var slashMatch = clean.match(/(?:วันที่\\s*)?(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{2,4}))?/);
+  var dateMatched = false;
 
+  // 1. รูปแบบมาตรฐาน YYYY-MM-DD (เช่น 2026-11-05 หรือ 2569-11-05)
+  var isoMatch = clean.match(/(?:วันที่\\s*)?(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
   if (isoMatch) {
-    var y = parseInt(isoMatch[1], 10);
-    if (y >= 2400) y -= 543;
-    targetDate = y + '-' + ('0' + isoMatch[2]).slice(-2) + '-' + ('0' + isoMatch[3]).slice(-2);
+    var yIso = normalizeYearNum(isoMatch[1], currentYear);
+    targetDate = yIso + '-' + ('0' + isoMatch[2]).slice(-2) + '-' + ('0' + isoMatch[3]).slice(-2);
     clean = clean.replace(isoMatch[0], ' ');
-  } else if (slashMatch) {
-    var dNum = parseInt(slashMatch[1], 10);
-    var mNum = parseInt(slashMatch[2], 10);
-    var yNum = slashMatch[3] ? parseInt(slashMatch[3], 10) : parseInt(Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy'), 10);
-    if (yNum >= 2400) yNum -= 543;
-    else if (yNum >= 60 && yNum < 100) yNum = 2500 + yNum - 543;
-    else if (yNum < 60) yNum = 2000 + yNum;
-    targetDate = yNum + '-' + ('0' + mNum).slice(-2) + '-' + ('0' + dNum).slice(-2);
-    clean = clean.replace(slashMatch[0], ' ');
-  } else if (clean.indexOf('มะรืน') !== -1) {
-    var d2 = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
-    targetDate = Utilities.formatDate(d2, 'Asia/Bangkok', 'yyyy-MM-dd');
-    clean = clean.replace(/มะรืนนี้|มะรืน/g, ' ');
-  } else if (clean.indexOf('พรุ่งนี้') !== -1) {
-    var d1 = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
-    targetDate = Utilities.formatDate(d1, 'Asia/Bangkok', 'yyyy-MM-dd');
-    clean = clean.replace(/พรุ่งนี้/g, ' ');
-  } else if (clean.indexOf('วันนี้') !== -1) {
-    clean = clean.replace(/วันนี้/g, ' ');
+    dateMatched = true;
+  }
+
+  // 2. รูปแบบ DD/MM/YYYY หรือ DD/MM/YY หรือ DD/MM หรือ DD-MM-YYYY (เช่น 5/11, 5/11/69, 05/11/2569)
+  if (!dateMatched) {
+    var slashMatch = clean.match(/(?:วันที่\\s*)?(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{2,4}))?/);
+    if (slashMatch) {
+      var dNum = parseInt(slashMatch[1], 10);
+      var mNum = parseInt(slashMatch[2], 10);
+      if (dNum >= 1 && dNum <= 31 && mNum >= 1 && mNum <= 12) {
+        var ySlash = normalizeYearNum(slashMatch[3], currentYear);
+        targetDate = ySlash + '-' + ('0' + mNum).slice(-2) + '-' + ('0' + dNum).slice(-2);
+        clean = clean.replace(slashMatch[0], ' ');
+        dateMatched = true;
+      }
+    }
+  }
+
+  // 3. รูปแบบชื่อเดือนภาษาไทย ทั้งแบบย่อและแบบเต็ม (เช่น 5 พ.ย., 12 พย 69, วันที่ 15 พฤศจิกายน 2569)
+  if (!dateMatched) {
+    var thaiMonths = [
+      { m: 1, pats: ['มกราคม', 'ม\\.ค\\.', 'ม\\.ค', 'มค'] },
+      { m: 2, pats: ['กุมภาพันธ์', 'กุมภา', 'ก\\.พ\\.', 'ก\\.พ', 'กพ'] },
+      { m: 3, pats: ['มีนาคม', 'มีนา', 'มี\\.ค\\.', 'มี\\.ค', 'มีค'] },
+      { m: 4, pats: ['เมษายน', 'เมษา', 'เม\\.ย\\.', 'เม\\.ย', 'เมย'] },
+      { m: 5, pats: ['พฤษภาคม', 'พฤษภา', 'พ\\.ค\\.', 'พ\\.ค', 'พค'] },
+      { m: 6, pats: ['มิถุนายน', 'มิถุนา', 'มิ\\.ย\\.', 'มิ\\.ย', 'มิย'] },
+      { m: 7, pats: ['กรกฎาคม', 'กรกฎา', 'ก\\.ค\\.', 'ก\\.ค', 'กค'] },
+      { m: 8, pats: ['สิงหาคม', 'สิงหา', 'ส\\.ค\\.', 'ส\\.ค', 'สค'] },
+      { m: 9, pats: ['กันยายน', 'กันยา', 'ก\\.ย\\.', 'ก\\.ย', 'กย'] },
+      { m: 10, pats: ['ตุลาคม', 'ตุลา', 'ต\\.ค\\.', 'ต\\.ค', 'ตค'] },
+      { m: 11, pats: ['พฤศจิกายน', 'พฤศจิกา', 'พ\\.ย\\.', 'พ\\.ย', 'พย'] },
+      { m: 12, pats: ['ธันวาคม', 'ธันวา', 'ธ\\.ค\\.', 'ธ\\.ค', 'ธค'] }
+    ];
+    for (var mi = 0; mi < thaiMonths.length && !dateMatched; mi++) {
+      var mEntry = thaiMonths[mi];
+      for (var pi = 0; pi < mEntry.pats.length; pi++) {
+        var rgx = new RegExp('(?:วันที่\\\\s*)?(\\\\d{1,2})\\\\s*' + mEntry.pats[pi] + '(?:\\\\s*(\\\\d{2,4}))?', 'i');
+        var mMatch = clean.match(rgx);
+        if (mMatch) {
+          var dThai = Math.min(31, Math.max(1, parseInt(mMatch[1], 10)));
+          var yThai = normalizeYearNum(mMatch[2], currentYear);
+          targetDate = yThai + '-' + ('0' + mEntry.m).slice(-2) + '-' + ('0' + dThai).slice(-2);
+          clean = clean.replace(mMatch[0], ' ');
+          dateMatched = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // 4. รูปแบบ "วันที่ DD" ของเดือนปัจจุบัน (เช่น วันที่ 15, วันที่ 25)
+  if (!dateMatched) {
+    var dayOnlyMatch = clean.match(/วันที่\\s*(\\d{1,2})(?!\\s*[/:.-])/);
+    if (dayOnlyMatch) {
+      var dOnly = Math.min(31, Math.max(1, parseInt(dayOnlyMatch[1], 10)));
+      targetDate = currentYear + '-' + ('0' + currentMonth).slice(-2) + '-' + ('0' + dOnly).slice(-2);
+      clean = clean.replace(dayOnlyMatch[0], ' ');
+      dateMatched = true;
+    }
+  }
+
+  // 5. คำระบุวันสัมพัทธ์ (พรุ่งนี้, มะรืน, อีก X วัน, สัปดาห์หน้า, วันนี้)
+  if (!dateMatched) {
+    var inDaysMatch = clean.match(/อีก\\s*(\\d{1,3})\\s*วัน/);
+    if (inDaysMatch) {
+      var addDays = Math.max(0, parseInt(inDaysMatch[1], 10));
+      var dNext = new Date(now.getTime() + addDays * 24 * 60 * 60 * 1000);
+      targetDate = Utilities.formatDate(dNext, 'Asia/Bangkok', 'yyyy-MM-dd');
+      clean = clean.replace(inDaysMatch[0], ' ');
+      dateMatched = true;
+    } else if (clean.indexOf('มะรืน') !== -1) {
+      var d2 = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+      targetDate = Utilities.formatDate(d2, 'Asia/Bangkok', 'yyyy-MM-dd');
+      clean = clean.replace(/มะรืนนี้|มะรืน/g, ' ');
+      dateMatched = true;
+    } else if (clean.indexOf('พรุ่งนี้') !== -1) {
+      var d1 = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
+      targetDate = Utilities.formatDate(d1, 'Asia/Bangkok', 'yyyy-MM-dd');
+      clean = clean.replace(/พรุ่งนี้/g, ' ');
+      dateMatched = true;
+    } else if (clean.indexOf('สัปดาห์หน้า') !== -1 || clean.indexOf('อาทิตย์หน้า') !== -1) {
+      var d7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      targetDate = Utilities.formatDate(d7, 'Asia/Bangkok', 'yyyy-MM-dd');
+      clean = clean.replace(/สัปดาห์หน้า|อาทิตย์หน้า/g, ' ');
+      dateMatched = true;
+    } else if (clean.indexOf('วันนี้') !== -1) {
+      clean = clean.replace(/วันนี้/g, ' ');
+      dateMatched = true;
+    }
+  }
+
+  // 6. ชื่อวันในสัปดาห์ (วันจันทร์ - วันอาทิตย์, จันทร์หน้า, ศุกร์นี้ ฯลฯ)
+  if (!dateMatched) {
+    var weekdays = [
+      { dow: 0, pats: ['วันอาทิตย์', 'อาทิตย์นี้'] },
+      { dow: 1, pats: ['วันจันทร์', 'จันทร์นี้', 'จันทร์หน้า'] },
+      { dow: 2, pats: ['วันอังคาร', 'อังคารนี้', 'อังคารหน้า'] },
+      { dow: 3, pats: ['วันพุธ', 'พุธนี้', 'พุธหน้า'] },
+      { dow: 4, pats: ['วันพฤหัสบดี', 'วันพฤหัส', 'พฤหัสนี้', 'พฤหัสหน้า'] },
+      { dow: 5, pats: ['วันศุกร์', 'ศุกร์นี้', 'ศุกร์หน้า'] },
+      { dow: 6, pats: ['วันเสาร์', 'เสาร์นี้', 'เสาร์หน้า'] }
+    ];
+    var bkkParts = todayStr.split('-');
+    var bkkDateObj = new Date(parseInt(bkkParts[0], 10), parseInt(bkkParts[1], 10) - 1, parseInt(bkkParts[2], 10));
+    var currentDow = bkkDateObj.getDay();
+    for (var wi = 0; wi < weekdays.length && !dateMatched; wi++) {
+      var wEntry = weekdays[wi];
+      for (var wpi = 0; wpi < wEntry.pats.length; wpi++) {
+        var wPat = wEntry.pats[wpi];
+        if (clean.indexOf(wPat) !== -1) {
+          var diff = (wEntry.dow - currentDow + 7) % 7;
+          if (diff === 0) diff = 7;
+          var dDow = new Date(now.getTime() + diff * 24 * 60 * 60 * 1000);
+          targetDate = Utilities.formatDate(dDow, 'Asia/Bangkok', 'yyyy-MM-dd');
+          clean = clean.replace(wPat, ' ');
+          dateMatched = true;
+          break;
+        }
+      }
+    }
   }
 
   var targetTime = '09:00';
@@ -1076,15 +1219,27 @@ function parseThaiCommand(rawText) {
   if (timeMatch) {
     targetTime = ('0' + timeMatch[1]).slice(-2) + ':' + ('0' + timeMatch[2]).slice(-2);
     clean = clean.replace(timeMatch[0], ' ');
-  } else if (clean.indexOf('บ่ายสอง') !== -1 || clean.indexOf('บ่าย 2') !== -1) {
-    targetTime = '14:00';
-    clean = clean.replace(/บ่ายสอง|บ่าย\\s*2/g, ' ');
-  } else if (clean.indexOf('บ่ายโมง') !== -1) {
-    targetTime = '13:00';
-    clean = clean.replace(/บ่ายโมง/g, ' ');
-  } else if (clean.indexOf('เที่ยง') !== -1) {
-    targetTime = '12:00';
-    clean = clean.replace(/เที่ยง/g, ' ');
+  } else {
+    var hourOnlyMatch = clean.match(/เวลา\\s*(\\d{1,2})\\s*(?:โมง|น\\.?)/);
+    if (hourOnlyMatch) {
+      targetTime = ('0' + hourOnlyMatch[1]).slice(-2) + ':00';
+      clean = clean.replace(hourOnlyMatch[0], ' ');
+    } else if (clean.indexOf('บ่ายสาม') !== -1 || clean.indexOf('บ่าย 3') !== -1) {
+      targetTime = '15:00';
+      clean = clean.replace(/บ่ายสาม|บ่าย\\s*3/g, ' ');
+    } else if (clean.indexOf('บ่ายสอง') !== -1 || clean.indexOf('บ่าย 2') !== -1) {
+      targetTime = '14:00';
+      clean = clean.replace(/บ่ายสอง|บ่าย\\s*2/g, ' ');
+    } else if (clean.indexOf('บ่ายโมง') !== -1) {
+      targetTime = '13:00';
+      clean = clean.replace(/บ่ายโมง/g, ' ');
+    } else if (clean.indexOf('เที่ยงคืน') !== -1) {
+      targetTime = '00:00';
+      clean = clean.replace(/เที่ยงคืน/g, ' ');
+    } else if (clean.indexOf('เที่ยง') !== -1) {
+      targetTime = '12:00';
+      clean = clean.replace(/เที่ยง/g, ' ');
+    }
   }
 
   var priority = 'medium';
@@ -1532,19 +1687,213 @@ function openSafeSpreadsheet() {
   }
 }
 
+function addTeamTaskFromPortal(title, dateStr, timeStr, priorityVal) {
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  var cleanTitle = String(title || '').trim();
+  if (!cleanTitle) return readSheetTasksForWeb();
+  var cleanDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(String(dateStr || '').trim()) ? String(dateStr).trim() : todayStr;
+  var cleanTime = /^\\d{2}:\\d{2}$/.test(String(timeStr || '').trim()) ? String(timeStr).trim() : '09:00';
+  var cleanPrio = (priorityVal === 'high' || priorityVal === 'low') ? priorityVal : 'medium';
+  var ss = openSafeSpreadsheet();
+  if (ss) {
+    var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
+    if (taskSheet.getLastRow() === 0) {
+      taskSheet.appendRow(['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']);
+    }
+    taskSheet.appendRow([
+      'task-' + now.getTime(),
+      cleanTitle,
+      'เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)',
+      "'" + cleanDate,
+      "'" + cleanTime,
+      'cat-work',
+      cleanPrio,
+      'pending',
+      1,
+      'FALSE',
+      'web',
+      now.toISOString()
+    ]);
+  }
+  return readSheetTasksForWeb();
+}
+
+function toggleTeamTaskStatusFromPortal(taskId) {
+  var ss = openSafeSpreadsheet();
+  if (!ss || !taskId) return readSheetTasksForWeb();
+  var taskSheet = ss.getSheetByName('Tasks');
+  if (!taskSheet || taskSheet.getLastRow() <= 1) return readSheetTasksForWeb();
+  var data = taskSheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(taskId)) {
+      var currentStatus = String(data[i][7] || 'pending');
+      var nextStatus = currentStatus === 'completed' ? 'pending' : 'completed';
+      taskSheet.getRange(i + 1, 8).setValue(nextStatus);
+      taskSheet.getRange(i + 1, 12).setValue(new Date().toISOString());
+      break;
+    }
+  }
+  return readSheetTasksForWeb();
+}
+
+function deleteTeamTaskFromPortal(taskId) {
+  var ss = openSafeSpreadsheet();
+  if (!ss || !taskId) return readSheetTasksForWeb();
+  var taskSheet = ss.getSheetByName('Tasks');
+  if (!taskSheet || taskSheet.getLastRow() <= 1) return readSheetTasksForWeb();
+  var data = taskSheet.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === String(taskId)) {
+      taskSheet.deleteRow(i + 1);
+      break;
+    }
+  }
+  return readSheetTasksForWeb();
+}
+
 function doGet(e) {
   var tasks = readSheetTasksForWeb();
-  return ContentService
-    .createTextOutput(JSON.stringify({
-      status: 'verified',
-      version: '2.6-group-bridge',
-      capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
-      detectedGroupId: getSavedGroupId(),
-      detectedUserId: getSavedUserId(),
-      tasks: tasks,
-      message: 'SheetCal LINE Webhook & Push Bridge Ready (v2.6 Supports 1-on-1 & Group Chat)'
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
+  var params = (e && e.parameter) ? e.parameter : {};
+  if (params.format === 'json' || params.action === 'get_tasks' || params.action === 'check_bridge') {
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        status: 'verified',
+        version: '2.6-group-bridge',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal'],
+        detectedGroupId: getSavedGroupId(),
+        detectedUserId: getSavedUserId(),
+        tasks: tasks,
+        message: 'SheetCal LINE Webhook & Push Bridge Ready (v2.6 Supports 1-on-1 & Group Chat)'
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var now = new Date();
+  var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  var initDate = (params.date && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(params.date))) ? String(params.date) : todayStr;
+  var sheetUrl = getSpreadsheetDirectUrl();
+  var html = [
+    '<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">',
+    '<title>SheetCal LINE — ปฏิทินและจัดการงานของทีม</title>',
+    '<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">',
+    '<style>',
+    '*{box-sizing:border-box;font-family:"Prompt",sans-serif;}',
+    'body{margin:0;background:#F1F5F9;color:#0F172A;padding:12px;}',
+    '.wrap{max-width:680px;margin:0 auto;}',
+    '.header{background:linear-gradient(135deg,#06C755,#059669);color:#fff;padding:18px;border-radius:16px;box-shadow:0 6px 20px rgba(6,199,85,0.22);margin-bottom:14px;}',
+    '.header h1{margin:0 0 4px 0;font-size:19px;font-weight:700;}',
+    '.header p{margin:0;font-size:12px;opacity:0.95;}',
+    '.top-links{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}',
+    '.btn-link{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:10px;font-size:12px;font-weight:600;text-decoration:none;background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.35);}',
+    '.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;}',
+    '.stat-card{background:#fff;padding:12px;border-radius:14px;text-align:center;border:1px solid #E2E8F0;}',
+    '.stat-num{font-size:20px;font-weight:700;}',
+    '.stat-lbl{font-size:11px;color:#64748B;}',
+    '.card{background:#fff;border-radius:16px;padding:16px;border:1px solid #E2E8F0;margin-bottom:14px;box-shadow:0 2px 8px rgba(15,23,42,0.04);}',
+    '.card-title{font-size:14px;font-weight:700;margin:0 0 10px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}',
+    '.filter-bar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}',
+    '.tab{padding:6px 12px;border-radius:9px;border:1px solid #CBD5E1;background:#F8FAFC;font-size:12px;font-weight:600;cursor:pointer;color:#334155;}',
+    '.tab.active{background:#06C755;color:#fff;border-color:#06C755;}',
+    '.form-grid{display:grid;grid-template-columns:1fr 130px 100px;gap:8px;margin-bottom:8px;}',
+    '@media(max-width:520px){.form-grid{grid-template-columns:1fr 1fr;}}',
+    'input,select{width:100%;padding:9px 11px;border-radius:10px;border:1px solid #CBD5E1;font-size:13px;background:#fff;}',
+    '.btn-add{width:100%;padding:10px;border-radius:10px;border:none;background:#06C755;color:#fff;font-size:13px;font-weight:700;cursor:pointer;}',
+    '.btn-add:disabled{opacity:0.6;}',
+    '.task-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border-radius:12px;border:1px solid #E2E8F0;margin-bottom:8px;background:#F8FAFC;}',
+    '.task-item.done{background:#F0FDF4;border-color:#BBF7D0;opacity:0.85;}',
+    '.task-title{font-size:14px;font-weight:600;margin:0 0 3px 0;}',
+    '.task-item.done .task-title{text-decoration:line-through;color:#15803D;}',
+    '.task-meta{font-size:11px;color:#64748B;}',
+    '.badge-high{display:inline-block;padding:2px 7px;border-radius:6px;background:#FEE2E2;color:#DC2626;font-size:10px;font-weight:700;margin-left:6px;}',
+    '.actions{display:flex;gap:6px;flex-shrink:0;}',
+    '.btn-act{padding:6px 10px;border-radius:8px;border:1px solid #CBD5E1;background:#fff;font-size:11px;font-weight:600;cursor:pointer;}',
+    '.btn-done{background:#DCFCE7;border-color:#86EFAC;color:#15803D;}',
+    '.btn-del{background:#FEE2E2;border-color:#FCA5A5;color:#B91C1C;}',
+    '</style></head><body><div class="wrap">',
+    '<div class="header">',
+    '<h1>📅 ปฏิทินและจัดการงานของทีม (SheetCal LINE)</h1>',
+    '<p>สมาชิกทุกคนในกลุ่ม LINE สามารถเปิดดูตารางงาน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ Google Sheets อัตโนมัติ)</p>',
+    '<div class="top-links">',
+    (sheetUrl ? '<a class="btn-link" href="' + sheetUrl + '" target="_blank">📊 เปิดตาราง Google Sheets</a>' : ''),
+    '</div></div>',
+    '<div class="stats">',
+    '<div class="stat-card"><div class="stat-num" id="stTotal">0</div><div class="stat-lbl">งานทั้งหมด</div></div>',
+    '<div class="stat-card"><div class="stat-num" style="color:#D97706" id="stPending">0</div><div class="stat-lbl">รอดำเนินการ</div></div>',
+    '<div class="stat-card"><div class="stat-num" style="color:#16A34A" id="stDone">0</div><div class="stat-lbl">เสร็จแล้ว</div></div>',
+    '</div>',
+    '<div class="card">',
+    '<div class="card-title"><span>➕ เพิ่มงานใหม่เข้าปฏิทินของทีม</span></div>',
+    '<div class="form-grid">',
+    '<input type="text" id="inpTitle" placeholder="ชื่องาน เช่น ประชุมสรุปยอด..." />',
+    '<input type="date" id="inpDate" value="' + initDate + '" />',
+    '<input type="time" id="inpTime" value="09:00" />',
+    '</div>',
+    '<div style="display:flex;gap:8px;align-items:center;">',
+    '<select id="inpPrio" style="max-width:160px;"><option value="medium">ความสำคัญ: ปกติ</option><option value="high">🔥 ด่วน (#สูง)</option></select>',
+    '<button class="btn-add" id="btnAdd" onclick="handleAdd()">+ บันทึกงานลงปฏิทินทีม</button>',
+    '</div></div>',
+    '<div class="card">',
+    '<div class="card-title"><span>📋 รายการงานในปฏิทิน</span>',
+    '<div class="filter-bar">',
+    '<button class="tab" id="tabDate" onclick="setMode(\\'date\\')">เฉพาะวันที่เลือก</button>',
+    '<button class="tab active" id="tabAll" onclick="setMode(\\'all\\')">ดูงานทั้งหมด</button>',
+    '<input type="date" id="filterDate" value="' + initDate + '" onchange="onDateChange()" style="width:auto;padding:5px 8px;font-size:12px;" />',
+    '</div></div>',
+    '<div id="taskList"></div>',
+    '</div></div>',
+    '<script>',
+    'var tasks = ' + JSON.stringify(tasks) + ';',
+    'var filterMode = "all";',
+    'var selectedDate = "' + initDate + '";',
+    'function render(){',
+    '  var total = tasks.length;',
+    '  var done = tasks.filter(function(t){return t.status==="completed";}).length;',
+    '  document.getElementById("stTotal").textContent = total;',
+    '  document.getElementById("stPending").textContent = total - done;',
+    '  document.getElementById("stDone").textContent = done;',
+    '  var list = filterMode === "date" ? tasks.filter(function(t){return t.date === selectedDate;}) : tasks.slice();',
+    '  list.sort(function(a,b){ return (a.date+" "+a.time).localeCompare(b.date+" "+b.time); });',
+    '  var el = document.getElementById("taskList");',
+    '  if(list.length === 0){ el.innerHTML = "<p style=\\"text-align:center;color:#64748B;font-size:13px;padding:18px 0;\\">ยังไม่มีรายการงานในวันที่เลือก</p>"; return; }',
+    '  el.innerHTML = list.map(function(t){',
+    '    var isDone = t.status === "completed";',
+    '    var isHigh = t.priority === "high";',
+    '    return "<div class=\\"task-item " + (isDone ? "done" : "") + "\\">" +',
+    '      "<div><div class=\\"task-title\\">" + escapeHtml(t.title) + (isHigh ? "<span class=\\"badge-high\\">🔥 ด่วน</span>" : "") + "</div>" +',
+    '      "<div class=\\"task-meta\\">🗓️ " + escapeHtml(t.date) + " · ⏰ " + escapeHtml(t.time) + " น. · " + (isDone ? "✓ เสร็จแล้ว" : "⏳ รอดำเนินการ") + "</div></div>" +',
+    '      "<div class=\\"actions\\">" +',
+    '      "<button class=\\"btn-act btn-done\\" data-id=\\"" + escapeHtml(t.id) + "\\" onclick=\\"handleToggle(this.dataset.id)\\">" + (isDone ? "↩ ย้อนสถานะ" : "✓ เสร็จแล้ว") + "</button>" +',
+    '      "<button class=\\"btn-act btn-del\\" data-id=\\"" + escapeHtml(t.id) + "\\" onclick=\\"handleDelete(this.dataset.id)\\">🗑️</button>" +',
+    '      "</div></div>";',
+    '  }).join("");',
+    '}',
+    'function escapeHtml(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }',
+    'function setMode(m){ filterMode = m; document.getElementById("tabDate").className = "tab" + (m==="date"?" active":""); document.getElementById("tabAll").className = "tab" + (m==="all"?" active":""); render(); }',
+    'function onDateChange(){ selectedDate = document.getElementById("filterDate").value; setMode("date"); }',
+    'function handleAdd(){',
+    '  var title = document.getElementById("inpTitle").value.trim();',
+    '  if(!title) return;',
+    '  var d = document.getElementById("inpDate").value;',
+    '  var tm = document.getElementById("inpTime").value || "09:00";',
+    '  var pr = document.getElementById("inpPrio").value;',
+    '  var btn = document.getElementById("btnAdd"); btn.disabled = true; btn.textContent = "กำลังบันทึก...";',
+    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; document.getElementById("inpTitle").value = ""; btn.disabled = false; btn.textContent = "+ บันทึกงานลงปฏิทินทีม"; render(); }).addTeamTaskFromPortal(title, d, tm, pr);',
+    '}',
+    'function handleToggle(id){',
+    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; render(); }).toggleTeamTaskStatusFromPortal(id);',
+    '}',
+    'function handleDelete(id){',
+    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; render(); }).deleteTeamTaskFromPortal(id);',
+    '}',
+    'render();',
+    '</script></body></html>'
+  ].join('\\n');
+
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('SheetCal LINE — ปฏิทินและจัดการงานของทีม')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function doPost(e) {
@@ -1898,18 +2247,22 @@ function doPost(e) {
           userMessage === 'เช็คเวลางาน' ||
           userMessage === 'สรุปงานวันนี้' ||
           userMessage === 'งานวันนี้' ||
+          userMessage === 'งานพรุ่งนี้' ||
+          userMessage === 'สรุปงานพรุ่งนี้' ||
+          userMessage === 'งานมะรืน' ||
+          userMessage === 'สรุปงานมะรืน' ||
           userMessage === 'สรุปงาน' ||
           userMessage === 'งานค้าง' ||
-          /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่)\\s+(.+)$/i.test(userMessage)
+          /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่|งานวันที่|ตารางงานวันที่|เช็คงานวันที่)\\s*(.+)$/i.test(userMessage)
         ) {
           var rows = taskSheet ? taskSheet.getDataRange().getValues().slice(1) : [];
           var queryDate = parseThaiCommand(userMessage).date || todayStr;
           var filtered = userMessage === 'งานค้าง'
             ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
             : rows.filter(function(r) { return String(r[3]).replace(/^'/, '') === queryDate; });
-          if (filtered.length === 0 && queryDate === todayStr) filtered = rows;
+          if (filtered.length === 0 && queryDate === todayStr && userMessage === 'สรุปงาน') filtered = rows;
           var flexBubble = buildSummaryFlexBubble(
-            userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : 'สรุปตารางงานแยกตามเวลา',
+            userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : ('สรุปตารางงานวันที่ ' + queryDate),
             queryDate,
             filtered
           );
@@ -1933,7 +2286,7 @@ function doPost(e) {
               'cat-work',
               parsed.priority,
               'pending',
-              30,
+              1,
               'FALSE',
               'line',
               now.toISOString()

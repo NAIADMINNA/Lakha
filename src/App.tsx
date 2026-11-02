@@ -206,6 +206,21 @@ export default function App() {
         ) {
           parsed.publicCalendarUrl = '';
         }
+        // Migrate legacy [30, 60, 1440] default timing and overdue catch-up that caused 18:00 tasks to fire at 21:29
+        if (!parsed._v27TimingFixed) {
+          if (
+            Array.isArray(parsed.reminderTimings) &&
+            parsed.reminderTimings.includes(1440) &&
+            parsed.reminderTimings.length === 3
+          ) {
+            parsed.reminderTimings = [1, 15, 30];
+          }
+          if (parsed.defaultRemindMinutes === 60) {
+            parsed.defaultRemindMinutes = 1;
+          }
+          parsed.notifyOnOverdue = false;
+          parsed._v27TimingFixed = true;
+        }
         return { ...DEFAULT_LINE_SETTINGS, ...parsed };
       }
       // Preserve token from v1 if present
@@ -997,17 +1012,12 @@ export default function App() {
     ]
   );
 
-  // Automatic Background Check for Upcoming Tasks based on customizable timing & task trigger rules (runs every 30s)
+  // Automatic Background Check for Upcoming Tasks based on exact task timing in Thailand Time (+07:00)
   useEffect(() => {
     if (!lineSettings.enabled) return;
 
-    const timer = setInterval(() => {
+    const checkDueTasks = () => {
       const now = new Date();
-      const maxConfiguredTiming = Math.max(
-        ...(Array.isArray(lineSettings.reminderTimings) && lineSettings.reminderTimings.length > 0
-          ? lineSettings.reminderTimings
-          : [lineSettings.defaultRemindMinutes || 60])
-      );
 
       for (const task of tasks) {
         if (task.status === TaskStatus.COMPLETED || task.lineNotified) {
@@ -1018,29 +1028,45 @@ export default function App() {
           continue;
         }
 
-        const taskDateTime = new Date(`${task.date}T${task.time}:00`);
+        const taskRemindMins =
+          typeof task.remindMinutesBefore === 'number'
+            ? task.remindMinutesBefore
+            : lineSettings.defaultRemindMinutes ?? 1;
+        // 0 = ปิดการแจ้งเตือนอัตโนมัติสำหรับงานนี้
+        if (taskRemindMins <= 0) {
+          continue;
+        }
+
+        const cleanTime = /^\d{1,2}:\d{2}$/.test((task.time || '').trim())
+          ? task.time.trim().padStart(5, '0')
+          : '09:00';
+        // Explicit +07:00 (Asia/Bangkok) so task time is always evaluated in Thailand time
+        const taskDateTime = new Date(`${task.date}T${cleanTime}:00+07:00`);
         if (isNaN(taskDateTime.getTime())) continue;
 
         const diffMinutes = (taskDateTime.getTime() - now.getTime()) / (1000 * 60);
-        const effectiveThreshold = Math.max(task.remindMinutesBefore || 0, maxConfiguredTiming);
 
-        if (diffMinutes > 0 && effectiveThreshold > 0 && diffMinutes <= effectiveThreshold) {
+        // Trigger ONLY within the task's configured reminder window (e.g. [0..taskRemindMins] before start,
+        // with a 5-minute grace window [-5..0] in case the tab just opened right at the scheduled minute).
+        // Never fire hours late (e.g. 21:29 for an 18:00 task) or 24 hours early!
+        if (diffMinutes <= taskRemindMins && diffMinutes >= -5) {
           dispatchLineReminder(task, false);
           break;
         }
 
-        // Also check overdue alert if enabled
+        // Optional overdue alert: only if user explicitly enabled notifyOnOverdue AND within 15 minutes past due
         if (
-          lineSettings.notifyOnOverdue !== false &&
-          diffMinutes <= 0 &&
-          diffMinutes >= -1440
+          lineSettings.notifyOnOverdue === true &&
+          diffMinutes < -5 &&
+          diffMinutes >= -15
         ) {
           dispatchLineReminder(task, false);
           break;
         }
       }
-    }, 30000);
+    };
 
+    const timer = setInterval(checkDueTasks, 15000);
     return () => clearInterval(timer);
   }, [lineSettings, tasks, dispatchLineReminder]);
 
@@ -1413,11 +1439,41 @@ export default function App() {
         }
         if (Array.isArray(data.tasks) && data.tasks.length > 0) {
           setTasks((prev) => {
+            const remoteById = new Map<string, Task>();
+            for (const rt of data.tasks as Task[]) {
+              if (rt && rt.id && rt.title && rt.date) {
+                remoteById.set(rt.id, rt);
+              }
+            }
+            let changed = false;
+            const updatedPrev = prev.map((p) => {
+              const r = remoteById.get(p.id);
+              if (
+                r &&
+                (r.status !== p.status ||
+                  r.title !== p.title ||
+                  r.date !== p.date ||
+                  r.time !== p.time)
+              ) {
+                changed = true;
+                return {
+                  ...p,
+                  title: r.title,
+                  date: r.date,
+                  time: r.time || p.time,
+                  status: r.status || p.status,
+                };
+              }
+              return p;
+            });
             const existingIds = new Set(prev.map((p) => p.id));
-            const newItems = (data.tasks as Task[]).filter(
-              (rt) => rt && rt.id && rt.title && rt.date && !existingIds.has(rt.id)
+            const newItems = Array.from(remoteById.values()).filter(
+              (rt) => !existingIds.has(rt.id)
             );
-            return newItems.length > 0 ? [...newItems, ...prev] : prev;
+            if (newItems.length > 0) {
+              return [...newItems, ...updatedPrev];
+            }
+            return changed ? updatedPrev : prev;
           });
         }
       } catch {

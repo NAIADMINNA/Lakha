@@ -61,9 +61,9 @@ export const INITIAL_LINE_LOGS: LineMessageLog[] = [];
 
 export const DEFAULT_LINE_SETTINGS: LineSettings = {
   enabled: true,
-  defaultRemindMinutes: 60,
-  reminderTimings: [30, 60, 1440],
-  notifyOnOverdue: true,
+  defaultRemindMinutes: 1,
+  reminderTimings: [1, 15, 30],
+  notifyOnOverdue: false,
   dailyDigestEnabled: true,
   dailyDigestTime: '08:30',
   messageFormat: 'executive_flex',

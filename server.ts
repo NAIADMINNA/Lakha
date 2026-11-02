@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import dotenv from 'dotenv';
+import { extractThaiDate, extractThaiTime } from './src/services/lineCommandParser';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
@@ -596,12 +597,30 @@ function buildSingleTaskReminderFlexMessage(params: {
       height: 'sm',
       action: {
         type: 'uri',
-        label: 'เปิดปฏิทินจัดการงาน',
+        label: 'เปิดดูปฏิทินและจัดการงาน',
         uri: params.appUrl,
       },
     });
   }
-  if (showCalBtn) {
+  try {
+    const parsedApp = new URL(params.appUrl);
+    const sheetParam = (parsedApp.searchParams.get('sheet') || '').trim();
+    if (sheetParam && !params.appUrl.includes('docs.google.com/spreadsheets')) {
+      footerButtons.push({
+        type: 'button',
+        style: 'secondary',
+        height: 'sm',
+        action: {
+          type: 'uri',
+          label: '📊 เปิดตารางงาน Google Sheets',
+          uri: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetParam)}/edit`,
+        },
+      });
+    }
+  } catch {
+    // Ignore URL parse error
+  }
+  if (showCalBtn && footerButtons.length < 2) {
     footerButtons.push({
       type: 'button',
       style: 'secondary',
@@ -1242,14 +1261,26 @@ async function startServer() {
           }
 
           if (runtimeChannelAccessToken && event.replyToken) {
-            const todayStr = new Date().toISOString().slice(0, 10);
+            const { todayYMD: todayStr } = getBangkokNowYMDAndHM();
+            const stripped = userText.replace(
+              /^(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\s*[:：-]?\s*/i,
+              ''
+            );
+            const dateResult = extractThaiDate(stripped);
+            const timeResult = extractThaiTime(dateResult.cleanedText);
+            const parsedTitle =
+              timeResult.cleanedText
+                .replace(/#(สูง|ด่วนมาก|ด่วน|high|ต่ำ|low|กลาง|ทั่วไป|medium)/gi, ' ')
+                .replace(/\b(เวลา|วันที่|ตอน|น\.|ของ)\b/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim() || stripped || userText;
             const flexReply = buildSingleTaskReminderFlexMessage({
-              taskTitle: userText.replace(/^(เพิ่มงาน|จดงาน|บันทึกงาน)\s*/i, ''),
+              taskTitle: parsedTitle,
               description: senderGroupId
                 ? `บันทึกลงปฏิทินทีมเรียบร้อยแล้ว (🔑 Group ID: ${senderGroupId})`
                 : 'บันทึกลงปฏิทิน SheetCal LINE และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
-              date: todayStr,
-              time: '09:00',
+              date: dateResult.dateStr || todayStr,
+              time: timeResult.timeStr || '09:00',
               categoryName: senderGroupId ? 'งานกลุ่ม LINE ของทีม' : 'บันทึกผ่านแชท LINE OA',
               categoryColor: '#06C755',
               priority: userText.includes('#สูง') || userText.includes('#ด่วน') ? 'high' : 'medium',
@@ -1368,10 +1399,11 @@ async function startServer() {
           ? rawAppUrl.replace(/^https:\/\/ais-pre-/i, 'https://ais-dev-')
           : rawAppUrl;
 
+      const { todayYMD: bangkokTodayStr } = getBangkokNowYMDAndHM();
       let flexMessage: unknown;
       if (Array.isArray(tasksList)) {
         flexMessage = buildDailyDigestFlexMessage(
-          date || dateTime || new Date().toISOString().slice(0, 10),
+          date || dateTime || bangkokTodayStr,
           tasksList,
           appUrl
         );
@@ -1386,7 +1418,7 @@ async function startServer() {
           description: description || text,
           date:
             date ||
-            (dateTime ? String(dateTime).slice(0, 10) : new Date().toISOString().slice(0, 10)),
+            (dateTime ? String(dateTime).slice(0, 10) : bangkokTodayStr),
           time: time || '09:00',
           categoryName: categoryName || 'ทั่วไป',
           categoryColor: categoryColor || '#4F46E5',

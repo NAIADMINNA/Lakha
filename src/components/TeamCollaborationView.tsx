@@ -648,6 +648,26 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                     >
                       เปิดหน้าเว็บปฏิทินนี้
                     </button>
+                    {gasUrlInput.trim().startsWith('https://script.google.com/macros/s/') && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateLineSettings({
+                            ...lineSettings,
+                            publicCalendarUrl: `${gasUrlInput.trim()}?view=calendar`,
+                          })
+                        }
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                          (lineSettings.publicCalendarUrl || '').startsWith(
+                            'https://script.google.com/macros/s/'
+                          )
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white text-emerald-900 border-emerald-300 hover:bg-emerald-50'
+                        }`}
+                      >
+                        🌐 เว็บปฏิทินทีม Apps Script (ทุกคนในกลุ่มเปิดได้ 100%)
+                      </button>
+                    )}
                     {spreadsheetUrl && (
                       <button
                         type="button"
@@ -693,7 +713,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                       publicCalendarUrl: e.target.value,
                     })
                   }
-                  placeholder="เว้นว่างเพื่อเปิดหน้าเว็บปฏิทินนี้โดยอัตโนมัติ หรือวางลิงก์เว็บจริง (เช่น GitHub Pages / Google Sheets)"
+                  placeholder="เว้นว่างเพื่อเปิดหน้าเว็บปฏิทินนี้ หรือเลือก '🌐 เว็บปฏิทินทีม Apps Script' เพื่อให้สมาชิกทุกคนในกลุ่มเปิดได้โดยไม่ต้องล็อกอิน"
                   className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-slate-800 focus:outline-none focus:border-[#06C755]"
                 />
               </div>
