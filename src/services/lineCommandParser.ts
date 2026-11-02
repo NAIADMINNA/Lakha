@@ -922,7 +922,11 @@ export function resolveTeamCalendarAppUrl(options?: {
   const custom = (options?.customPublicUrl || '').trim();
   let rawBase = '';
 
-  if (custom && /^https?:\/\//i.test(custom)) {
+  if (
+    custom &&
+    /^https?:\/\//i.test(custom) &&
+    !custom.includes('script.google.com/macros/s/')
+  ) {
     rawBase = custom;
     // Heal stale ais-pre- URLs that return 404 when running inside the active ais-dev- environment
     if (
@@ -983,13 +987,56 @@ export function generateGoogleAppsScriptCode(
   channelAccessToken?: string,
   appUrl?: string
 ): string {
-  const sheetIdDisplay = (spreadsheetId || 'วาง_SPREADSHEET_ID_ของคุณที่นี่')
+  let effectiveSheetId = (spreadsheetId || '').trim();
+  let initialTasksJson = '[]';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (!effectiveSheetId || effectiveSheetId.includes('วาง_SPREADSHEET_ID')) {
+        const rawMeta = localStorage.getItem('sheetcal_sheet_meta_v1');
+        if (rawMeta) {
+          const parsedMeta = JSON.parse(rawMeta);
+          if (parsedMeta?.spreadsheetId) {
+            effectiveSheetId = String(parsedMeta.spreadsheetId).trim();
+          }
+        }
+      }
+      const rawTasks = localStorage.getItem('sheetcal_tasks_v3_clean');
+      if (rawTasks) {
+        const parsedTasks = JSON.parse(rawTasks);
+        if (Array.isArray(parsedTasks)) {
+          initialTasksJson = JSON.stringify(
+            parsedTasks.map((t: Record<string, unknown>) => ({
+              id: String(t.id || ''),
+              title: String(t.title || ''),
+              description: String(t.description || ''),
+              date: String(t.date || ''),
+              time: String(t.time || '09:00'),
+              categoryId: String(t.categoryId || 'cat-work'),
+              priority: String(t.priority || 'medium'),
+              status: String(t.status || 'pending'),
+              remindMinutesBefore: Number(t.remindMinutesBefore || 1),
+              lineNotified: Boolean(t.lineNotified),
+              source: String(t.source || 'web'),
+              updatedAt: String(t.updatedAt || new Date().toISOString()),
+            }))
+          );
+        }
+      }
+    }
+  } catch {
+    // Ignore localStorage error
+  }
+
+  const sheetIdDisplay = (effectiveSheetId || 'วาง_SPREADSHEET_ID_ของคุณที่นี่')
     .replace(/[\r\n']/g, '')
     .trim();
   const tokenDisplay = channelAccessToken?.trim()
     ? channelAccessToken.trim().replace(/^Bearer\s+/i, '').replace(/[\r\n']/g, '').trim()
     : 'วาง_LINE_CHANNEL_ACCESS_TOKEN_ของคุณที่นี่';
-  const webAppUrl = (appUrl || 'https://calendar.google.com')
+  const webAppUrl = (
+    appUrl ||
+    (typeof window !== 'undefined' ? window.location.origin : 'https://calendar.google.com')
+  )
     .replace(/[\r\n']/g, '')
     .trim();
 
@@ -1009,6 +1056,7 @@ export function generateGoogleAppsScriptCode(
 const SPREADSHEET_ID = '${sheetIdDisplay}';
 const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
 const WEB_APP_URL = '${webAppUrl}';
+const INITIAL_WEB_TASKS = ${initialTasksJson};
 
 function getSelfWebAppUrl() {
   try {
@@ -1024,13 +1072,8 @@ function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   var base = String(overrideBaseUrl || WEB_APP_URL || '').trim();
   var selfGasUrl = getSelfWebAppUrl();
   var sheetDirect = getSpreadsheetDirectUrl();
-  // หากลิงก์เป็น ais-dev- (ซึ่งเปิดได้เฉพาะเจ้าของบัญชี AI Studio เท่านั้น สมาชิกคนอื่นในกลุ่มกดแล้วจะติดสิทธิ์หรือ Error)
-  // ให้สลับไปเปิดหน้าเว็บปฏิทินทีมบน Google Apps Script (Anyone) โดยอัตโนมัติ เพื่อให้ทุกคนในกลุ่ม LINE เปิดดูและจัดการงานได้ 100%
-  if ((!base || base.indexOf('http') !== 0 || base.indexOf('https://ais-dev-') === 0) && selfGasUrl) {
-    base = selfGasUrl;
-  }
-  if (base.indexOf('http') !== 0) {
-    base = sheetDirect || 'https://calendar.google.com';
+  if (!base || base.indexOf('http') !== 0) {
+    base = selfGasUrl || sheetDirect || 'https://calendar.google.com';
   }
   if (base.indexOf('calendar.google.com') !== -1 || base.indexOf('docs.google.com') !== -1) {
     return base;
@@ -1044,12 +1087,17 @@ function getCalendarDeepLink(overrideBaseUrl, dateStr) {
     url += sep + 'section=calendar';
     sep = '&';
   }
+  if (url.indexOf('workspace=') === -1 && url.indexOf('script.google.com/macros/s/') === -1) {
+    url += sep + 'workspace=sheetcal-team-clean';
+    sep = '&';
+  }
   if (dateStr && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(dateStr)) && url.indexOf('date=') === -1) {
     url += sep + 'date=' + encodeURIComponent(String(dateStr));
     sep = '&';
   }
-  if (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1 && url.indexOf('sheet=') === -1) {
-    url += sep + 'sheet=' + encodeURIComponent(SPREADSHEET_ID);
+  var effectiveSheet = getEffectiveSpreadsheetId();
+  if (effectiveSheet && url.indexOf('sheet=') === -1) {
+    url += sep + 'sheet=' + encodeURIComponent(effectiveSheet);
     sep = '&';
   }
   if (url.indexOf('openExternalBrowser=') === -1) {
@@ -1058,9 +1106,21 @@ function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   return url;
 }
 
-function getSpreadsheetDirectUrl() {
+function getEffectiveSpreadsheetId() {
   if (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1 && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1) {
-    return 'https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID + '/edit';
+    return SPREADSHEET_ID;
+  }
+  try {
+    var autoId = PropertiesService.getScriptProperties().getProperty('AUTO_CREATED_SHEET_ID') || '';
+    if (autoId) return autoId;
+  } catch (err) {}
+  return '';
+}
+
+function getSpreadsheetDirectUrl() {
+  var sid = getEffectiveSpreadsheetId();
+  if (sid) {
+    return 'https://docs.google.com/spreadsheets/d/' + sid + '/edit';
   }
   return '';
 }
@@ -1504,68 +1564,182 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
   };
 }
 
-function readSheetTasksForWeb() {
-  try {
-    var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1 && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1)
-      ? SpreadsheetApp.openById(SPREADSHEET_ID)
-      : SpreadsheetApp.getActiveSpreadsheet();
-    var taskSheet = ss.getSheetByName('Tasks');
-    if (!taskSheet || taskSheet.getLastRow() <= 1) return [];
-    var rows = taskSheet.getDataRange().getValues().slice(1);
-    return rows.map(function(r, idx) {
-      return {
-        id: String(r[0] || ('sheet-task-' + idx)),
-        title: String(r[1] || 'งาน'),
-        description: String(r[2] || ''),
-        date: String(r[3] || '').replace(/^'/, ''),
-        time: String(r[4] || '09:00').replace(/^'/, ''),
-        categoryId: String(r[5] || 'cat-work'),
-        priority: String(r[6] || 'medium'),
-        status: String(r[7] || 'pending'),
-        remindMinutesBefore: Number(r[8] || 30),
-        lineNotified: String(r[9]).toUpperCase() === 'TRUE',
-        source: String(r[10] || 'sheets'),
-        updatedAt: String(r[11] || new Date().toISOString())
-      };
-    }).filter(function(t) { return Boolean(t.title && t.date); });
-  } catch (err) {
-    return [];
+function formatCellDateYMD(val) {
+  if (!val) return '';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
+    return Utilities.formatDate(val, 'Asia/Bangkok', 'yyyy-MM-dd');
   }
+  var s = String(val).replace(/^'/, '').trim();
+  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) return s;
+  var m = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
+  if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+  return s;
+}
+
+function formatCellTimeHM(val) {
+  if (!val) return '09:00';
+  if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
+    return Utilities.formatDate(val, 'Asia/Bangkok', 'HH:mm');
+  }
+  var s = String(val).replace(/^'/, '').trim();
+  var m = s.match(/^(\\d{1,2})[:.](\\d{2})/);
+  if (m) return ('0' + m[1]).slice(-2) + ':' + m[2];
+  return '09:00';
+}
+
+function getSavedTasksFromProperties() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty('SAVED_TASKS_JSON');
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {}
+  return null;
+}
+
+function saveTasksToProperties(tasksList) {
+  try {
+    if (Array.isArray(tasksList)) {
+      PropertiesService.getScriptProperties().setProperty('SAVED_TASKS_JSON', JSON.stringify(tasksList));
+    }
+  } catch (err) {}
+}
+
+function fetchTasksFromMainWebApp() {
+  try {
+    if (!WEB_APP_URL || WEB_APP_URL.indexOf('http') !== 0 || WEB_APP_URL.indexOf('calendar.google.com') !== -1) {
+      return null;
+    }
+    var cleanBase = WEB_APP_URL.replace(/\\/+$/, '');
+    var resp = UrlFetchApp.fetch(cleanBase + '/api/collab/workspace/sheetcal-team-clean', {
+      method: 'get',
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300) {
+      var data = JSON.parse(resp.getContentText() || '{}');
+      if (data && data.workspace && Array.isArray(data.workspace.tasks) && data.workspace.tasks.length > 0) {
+        return data.workspace.tasks;
+      }
+    }
+  } catch (err) {}
+  return null;
+}
+
+function pushTasksToMainWebApp(tasksList) {
+  try {
+    if (!WEB_APP_URL || WEB_APP_URL.indexOf('http') !== 0 || WEB_APP_URL.indexOf('calendar.google.com') !== -1) {
+      return;
+    }
+    var cleanBase = WEB_APP_URL.replace(/\\/+$/, '');
+    UrlFetchApp.fetch(cleanBase + '/api/collab/workspace/sheetcal-team-clean', {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        updatedBy: 'LINE Group Portal',
+        tasks: tasksList
+      }),
+      muteHttpExceptions: true
+    });
+  } catch (err) {}
+}
+
+function readSheetTasksForWeb() {
+  var webTasks = fetchTasksFromMainWebApp();
+  if (Array.isArray(webTasks) && webTasks.length > 0) {
+    saveTasksToProperties(webTasks);
+    return webTasks;
+  }
+
+  var sheetTasks = [];
+  try {
+    var ss = openSafeSpreadsheet();
+    if (ss) {
+      var taskSheet = ss.getSheetByName('Tasks');
+      if (taskSheet && taskSheet.getLastRow() > 1) {
+        var rows = taskSheet.getDataRange().getValues().slice(1);
+        sheetTasks = rows.map(function(r, idx) {
+          return {
+            id: String(r[0] || ('sheet-task-' + idx)),
+            title: String(r[1] || 'งาน'),
+            description: String(r[2] || ''),
+            date: formatCellDateYMD(r[3]),
+            time: formatCellTimeHM(r[4]),
+            categoryId: String(r[5] || 'cat-work'),
+            priority: String(r[6] || 'medium'),
+            status: String(r[7] || 'pending'),
+            remindMinutesBefore: Number(r[8] || 1),
+            lineNotified: String(r[9]).toUpperCase() === 'TRUE',
+            source: String(r[10] || 'sheets'),
+            updatedAt: String(r[11] || new Date().toISOString())
+          };
+        }).filter(function(t) { return Boolean(t.title && t.date); });
+      }
+    }
+  } catch (err) {}
+
+  var propTasks = getSavedTasksFromProperties();
+  if (sheetTasks.length > 0) {
+    if (Array.isArray(propTasks) && propTasks.length > 0) {
+      var byId = {};
+      sheetTasks.forEach(function(t) { byId[t.id] = t; });
+      propTasks.forEach(function(pt) {
+        if (pt && pt.id && !byId[pt.id]) {
+          sheetTasks.push(pt);
+        }
+      });
+    }
+    saveTasksToProperties(sheetTasks);
+    return sheetTasks;
+  }
+
+  if (Array.isArray(propTasks) && propTasks.length > 0) {
+    return propTasks;
+  }
+
+  if (typeof INITIAL_WEB_TASKS !== 'undefined' && Array.isArray(INITIAL_WEB_TASKS) && INITIAL_WEB_TASKS.length > 0) {
+    saveTasksToProperties(INITIAL_WEB_TASKS);
+    try {
+      writeSheetTasksFromWeb(INITIAL_WEB_TASKS);
+    } catch (e) {}
+    return INITIAL_WEB_TASKS;
+  }
+
+  return [];
 }
 
 function writeSheetTasksFromWeb(tasksList) {
+  var validList = Array.isArray(tasksList) ? tasksList.filter(function(t) { return Boolean(t && t.title); }) : [];
+  saveTasksToProperties(validList);
+  pushTasksToMainWebApp(validList);
   try {
-    var ss = (SPREADSHEET_ID && SPREADSHEET_ID.indexOf('PUT_YOUR_') === -1 && SPREADSHEET_ID.indexOf('วาง_SPREADSHEET_ID') === -1)
-      ? SpreadsheetApp.openById(SPREADSHEET_ID)
-      : SpreadsheetApp.getActiveSpreadsheet();
+    var ss = openSafeSpreadsheet();
+    if (!ss) return true;
     var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
     taskSheet.clearContents();
     var rows = [
       ['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']
     ];
-    if (Array.isArray(tasksList)) {
-      tasksList.forEach(function(t) {
-        if (!t || !t.title) return;
-        rows.push([
-          String(t.id || ('task-' + new Date().getTime())),
-          String(t.title || ''),
-          String(t.description || ''),
-          "'" + String(t.date || ''),
-          "'" + String(t.time || '09:00'),
-          String(t.categoryId || 'cat-work'),
-          String(t.priority || 'medium'),
-          String(t.status || 'pending'),
-          Number(t.remindMinutesBefore || 30),
-          t.lineNotified ? 'TRUE' : 'FALSE',
-          String(t.source || 'web'),
-          String(t.updatedAt || new Date().toISOString())
-        ]);
-      });
-    }
+    validList.forEach(function(t) {
+      rows.push([
+        String(t.id || ('task-' + new Date().getTime())),
+        String(t.title || ''),
+        String(t.description || ''),
+        "'" + String(t.date || ''),
+        "'" + String(t.time || '09:00'),
+        String(t.categoryId || 'cat-work'),
+        String(t.priority || 'medium'),
+        String(t.status || 'pending'),
+        Number(t.remindMinutesBefore || 1),
+        t.lineNotified ? 'TRUE' : 'FALSE',
+        String(t.source || 'web'),
+        String(t.updatedAt || new Date().toISOString())
+      ]);
+    });
     taskSheet.getRange(1, 1, rows.length, 12).setValues(rows);
     return true;
   } catch (err) {
-    return false;
+    return true;
   }
 }
 
@@ -1677,79 +1851,98 @@ function openSafeSpreadsheet() {
     ) {
       return SpreadsheetApp.openById(SPREADSHEET_ID);
     }
-    return SpreadsheetApp.getActiveSpreadsheet();
-  } catch (err) {
-    try {
-      return SpreadsheetApp.getActiveSpreadsheet();
-    } catch (err2) {
-      return null;
+  } catch (err) {}
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active;
+  } catch (err2) {}
+  try {
+    var savedAutoId = PropertiesService.getScriptProperties().getProperty('AUTO_CREATED_SHEET_ID') || '';
+    if (savedAutoId) {
+      return SpreadsheetApp.openById(savedAutoId);
     }
-  }
+  } catch (err3) {}
+  try {
+    var created = SpreadsheetApp.create('SheetCal LINE — ตารางงานของทีม');
+    if (created && created.getId()) {
+      PropertiesService.getScriptProperties().setProperty('AUTO_CREATED_SHEET_ID', created.getId());
+      return created;
+    }
+  } catch (err4) {}
+  return null;
 }
 
 function addTeamTaskFromPortal(title, dateStr, timeStr, priorityVal) {
   var now = new Date();
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
   var cleanTitle = String(title || '').trim();
-  if (!cleanTitle) return readSheetTasksForWeb();
+  var currentTasks = readSheetTasksForWeb();
+  if (!cleanTitle) return currentTasks;
   var cleanDate = /^\\d{4}-\\d{2}-\\d{2}$/.test(String(dateStr || '').trim()) ? String(dateStr).trim() : todayStr;
   var cleanTime = /^\\d{2}:\\d{2}$/.test(String(timeStr || '').trim()) ? String(timeStr).trim() : '09:00';
   var cleanPrio = (priorityVal === 'high' || priorityVal === 'low') ? priorityVal : 'medium';
-  var ss = openSafeSpreadsheet();
-  if (ss) {
-    var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
-    if (taskSheet.getLastRow() === 0) {
-      taskSheet.appendRow(['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']);
-    }
-    taskSheet.appendRow([
-      'task-' + now.getTime(),
-      cleanTitle,
-      'เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)',
-      "'" + cleanDate,
-      "'" + cleanTime,
-      'cat-work',
-      cleanPrio,
-      'pending',
-      1,
-      'FALSE',
-      'web',
-      now.toISOString()
-    ]);
-  }
-  return readSheetTasksForWeb();
+  var newTask = {
+    id: 'task-' + now.getTime(),
+    title: cleanTitle,
+    description: 'เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)',
+    date: cleanDate,
+    time: cleanTime,
+    categoryId: 'cat-work',
+    priority: cleanPrio,
+    status: 'pending',
+    remindMinutesBefore: 1,
+    lineNotified: false,
+    source: 'web',
+    updatedAt: now.toISOString()
+  };
+  var nextTasks = [newTask].concat(currentTasks);
+  writeSheetTasksFromWeb(nextTasks);
+  return nextTasks;
 }
 
 function toggleTeamTaskStatusFromPortal(taskId) {
-  var ss = openSafeSpreadsheet();
-  if (!ss || !taskId) return readSheetTasksForWeb();
-  var taskSheet = ss.getSheetByName('Tasks');
-  if (!taskSheet || taskSheet.getLastRow() <= 1) return readSheetTasksForWeb();
-  var data = taskSheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(taskId)) {
-      var currentStatus = String(data[i][7] || 'pending');
-      var nextStatus = currentStatus === 'completed' ? 'pending' : 'completed';
-      taskSheet.getRange(i + 1, 8).setValue(nextStatus);
-      taskSheet.getRange(i + 1, 12).setValue(new Date().toISOString());
-      break;
+  var currentTasks = readSheetTasksForWeb();
+  if (!taskId) return currentTasks;
+  var nowIso = new Date().toISOString();
+  var nextTasks = currentTasks.map(function(t) {
+    if (String(t.id) === String(taskId)) {
+      return {
+        id: t.id,
+        title: t.title,
+        description: t.description || '',
+        date: t.date,
+        time: t.time || '09:00',
+        categoryId: t.categoryId || 'cat-work',
+        priority: t.priority || 'medium',
+        status: t.status === 'completed' ? 'pending' : 'completed',
+        remindMinutesBefore: t.remindMinutesBefore || 1,
+        lineNotified: Boolean(t.lineNotified),
+        source: t.source || 'web',
+        updatedAt: nowIso
+      };
     }
-  }
-  return readSheetTasksForWeb();
+    return t;
+  });
+  writeSheetTasksFromWeb(nextTasks);
+  return nextTasks;
 }
 
 function deleteTeamTaskFromPortal(taskId) {
-  var ss = openSafeSpreadsheet();
-  if (!ss || !taskId) return readSheetTasksForWeb();
-  var taskSheet = ss.getSheetByName('Tasks');
-  if (!taskSheet || taskSheet.getLastRow() <= 1) return readSheetTasksForWeb();
-  var data = taskSheet.getDataRange().getValues();
-  for (var i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][0]) === String(taskId)) {
-      taskSheet.deleteRow(i + 1);
-      break;
-    }
-  }
-  return readSheetTasksForWeb();
+  var currentTasks = readSheetTasksForWeb();
+  if (!taskId) return currentTasks;
+  var nextTasks = currentTasks.filter(function(t) {
+    return String(t.id) !== String(taskId);
+  });
+  writeSheetTasksFromWeb(nextTasks);
+  return nextTasks;
+}
+
+function escapeServerHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function doGet(e) {
@@ -1773,6 +1966,30 @@ function doGet(e) {
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
   var initDate = (params.date && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(params.date))) ? String(params.date) : todayStr;
   var sheetUrl = getSpreadsheetDirectUrl();
+  var totalCount = tasks.length;
+  var doneCount = tasks.filter(function(t) { return t.status === 'completed'; }).length;
+  var pendingCount = totalCount - doneCount;
+
+  var sortedInitial = tasks.slice().sort(function(a, b) {
+    return String(a.date + ' ' + a.time).localeCompare(String(b.date + ' ' + b.time));
+  });
+  var initialListHtml = sortedInitial.length === 0
+    ? '<p class="empty-msg">ยังไม่มีรายการงานในระบบ</p>'
+    : sortedInitial.map(function(t) {
+        var isDone = t.status === 'completed';
+        var isHigh = t.priority === 'high';
+        return '<div class="task-item' + (isDone ? ' done' : '') + '">' +
+          '<div><div class="task-title">' + escapeServerHtml(t.title) +
+          (isHigh ? '<span class="badge-high">🔥 ด่วน</span>' : '') + '</div>' +
+          '<div class="task-meta">🗓️ ' + escapeServerHtml(t.date) + ' · ⏰ ' + escapeServerHtml(t.time) + ' น. · ' +
+          (isDone ? '✓ เสร็จแล้ว' : '⏳ รอดำเนินการ') + '</div></div>' +
+          '<div class="actions">' +
+          '<button class="btn-act btn-done" data-id="' + escapeServerHtml(t.id) + '" onclick="handleToggle(this.getAttribute(\\'data-id\\'))">' +
+          (isDone ? '↩ ย้อนสถานะ' : '✓ เสร็จแล้ว') + '</button>' +
+          '<button class="btn-act btn-del" data-id="' + escapeServerHtml(t.id) + '" onclick="handleDelete(this.getAttribute(\\'data-id\\'))">🗑️</button>' +
+          '</div></div>';
+      }).join('');
+
   var html = [
     '<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">',
@@ -1801,6 +2018,7 @@ function doGet(e) {
     'input,select{width:100%;padding:9px 11px;border-radius:10px;border:1px solid #CBD5E1;font-size:13px;background:#fff;}',
     '.btn-add{width:100%;padding:10px;border-radius:10px;border:none;background:#06C755;color:#fff;font-size:13px;font-weight:700;cursor:pointer;}',
     '.btn-add:disabled{opacity:0.6;}',
+    '.empty-msg{text-align:center;color:#64748B;font-size:13px;padding:18px 0;margin:0;}',
     '.task-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border-radius:12px;border:1px solid #E2E8F0;margin-bottom:8px;background:#F8FAFC;}',
     '.task-item.done{background:#F0FDF4;border-color:#BBF7D0;opacity:0.85;}',
     '.task-title{font-size:14px;font-weight:600;margin:0 0 3px 0;}',
@@ -1814,14 +2032,15 @@ function doGet(e) {
     '</style></head><body><div class="wrap">',
     '<div class="header">',
     '<h1>📅 ปฏิทินและจัดการงานของทีม (SheetCal LINE)</h1>',
-    '<p>สมาชิกทุกคนในกลุ่ม LINE สามารถเปิดดูตารางงาน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ Google Sheets อัตโนมัติ)</p>',
+    '<p>สมาชิกทุกคนในกลุ่ม LINE สามารถเปิดดูตารางงาน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ข้อมูลตรงกับระบบหลัก)</p>',
     '<div class="top-links">',
     (sheetUrl ? '<a class="btn-link" href="' + sheetUrl + '" target="_blank">📊 เปิดตาราง Google Sheets</a>' : ''),
+    (WEB_APP_URL && WEB_APP_URL.indexOf('http') === 0 ? '<a class="btn-link" href="' + WEB_APP_URL + '" target="_blank">💻 เปิดหน้าเว็บระบบหลัก</a>' : ''),
     '</div></div>',
     '<div class="stats">',
-    '<div class="stat-card"><div class="stat-num" id="stTotal">0</div><div class="stat-lbl">งานทั้งหมด</div></div>',
-    '<div class="stat-card"><div class="stat-num" style="color:#D97706" id="stPending">0</div><div class="stat-lbl">รอดำเนินการ</div></div>',
-    '<div class="stat-card"><div class="stat-num" style="color:#16A34A" id="stDone">0</div><div class="stat-lbl">เสร็จแล้ว</div></div>',
+    '<div class="stat-card"><div class="stat-num" id="stTotal">' + totalCount + '</div><div class="stat-lbl">งานทั้งหมด</div></div>',
+    '<div class="stat-card"><div class="stat-num" style="color:#D97706" id="stPending">' + pendingCount + '</div><div class="stat-lbl">รอดำเนินการ</div></div>',
+    '<div class="stat-card"><div class="stat-num" style="color:#16A34A" id="stDone">' + doneCount + '</div><div class="stat-lbl">เสร็จแล้ว</div></div>',
     '</div>',
     '<div class="card">',
     '<div class="card-title"><span>➕ เพิ่มงานใหม่เข้าปฏิทินของทีม</span></div>',
@@ -1841,35 +2060,76 @@ function doGet(e) {
     '<button class="tab active" id="tabAll" onclick="setMode(\\'all\\')">ดูงานทั้งหมด</button>',
     '<input type="date" id="filterDate" value="' + initDate + '" onchange="onDateChange()" style="width:auto;padding:5px 8px;font-size:12px;" />',
     '</div></div>',
-    '<div id="taskList"></div>',
+    '<div id="taskList">' + initialListHtml + '</div>',
     '</div></div>',
     '<script>',
     'var tasks = ' + JSON.stringify(tasks) + ';',
+    'var mainWebAppUrl = ' + JSON.stringify(WEB_APP_URL || '') + ';',
     'var filterMode = "all";',
     'var selectedDate = "' + initDate + '";',
+    'function syncWithMainServer(actionPayload){',
+    '  if(!mainWebAppUrl || mainWebAppUrl.indexOf("http") !== 0 || mainWebAppUrl.indexOf("calendar.google.com") !== -1) return;',
+    '  var apiUrl = mainWebAppUrl.replace(/\\/+$/, "") + "/api/collab/workspace/sheetcal-team-clean";',
+    '  if(actionPayload){',
+    '    fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(actionPayload) }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks)){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '  } else {',
+    '    fetch(apiUrl).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks) && d.workspace.tasks.length > 0){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '  }',
+    '}',
     'function render(){',
     '  var total = tasks.length;',
     '  var done = tasks.filter(function(t){return t.status==="completed";}).length;',
-    '  document.getElementById("stTotal").textContent = total;',
-    '  document.getElementById("stPending").textContent = total - done;',
-    '  document.getElementById("stDone").textContent = done;',
+    '  document.getElementById("stTotal").textContent = String(total);',
+    '  document.getElementById("stPending").textContent = String(total - done);',
+    '  document.getElementById("stDone").textContent = String(done);',
     '  var list = filterMode === "date" ? tasks.filter(function(t){return t.date === selectedDate;}) : tasks.slice();',
-    '  list.sort(function(a,b){ return (a.date+" "+a.time).localeCompare(b.date+" "+b.time); });',
+    '  list.sort(function(a,b){ return String(a.date+" "+a.time).localeCompare(String(b.date+" "+b.time)); });',
     '  var el = document.getElementById("taskList");',
-    '  if(list.length === 0){ el.innerHTML = "<p style=\\"text-align:center;color:#64748B;font-size:13px;padding:18px 0;\\">ยังไม่มีรายการงานในวันที่เลือก</p>"; return; }',
-    '  el.innerHTML = list.map(function(t){',
+    '  el.innerHTML = "";',
+    '  if(list.length === 0){',
+    '    var p = document.createElement("p");',
+    '    p.className = "empty-msg";',
+    '    p.textContent = "ยังไม่มีรายการงานในวันที่เลือก";',
+    '    el.appendChild(p);',
+    '    return;',
+    '  }',
+    '  list.forEach(function(t){',
     '    var isDone = t.status === "completed";',
     '    var isHigh = t.priority === "high";',
-    '    return "<div class=\\"task-item " + (isDone ? "done" : "") + "\\">" +',
-    '      "<div><div class=\\"task-title\\">" + escapeHtml(t.title) + (isHigh ? "<span class=\\"badge-high\\">🔥 ด่วน</span>" : "") + "</div>" +',
-    '      "<div class=\\"task-meta\\">🗓️ " + escapeHtml(t.date) + " · ⏰ " + escapeHtml(t.time) + " น. · " + (isDone ? "✓ เสร็จแล้ว" : "⏳ รอดำเนินการ") + "</div></div>" +',
-    '      "<div class=\\"actions\\">" +',
-    '      "<button class=\\"btn-act btn-done\\" data-id=\\"" + escapeHtml(t.id) + "\\" onclick=\\"handleToggle(this.dataset.id)\\">" + (isDone ? "↩ ย้อนสถานะ" : "✓ เสร็จแล้ว") + "</button>" +',
-    '      "<button class=\\"btn-act btn-del\\" data-id=\\"" + escapeHtml(t.id) + "\\" onclick=\\"handleDelete(this.dataset.id)\\">🗑️</button>" +',
-    '      "</div></div>";',
-    '  }).join("");',
+    '    var row = document.createElement("div");',
+    '    row.className = isDone ? "task-item done" : "task-item";',
+    '    var left = document.createElement("div");',
+    '    var titleDiv = document.createElement("div");',
+    '    titleDiv.className = "task-title";',
+    '    titleDiv.textContent = t.title || "งาน";',
+    '    if(isHigh){',
+    '      var b = document.createElement("span");',
+    '      b.className = "badge-high";',
+    '      b.textContent = "🔥 ด่วน";',
+    '      titleDiv.appendChild(b);',
+    '    }',
+    '    var metaDiv = document.createElement("div");',
+    '    metaDiv.className = "task-meta";',
+    '    metaDiv.textContent = "🗓️ " + (t.date||"") + " · ⏰ " + (t.time||"09:00") + " น. · " + (isDone ? "✓ เสร็จแล้ว" : "⏳ รอดำเนินการ");',
+    '    left.appendChild(titleDiv);',
+    '    left.appendChild(metaDiv);',
+    '    var acts = document.createElement("div");',
+    '    acts.className = "actions";',
+    '    var btnDone = document.createElement("button");',
+    '    btnDone.className = "btn-act btn-done";',
+    '    btnDone.textContent = isDone ? "↩ ย้อนสถานะ" : "✓ เสร็จแล้ว";',
+    '    btnDone.onclick = function(){ handleToggle(t.id); };',
+    '    var btnDel = document.createElement("button");',
+    '    btnDel.className = "btn-act btn-del";',
+    '    btnDel.textContent = "🗑️";',
+    '    btnDel.onclick = function(){ handleDelete(t.id); };',
+    '    acts.appendChild(btnDone);',
+    '    acts.appendChild(btnDel);',
+    '    row.appendChild(left);',
+    '    row.appendChild(acts);',
+    '    el.appendChild(row);',
+    '  });',
     '}',
-    'function escapeHtml(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }',
     'function setMode(m){ filterMode = m; document.getElementById("tabDate").className = "tab" + (m==="date"?" active":""); document.getElementById("tabAll").className = "tab" + (m==="all"?" active":""); render(); }',
     'function onDateChange(){ selectedDate = document.getElementById("filterDate").value; setMode("date"); }',
     'function handleAdd(){',
@@ -1878,16 +2138,33 @@ function doGet(e) {
     '  var d = document.getElementById("inpDate").value;',
     '  var tm = document.getElementById("inpTime").value || "09:00";',
     '  var pr = document.getElementById("inpPrio").value;',
-    '  var btn = document.getElementById("btnAdd"); btn.disabled = true; btn.textContent = "กำลังบันทึก...";',
-    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; document.getElementById("inpTitle").value = ""; btn.disabled = false; btn.textContent = "+ บันทึกงานลงปฏิทินทีม"; render(); }).addTeamTaskFromPortal(title, d, tm, pr);',
+    '  var optimisticTask = { id: "task-" + new Date().getTime(), title: title, description: "เพิ่มผ่านหน้าปฏิทินทีม", date: d, time: tm, categoryId: "cat-work", priority: pr, status: "pending", remindMinutesBefore: 1, lineNotified: false, source: "web", updatedAt: new Date().toISOString() };',
+    '  tasks = [optimisticTask].concat(tasks);',
+    '  document.getElementById("inpTitle").value = "";',
+    '  render();',
+    '  syncWithMainServer({ action: "add_task", task: optimisticTask, tasks: tasks });',
+    '  if(typeof google !== "undefined" && google.script && google.script.run){',
+    '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated) && updated.length > 0){ tasks = updated; render(); } }).withFailureHandler(function(){}).addTeamTaskFromPortal(title, d, tm, pr);',
+    '  }',
     '}',
     'function handleToggle(id){',
-    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; render(); }).toggleTeamTaskStatusFromPortal(id);',
+    '  tasks = tasks.map(function(t){ return String(t.id) === String(id) ? Object.assign({}, t, { status: t.status === "completed" ? "pending" : "completed" }) : t; });',
+    '  render();',
+    '  syncWithMainServer({ action: "toggle_task", taskId: id, tasks: tasks });',
+    '  if(typeof google !== "undefined" && google.script && google.script.run){',
+    '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated) && updated.length > 0){ tasks = updated; render(); } }).withFailureHandler(function(){}).toggleTeamTaskStatusFromPortal(id);',
+    '  }',
     '}',
     'function handleDelete(id){',
-    '  google.script.run.withSuccessHandler(function(updated){ tasks = updated || []; render(); }).deleteTeamTaskFromPortal(id);',
+    '  tasks = tasks.filter(function(t){ return String(t.id) !== String(id); });',
+    '  render();',
+    '  syncWithMainServer({ action: "delete_task", taskId: id, tasks: tasks });',
+    '  if(typeof google !== "undefined" && google.script && google.script.run){',
+    '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated)){ tasks = updated; render(); } }).withFailureHandler(function(){}).deleteTeamTaskFromPortal(id);',
+    '  }',
     '}',
     'render();',
+    'syncWithMainServer();',
     '</script></body></html>'
   ].join('\\n');
 
@@ -2255,7 +2532,10 @@ function doPost(e) {
           userMessage === 'งานค้าง' ||
           /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่|งานวันที่|ตารางงานวันที่|เช็คงานวันที่)\\s*(.+)$/i.test(userMessage)
         ) {
-          var rows = taskSheet ? taskSheet.getDataRange().getValues().slice(1) : [];
+          var currentList = readSheetTasksForWeb();
+          var rows = currentList.map(function(t) {
+            return [t.id, t.title, t.description || '', t.date, t.time || '09:00', t.categoryId || 'cat-work', t.priority || 'medium', t.status || 'pending'];
+          });
           var queryDate = parseThaiCommand(userMessage).date || todayStr;
           var filtered = userMessage === 'งานค้าง'
             ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
@@ -2272,31 +2552,26 @@ function doPost(e) {
 
         var parsed = parseThaiCommand(userMessage);
         var newId = 'task-' + now.getTime();
-        var dayTotalCount = 1;
-        var dayPendingCount = 1;
-
-        if (taskSheet) {
-          try {
-            taskSheet.appendRow([
-              newId,
-              parsed.title,
-              'บันทึกผ่านแชท LINE OA ("' + userMessage + '")',
-              "'" + parsed.date,
-              "'" + parsed.time,
-              'cat-work',
-              parsed.priority,
-              'pending',
-              1,
-              'FALSE',
-              'line',
-              now.toISOString()
-            ]);
-            var allRows = taskSheet.getDataRange().getValues().slice(1);
-            var dayRows = allRows.filter(function(r) { return String(r[3]).replace(/^'/, '') === parsed.date; });
-            dayTotalCount = dayRows.length;
-            dayPendingCount = dayRows.filter(function(r) { return String(r[7]) !== 'completed'; }).length;
-          } catch (appendErr) {}
-        }
+        var existingAll = readSheetTasksForWeb();
+        var createdObj = {
+          id: newId,
+          title: parsed.title,
+          description: 'บันทึกผ่านแชท LINE OA ("' + userMessage + '")',
+          date: parsed.date,
+          time: parsed.time,
+          categoryId: 'cat-work',
+          priority: parsed.priority,
+          status: 'pending',
+          remindMinutesBefore: 1,
+          lineNotified: false,
+          source: 'line',
+          updatedAt: now.toISOString()
+        };
+        var updatedAll = [createdObj].concat(existingAll);
+        writeSheetTasksFromWeb(updatedAll);
+        var sameDayAll = updatedAll.filter(function(t) { return String(t.date) === String(parsed.date); });
+        var dayTotalCount = sameDayAll.length;
+        var dayPendingCount = sameDayAll.filter(function(t) { return t.status !== 'completed'; }).length;
 
         if (logSheet) {
           try {

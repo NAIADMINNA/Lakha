@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import { extractThaiDate, extractThaiTime } from './src/services/lineCommandParser';
 
@@ -844,8 +845,104 @@ function buildSingleTaskReminderFlexMessage(params: {
 let runtimeChannelAccessToken = sanitizeToken(process.env.LINE_CHANNEL_ACCESS_TOKEN || '');
 let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
 let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
+let runtimeGasUrl = '';
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
+const WORKSPACE_CACHE_FILE = path.join(process.cwd(), '.sheetcal-workspace-cache.json');
+
+function loadPersistedWorkspaceCache(): void {
+  try {
+    if (!fs.existsSync(WORKSPACE_CACHE_FILE)) return;
+    const raw = fs.readFileSync(WORKSPACE_CACHE_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      if (typeof parsed.runtimeChannelAccessToken === 'string' && parsed.runtimeChannelAccessToken) {
+        runtimeChannelAccessToken = sanitizeToken(parsed.runtimeChannelAccessToken);
+      }
+      if (typeof parsed.runtimeDefaultUserId === 'string' && parsed.runtimeDefaultUserId) {
+        runtimeDefaultUserId = parsed.runtimeDefaultUserId.trim();
+      }
+      if (typeof parsed.runtimeDetectedGroupId === 'string' && parsed.runtimeDetectedGroupId) {
+        runtimeDetectedGroupId = parsed.runtimeDetectedGroupId.trim();
+      }
+      if (typeof parsed.runtimeGasUrl === 'string' && parsed.runtimeGasUrl) {
+        runtimeGasUrl = parsed.runtimeGasUrl.trim();
+      }
+      if (parsed.workspaces && typeof parsed.workspaces === 'object') {
+        for (const [k, v] of Object.entries(parsed.workspaces)) {
+          if (v && typeof v === 'object') {
+            sharedWorkspaces.set(k, v as CollaborativeWorkspaceState);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore cache read error
+  }
+}
+
+function savePersistedWorkspaceCache(): void {
+  try {
+    const workspacesObj: Record<string, CollaborativeWorkspaceState> = {};
+    for (const [k, v] of sharedWorkspaces.entries()) {
+      workspacesObj[k] = v;
+    }
+    fs.writeFileSync(
+      WORKSPACE_CACHE_FILE,
+      JSON.stringify(
+        {
+          runtimeChannelAccessToken,
+          runtimeDefaultUserId,
+          runtimeDetectedGroupId,
+          runtimeGasUrl,
+          workspaces: workspacesObj,
+        },
+        null,
+        2
+      ),
+      'utf-8'
+    );
+  } catch {
+    // Ignore cache write error
+  }
+}
+
+loadPersistedWorkspaceCache();
+
+async function postToGoogleAppsScript(
+  scriptUrl: string,
+  payloadObj: Record<string, unknown>
+): Promise<{ status: number; bodyText: string; json: Record<string, unknown> }> {
+  const postRes = await fetch(scriptUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payloadObj),
+    redirect: 'manual',
+  });
+  let bodyText = '';
+  let finalStatus = postRes.status;
+  if (
+    (postRes.status === 301 ||
+      postRes.status === 302 ||
+      postRes.status === 303 ||
+      postRes.status === 307) &&
+    postRes.headers.get('location')
+  ) {
+    const redirectUrl = postRes.headers.get('location')!;
+    const getRes = await fetch(redirectUrl, { method: 'GET' });
+    finalStatus = getRes.status;
+    bodyText = await getRes.text();
+  } else {
+    bodyText = await postRes.text();
+  }
+  let json: Record<string, unknown> = {};
+  try {
+    json = JSON.parse(bodyText);
+  } catch {
+    json = {};
+  }
+  return { status: finalStatus, bodyText, json };
+}
 
 async function purgeAllLineRichMenus(
   rawToken: string,
@@ -1000,10 +1097,26 @@ async function startServer() {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Enable CORS on /api/collab/* so external portals (including Google Apps Script Web App) can sync directly
+  app.use('/api/collab', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   // Real-time Collaborative Shared Calendar Workspace Endpoints
   app.get('/api/collab/workspace/:workspaceId', (req, res) => {
-    const workspaceId = String(req.params.workspaceId || 'default').trim();
-    const state = sharedWorkspaces.get(workspaceId);
+    const workspaceId = String(req.params.workspaceId || 'sheetcal-team-clean').trim();
+    const state =
+      sharedWorkspaces.get(workspaceId) ||
+      sharedWorkspaces.get('sheetcal-team-clean') ||
+      sharedWorkspaces.get('team-default') ||
+      Array.from(sharedWorkspaces.values())[0];
     if (!state) {
       res.json({ exists: false, workspaceId });
       return;
@@ -1012,29 +1125,161 @@ async function startServer() {
   });
 
   app.post('/api/collab/workspace/:workspaceId', (req, res) => {
-    const workspaceId = String(req.params.workspaceId || 'default').trim();
-    const { updatedBy, spreadsheetId, spreadsheetUrl, tasks, categories, teamMembers } =
-      req.body || {};
+    const workspaceId = String(req.params.workspaceId || 'sheetcal-team-clean').trim();
+    const {
+      action,
+      task,
+      taskId,
+      updatedBy,
+      spreadsheetId,
+      spreadsheetUrl,
+      tasks,
+      categories,
+      teamMembers,
+    } = req.body || {};
 
-    const existing = sharedWorkspaces.get(workspaceId);
+    const existing =
+      sharedWorkspaces.get(workspaceId) ||
+      sharedWorkspaces.get('sheetcal-team-clean') ||
+      sharedWorkspaces.get('team-default') ||
+      Array.from(sharedWorkspaces.values())[0];
+
+    let nextTasks: unknown[] = Array.isArray(tasks) ? tasks : existing?.tasks || [];
+
+    if (action === 'add_task' && task && typeof task === 'object') {
+      const currentList = Array.isArray(existing?.tasks) ? [...existing.tasks] : [];
+      nextTasks = [task, ...currentList];
+    } else if (action === 'toggle_task' && taskId) {
+      const currentList = Array.isArray(existing?.tasks)
+        ? (existing.tasks as Record<string, unknown>[])
+        : [];
+      nextTasks = currentList.map((t) =>
+        String(t.id) === String(taskId)
+          ? {
+              ...t,
+              status: t.status === 'completed' ? 'pending' : 'completed',
+              updatedAt: new Date().toISOString(),
+            }
+          : t
+      );
+    } else if (action === 'delete_task' && taskId) {
+      const currentList = Array.isArray(existing?.tasks)
+        ? (existing.tasks as Record<string, unknown>[])
+        : [];
+      nextTasks = currentList.filter((t) => String(t.id) !== String(taskId));
+    }
+
     const nextState: CollaborativeWorkspaceState = {
       workspaceId,
       updatedAt: new Date().toISOString(),
       updatedBy: updatedBy || existing?.updatedBy || 'สมาชิกในทีม',
       spreadsheetId: spreadsheetId ?? existing?.spreadsheetId,
       spreadsheetUrl: spreadsheetUrl ?? existing?.spreadsheetUrl,
-      tasks: Array.isArray(tasks) ? tasks : existing?.tasks || [],
+      tasks: nextTasks,
       categories: Array.isArray(categories) ? categories : existing?.categories || [],
       teamMembers: Array.isArray(teamMembers) ? teamMembers : existing?.teamMembers || [],
     };
     sharedWorkspaces.set(workspaceId, nextState);
+    sharedWorkspaces.set('sheetcal-team-clean', nextState);
+    sharedWorkspaces.set('team-default', nextState);
+    savePersistedWorkspaceCache();
+
+    if (runtimeGasUrl.startsWith('https://script.google.com/macros/s/')) {
+      postToGoogleAppsScript(runtimeGasUrl, {
+        action: 'sync_tasks',
+        tasks: nextTasks,
+      }).catch(() => {});
+    }
+
     res.json({ ok: true, workspace: nextState });
+  });
+
+  // Server-side proxy to sync tasks between Web App and Google Apps Script (immune to browser CORS/302 issues)
+  app.post('/api/line/gas-bridge-sync', async (req, res) => {
+    try {
+      const { gasUrl, channelAccessToken, tasks, mode } = req.body || {};
+      const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
+      if (token) runtimeChannelAccessToken = token;
+
+      let targetGasUrl = String(gasUrl || runtimeGasUrl || '').trim();
+      if (!targetGasUrl.startsWith('https://script.google.com/macros/s/') && token) {
+        const whRes = await fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => null);
+        if (whRes && whRes.ok) {
+          const whData = (await whRes.json().catch(() => ({}))) as { endpoint?: string };
+          if (
+            whData.endpoint &&
+            whData.endpoint.trim().startsWith('https://script.google.com/macros/s/')
+          ) {
+            targetGasUrl = whData.endpoint.trim();
+          }
+        }
+      }
+
+      if (!targetGasUrl.startsWith('https://script.google.com/macros/s/')) {
+        res.json({ ok: false, reason: 'no_gas_url' });
+        return;
+      }
+
+      runtimeGasUrl = targetGasUrl;
+      savePersistedWorkspaceCache();
+
+      if (mode === 'push' && Array.isArray(tasks)) {
+        const syncRes = await postToGoogleAppsScript(targetGasUrl, {
+          action: 'sync_tasks',
+          tasks,
+        });
+        res.json({
+          ok: Boolean(syncRes.json.ok),
+          gasUrl: targetGasUrl,
+          version: syncRes.json.version,
+          response: syncRes.json,
+        });
+        return;
+      }
+
+      const pullRes = await postToGoogleAppsScript(targetGasUrl, {
+        action: 'get_tasks',
+      });
+      const remoteTasks = Array.isArray(pullRes.json.tasks) ? pullRes.json.tasks : [];
+      const detectedGrp =
+        typeof pullRes.json.detectedGroupId === 'string' &&
+        /^[CR][0-9a-fA-F]{32}$/.test(pullRes.json.detectedGroupId.trim())
+          ? pullRes.json.detectedGroupId.trim()
+          : '';
+      if (detectedGrp) {
+        runtimeDetectedGroupId = detectedGrp;
+        savePersistedWorkspaceCache();
+      }
+
+      if (remoteTasks.length === 0 && Array.isArray(tasks) && tasks.length > 0) {
+        await postToGoogleAppsScript(targetGasUrl, {
+          action: 'sync_tasks',
+          tasks,
+        }).catch(() => {});
+      }
+
+      res.json({
+        ok: true,
+        gasUrl: targetGasUrl,
+        version: pullRes.json.version,
+        detectedGroupId: detectedGrp || runtimeDetectedGroupId || undefined,
+        tasks: remoteTasks,
+      });
+    } catch (err: unknown) {
+      res.json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
   });
 
   // Save runtime LINE OA credentials from the Web UI so the Webhook can reply automatically
   // Also automatically unlinks/purges any lingering Messaging API Rich Menus!
   app.post('/api/line/config', (req, res) => {
-    const { channelAccessToken, targetUserId, targetGroupId } = req.body || {};
+    const { channelAccessToken, targetUserId, targetGroupId, gasUrl } = req.body || {};
     if (typeof channelAccessToken === 'string') {
       runtimeChannelAccessToken = sanitizeToken(channelAccessToken);
     }
@@ -1048,6 +1293,13 @@ async function startServer() {
     if (typeof targetGroupId === 'string' && /^[CR][0-9a-fA-F]{32}$/.test(targetGroupId.trim())) {
       runtimeDetectedGroupId = targetGroupId.trim();
     }
+    if (
+      typeof gasUrl === 'string' &&
+      gasUrl.trim().startsWith('https://script.google.com/macros/s/')
+    ) {
+      runtimeGasUrl = gasUrl.trim();
+    }
+    savePersistedWorkspaceCache();
     if (runtimeChannelAccessToken) {
       purgeAllLineRichMenus(runtimeChannelAccessToken, runtimeDefaultUserId).catch(() => {});
     }

@@ -202,7 +202,8 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (
           typeof parsed.publicCalendarUrl === 'string' &&
-          /^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim())
+          (/^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim()) ||
+            parsed.publicCalendarUrl.includes('script.google.com/macros/s/'))
         ) {
           parsed.publicCalendarUrl = '';
         }
@@ -347,14 +348,27 @@ export default function App() {
     setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
   };
 
-  // Save local backup whenever state changes
+  // Save local backup whenever state changes and keep Google Apps Script Portal in sync via Server Proxy
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
+      const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+      if (tasks.length > 0) {
+        fetch('/api/line/gas-bridge-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'push',
+            gasUrl: savedGasUrl || undefined,
+            channelAccessToken: lineSettings.channelAccessToken || undefined,
+            tasks,
+          }),
+        }).catch(() => {});
+      }
     } catch {
       // Ignore
     }
-  }, [tasks]);
+  }, [tasks, lineSettings.channelAccessToken]);
 
   useEffect(() => {
     try {
@@ -442,19 +456,18 @@ export default function App() {
         // Silent fallback
       }
 
-      // Also sync tasks to Google Sheets via Google Apps Script Bridge without requiring Google Sign-In again
+      // Also sync tasks to Google Sheets via Server Proxy to Google Apps Script Bridge
       try {
         const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
-        if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
-          await fetch(savedGasUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-              action: 'sync_tasks',
-              tasks: nextTasks,
-            }),
-          });
-        }
+        await fetch('/api/line/gas-bridge-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'push',
+            gasUrl: savedGasUrl || undefined,
+            tasks: nextTasks,
+          }),
+        });
       } catch {
         // Silent fallback
       }
@@ -462,7 +475,20 @@ export default function App() {
     [sheetMeta?.spreadsheetId, sheetMeta?.spreadsheetUrl, user?.email, workspaceId]
   );
 
-  // Poll shared workspace every 5 seconds for real-time collaborative updates
+  const tasksRef = useRef<Task[]>(tasks);
+  const categoriesRef = useRef<Category[]>(categories);
+  const teamMembersRef = useRef<TeamMember[]>(teamMembers);
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+  useEffect(() => {
+    categoriesRef.current = categories;
+  }, [categories]);
+  useEffect(() => {
+    teamMembersRef.current = teamMembers;
+  }, [teamMembers]);
+
+  // Poll shared workspace every 5 seconds for real-time collaborative updates (without race-condition overwrites)
   useEffect(() => {
     let isMounted = true;
 
@@ -477,7 +503,11 @@ export default function App() {
 
         if (!data.exists) {
           // Seed initial workspace state on server
-          await pushCollaborativeWorkspace(tasks, categories, teamMembers);
+          await pushCollaborativeWorkspace(
+            tasksRef.current,
+            categoriesRef.current,
+            teamMembersRef.current
+          );
           return;
         }
 
@@ -490,7 +520,22 @@ export default function App() {
           setLastCollabSyncAt(remote.updatedAt);
 
           if (Array.isArray(remote.tasks) && remote.tasks.length > 0) {
-            setTasks(remote.tasks as Task[]);
+            setTasks((prev) => {
+              const remoteTasks = remote.tasks as Task[];
+              const remoteIds = new Set(remoteTasks.map((t) => t.id));
+              // Keep any very recently added local tasks (created within last 10 seconds) so in-flight additions are never lost
+              const nowMs = Date.now();
+              const recentLocalOnly = prev.filter((localTask) => {
+                if (remoteIds.has(localTask.id)) return false;
+                const updatedMs = localTask.updatedAt
+                  ? new Date(localTask.updatedAt).getTime()
+                  : 0;
+                return nowMs - updatedMs < 10000;
+              });
+              return recentLocalOnly.length > 0
+                ? [...recentLocalOnly, ...remoteTasks]
+                : remoteTasks;
+            });
           }
           if (Array.isArray(remote.categories) && remote.categories.length > 0) {
             setCategories(remote.categories as Category[]);
@@ -510,7 +555,7 @@ export default function App() {
       isMounted = false;
       clearInterval(timer);
     };
-  }, [workspaceId, pushCollaborativeWorkspace, tasks, categories, teamMembers]);
+  }, [workspaceId, pushCollaborativeWorkspace]);
 
   // Initialize Firebase Auth listener on mount
   useEffect(() => {
@@ -1414,20 +1459,29 @@ export default function App() {
     return () => clearInterval(pollTimer);
   }, [handleSendLineChatCommand, lineSettings.targetGroupId, lineSettings.targetUserId]);
 
-  // Zero-Login Auto-Pull via Google Apps Script Bridge (works on mobile/LINE without Gmail OAuth login!)
+  // Zero-Login Auto-Pull via Server Proxy to Google Apps Script Bridge (immune to browser CORS)
   useEffect(() => {
     const pullFromGasBridge = async () => {
       try {
         const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
-        if (!savedGasUrl.startsWith('https://script.google.com/macros/s/')) return;
-
-        const res = await fetch(savedGasUrl, {
+        const res = await fetch('/api/line/gas-bridge-sync', {
           method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'get_tasks' }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'pull',
+            gasUrl: savedGasUrl || undefined,
+            tasks: tasksRef.current,
+          }),
         });
         if (!res.ok) return;
         const data = await res.json();
+        if (
+          typeof data.gasUrl === 'string' &&
+          data.gasUrl.startsWith('https://script.google.com/macros/s/') &&
+          !savedGasUrl
+        ) {
+          localStorage.setItem('sheetcal_gas_url_v1', data.gasUrl);
+        }
         if (
           typeof data.detectedGroupId === 'string' &&
           /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
@@ -1472,6 +1526,17 @@ export default function App() {
             );
             if (newItems.length > 0) {
               return [...newItems, ...updatedPrev];
+            }
+            if (prev.some((localTask) => !remoteById.has(localTask.id))) {
+              fetch('/api/line/gas-bridge-sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  mode: 'push',
+                  gasUrl: savedGasUrl || data.gasUrl || undefined,
+                  tasks: updatedPrev,
+                }),
+              }).catch(() => {});
             }
             return changed ? updatedPrev : prev;
           });
