@@ -2,15 +2,29 @@
   "runtimeChannelAccessToken": "C7JXe+drqXEpOZpBrOexF7EPOzNmRWIaMdGu+4pq3DLOxMO2krxOUetIhRoLeyRtGXFP3mrzID6oUbOCmWig4coqCeq1WvZVlbygPIwI/Ppt8B60bbnGIeTURHMpjThjiK+BJHehGzYgQ+2c5VZyigdB04t89/1O/w1cDnyilFU=",
   "runtimeDefaultUserId": "Uf98c07a411f5c16f74988dd00b5c085c",
   "runtimeDetectedGroupId": "Cff150b586a4f91c883b40ae7d76b2ec9",
-  "runtimeGasUrl": "https://script.google.com/macros/s/AKfycbxIf9kUHj1TqKS5K5KmVYoXIK5lrgTplHBMrHnKHItbzwbcVW3aPMeJWLcHSlZmPNKqIg/exec",
+  "runtimeGasUrl": "https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec",
   "workspaces": {
     "sheetcal-team-clean": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-02T23:46:22.914Z",
+      "updatedAt": "2026-11-03T01:25:00.000Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
       "tasks": [
+        {
+          "id": "task-1793668054359",
+          "title": "ประชุมส่วนราชการที่เกี่ยวข้องฯ",
+          "description": "เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)",
+          "date": "2026-11-03",
+          "time": "10:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-03T01:07:34.359Z"
+        },
         {
           "id": "task-1793630653911",
           "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",
@@ -42,11 +56,25 @@
     },
     "team-default": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-02T23:46:22.914Z",
+      "updatedAt": "2026-11-03T01:25:00.000Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
       "tasks": [
+        {
+          "id": "task-1793668054359",
+          "title": "ประชุมส่วนราชการที่เกี่ยวข้องฯ",
+          "description": "เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)",
+          "date": "2026-11-03",
+          "time": "10:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-03T01:07:34.359Z"
+        },
         {
           "id": "task-1793630653911",
           "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",

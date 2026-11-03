@@ -1109,19 +1109,96 @@ async function startServer() {
     next();
   });
 
+  const deletedTaskIds = new Set<string>();
+  let lastGasPullMs = 0;
+
+  function mergeTasksById(
+    primaryList: unknown[],
+    secondaryList: unknown[]
+  ): Record<string, unknown>[] {
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const item of [...secondaryList, ...primaryList]) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as Record<string, unknown>;
+      const id = String(rec.id || '').trim();
+      const title = String(rec.title || '').trim();
+      if (!id || !title || deletedTaskIds.has(id)) continue;
+      const existingItem = byId.get(id);
+      if (!existingItem) {
+        byId.set(id, rec);
+      } else {
+        const existingTime = existingItem.updatedAt
+          ? new Date(String(existingItem.updatedAt)).getTime()
+          : 0;
+        const incomingTime = rec.updatedAt
+          ? new Date(String(rec.updatedAt)).getTime()
+          : 0;
+        if (incomingTime >= existingTime) {
+          byId.set(id, rec);
+        }
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) =>
+      String(`${a.date || ''} ${a.time || ''}`).localeCompare(
+        String(`${b.date || ''} ${b.time || ''}`)
+      )
+    );
+  }
+
   // Real-time Collaborative Shared Calendar Workspace Endpoints
-  app.get('/api/collab/workspace/:workspaceId', (req, res) => {
+  app.get('/api/collab/workspace/:workspaceId', async (req, res) => {
     const workspaceId = String(req.params.workspaceId || 'sheetcal-team-clean').trim();
-    const state =
+    let state =
       sharedWorkspaces.get(workspaceId) ||
       sharedWorkspaces.get('sheetcal-team-clean') ||
       sharedWorkspaces.get('team-default') ||
       Array.from(sharedWorkspaces.values())[0];
+
+    const nowMs = Date.now();
+    if (
+      runtimeGasUrl.startsWith('https://script.google.com/macros/s/') &&
+      nowMs - lastGasPullMs > 4000
+    ) {
+      lastGasPullMs = nowMs;
+      try {
+        const gasRes = await fetch(
+          `${runtimeGasUrl}?action=get_tasks&format=json`,
+          { method: 'GET', redirect: 'follow' }
+        );
+        if (gasRes.ok) {
+          const gasData = (await gasRes.json().catch(() => ({}))) as {
+            tasks?: unknown[];
+          };
+          if (Array.isArray(gasData.tasks) && gasData.tasks.length > 0 && state) {
+            const currentCount = Array.isArray(state.tasks) ? state.tasks.length : 0;
+            const merged = mergeTasksById(state.tasks || [], gasData.tasks);
+            if (merged.length !== currentCount) {
+              state = {
+                ...state,
+                updatedAt: new Date().toISOString(),
+                tasks: merged,
+              };
+              sharedWorkspaces.set(workspaceId, state);
+              sharedWorkspaces.set('sheetcal-team-clean', state);
+              sharedWorkspaces.set('team-default', state);
+              savePersistedWorkspaceCache();
+            }
+          }
+        }
+      } catch {
+        // Ignore transient GAS pull error
+      }
+    }
+
     if (!state) {
       res.json({ exists: false, workspaceId });
       return;
     }
-    res.json({ exists: true, workspace: state });
+    res.json({
+      exists: true,
+      workspace: state,
+      deletedTaskIds: Array.from(deletedTaskIds),
+    });
   });
 
   app.post('/api/collab/workspace/:workspaceId', (req, res) => {
@@ -1130,6 +1207,7 @@ async function startServer() {
       action,
       task,
       taskId,
+      deletedTaskId,
       updatedBy,
       spreadsheetId,
       spreadsheetUrl,
@@ -1144,29 +1222,37 @@ async function startServer() {
       sharedWorkspaces.get('team-default') ||
       Array.from(sharedWorkspaces.values())[0];
 
-    let nextTasks: unknown[] = Array.isArray(tasks) ? tasks : existing?.tasks || [];
+    const explicitDeletedId = String(
+      deletedTaskId || (action === 'delete_task' ? taskId : '') || ''
+    ).trim();
+    if (explicitDeletedId) {
+      deletedTaskIds.add(explicitDeletedId);
+    }
+
+    const existingTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
+    const incomingTasks = Array.isArray(tasks) ? tasks : [];
+
+    let nextTasks: unknown[] = mergeTasksById(incomingTasks, existingTasks);
 
     if (action === 'add_task' && task && typeof task === 'object') {
-      const currentList = Array.isArray(existing?.tasks) ? [...existing.tasks] : [];
-      nextTasks = [task, ...currentList];
+      const rec = task as Record<string, unknown>;
+      if (rec.id) deletedTaskIds.delete(String(rec.id));
+      nextTasks = mergeTasksById([task, ...incomingTasks], existingTasks);
     } else if (action === 'toggle_task' && taskId) {
-      const currentList = Array.isArray(existing?.tasks)
-        ? (existing.tasks as Record<string, unknown>[])
-        : [];
-      nextTasks = currentList.map((t) =>
-        String(t.id) === String(taskId)
+      nextTasks = nextTasks.map((t) => {
+        const rec = t as Record<string, unknown>;
+        return String(rec.id) === String(taskId)
           ? {
-              ...t,
-              status: t.status === 'completed' ? 'pending' : 'completed',
+              ...rec,
+              status: rec.status === 'completed' ? 'pending' : 'completed',
               updatedAt: new Date().toISOString(),
             }
-          : t
+          : rec;
+      });
+    } else if (explicitDeletedId) {
+      nextTasks = nextTasks.filter(
+        (t) => String((t as Record<string, unknown>).id) !== explicitDeletedId
       );
-    } else if (action === 'delete_task' && taskId) {
-      const currentList = Array.isArray(existing?.tasks)
-        ? (existing.tasks as Record<string, unknown>[])
-        : [];
-      nextTasks = currentList.filter((t) => String(t.id) !== String(taskId));
     }
 
     const nextState: CollaborativeWorkspaceState = {
@@ -1191,7 +1277,11 @@ async function startServer() {
       }).catch(() => {});
     }
 
-    res.json({ ok: true, workspace: nextState });
+    res.json({
+      ok: true,
+      workspace: nextState,
+      deletedTaskIds: Array.from(deletedTaskIds),
+    });
   });
 
   // Server-side proxy to sync tasks between Web App and Google Apps Script (immune to browser CORS/302 issues)
@@ -2408,15 +2498,28 @@ async function startServer() {
             isOutdatedGas = true;
           }
 
-          // Also push workspaceTasks via sync_tasks so the Apps Script portal immediately has all tasks
-          if (workspaceTasks.length > 0) {
+          // Merge remote tasks from GAS with workspaceTasks so neither side ever loses a task
+          const gasTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+          const mergedTasks = mergeTasksById(workspaceTasks, gasTasks);
+          if (mergedTasks.length > 0) {
+            const currentWs = sharedWorkspaces.get('sheetcal-team-clean');
+            if (currentWs) {
+              const updatedWs: CollaborativeWorkspaceState = {
+                ...currentWs,
+                updatedAt: new Date().toISOString(),
+                tasks: mergedTasks,
+              };
+              sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
+              sharedWorkspaces.set('team-default', updatedWs);
+              savePersistedWorkspaceCache();
+            }
             await fetch(scriptUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 action: 'sync_tasks',
                 targetGroupId: detectedGroupId || undefined,
-                tasks: workspaceTasks,
+                tasks: mergedTasks,
               }),
               redirect: 'follow',
             }).catch(() => null);

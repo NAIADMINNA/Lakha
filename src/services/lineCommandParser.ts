@@ -1687,11 +1687,6 @@ function pushTasksToMainWebApp(tasksList) {
 
 function readSheetTasksForWeb() {
   var webTasks = fetchTasksFromMainWebApp();
-  if (Array.isArray(webTasks) && webTasks.length > 0) {
-    saveTasksToProperties(webTasks);
-    return webTasks;
-  }
-
   var sheetTasks = [];
   try {
     var ss = openSafeSpreadsheet();
@@ -1720,33 +1715,40 @@ function readSheetTasksForWeb() {
   } catch (err) {}
 
   var propTasks = getSavedTasksFromProperties();
-  if (sheetTasks.length > 0) {
-    if (Array.isArray(propTasks) && propTasks.length > 0) {
-      var byId = {};
-      sheetTasks.forEach(function(t) { byId[t.id] = t; });
-      propTasks.forEach(function(pt) {
-        if (pt && pt.id && !byId[pt.id]) {
-          sheetTasks.push(pt);
+  var initTasks = (typeof INITIAL_WEB_TASKS !== 'undefined' && Array.isArray(INITIAL_WEB_TASKS)) ? INITIAL_WEB_TASKS : [];
+
+  var mergedById = {};
+  var mergedOrder = [];
+  function addList(arr) {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(function(item) {
+      if (!item || !item.id || !item.title) return;
+      var k = String(item.id);
+      if (!mergedById[k]) {
+        mergedById[k] = item;
+        mergedOrder.push(k);
+      } else {
+        var tOld = mergedById[k].updatedAt ? new Date(mergedById[k].updatedAt).getTime() : 0;
+        var tNew = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+        if (tNew >= tOld) {
+          mergedById[k] = item;
         }
-      });
-    }
-    saveTasksToProperties(sheetTasks);
-    return sheetTasks;
+      }
+    });
   }
 
-  if (Array.isArray(propTasks) && propTasks.length > 0) {
-    return propTasks;
+  addList(sheetTasks);
+  addList(propTasks);
+  addList(webTasks);
+  if (mergedOrder.length === 0) {
+    addList(initTasks);
   }
 
-  if (typeof INITIAL_WEB_TASKS !== 'undefined' && Array.isArray(INITIAL_WEB_TASKS) && INITIAL_WEB_TASKS.length > 0) {
-    saveTasksToProperties(INITIAL_WEB_TASKS);
-    try {
-      writeSheetTasksFromWeb(INITIAL_WEB_TASKS);
-    } catch (e) {}
-    return INITIAL_WEB_TASKS;
+  var finalTasks = mergedOrder.map(function(k) { return mergedById[k]; });
+  if (finalTasks.length > 0) {
+    saveTasksToProperties(finalTasks);
   }
-
-  return [];
+  return finalTasks;
 }
 
 function writeSheetTasksFromWeb(tasksList) {
@@ -2169,14 +2171,32 @@ function doGet(e) {
     '  while(s.length > 0 && s.charAt(s.length - 1) === "/"){ s = s.slice(0, -1); }',
     '  return s;',
     '}',
+    'function mergeClientTasks(localArr, remoteArr){',
+    '  var map = {};',
+    '  var order = [];',
+    '  [localArr, remoteArr].forEach(function(arr){',
+    '    if(!Array.isArray(arr)) return;',
+    '    arr.forEach(function(item){',
+    '      if(!item || !item.id || !item.title) return;',
+    '      var k = String(item.id);',
+    '      if(!map[k]){ map[k] = item; order.push(k); }',
+    '      else {',
+    '        var t1 = map[k].updatedAt ? new Date(map[k].updatedAt).getTime() : 0;',
+    '        var t2 = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;',
+    '        if(t2 >= t1) map[k] = item;',
+    '      }',
+    '    });',
+    '  });',
+    '  return order.map(function(k){ return map[k]; });',
+    '}',
     'function syncWithMainServer(actionPayload){',
     '  var cleanOrigin = getCleanOrigin(mainWebAppUrl);',
     '  if(cleanOrigin && cleanOrigin.indexOf("http") === 0 && cleanOrigin.indexOf("calendar.google.com") === -1 && cleanOrigin.indexOf("script.google.com") === -1){',
     '    var apiUrl = cleanOrigin + "/api/collab/workspace/sheetcal-team-clean";',
     '    if(actionPayload){',
-    '      fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(actionPayload) }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks)){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '      fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(actionPayload) }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks)){ tasks = actionPayload.action === "delete_task" ? d.workspace.tasks : mergeClientTasks(tasks, d.workspace.tasks); render(); } }).catch(function(){});',
     '    } else {',
-    '      fetch(apiUrl).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks) && d.workspace.tasks.length > 0){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '      fetch(apiUrl).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks) && d.workspace.tasks.length > 0){ tasks = mergeClientTasks(tasks, d.workspace.tasks); render(); } }).catch(function(){});',
     '    }',
     '  }',
     '  if(actionPayload && selfGasUrl && selfGasUrl.indexOf("https://script.google.com") === 0){',

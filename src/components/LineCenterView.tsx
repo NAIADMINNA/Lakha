@@ -36,6 +36,7 @@ import {
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
+import { DEFAULT_GAS_WEB_APP_URL } from '../data/initialData';
 
 interface LineCenterViewProps {
   logs: LineMessageLog[];
@@ -91,11 +92,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const [gasUrl, setGasUrl] = useState(() => {
     try {
       return (
-        localStorage.getItem('sheetcal_gas_url_v1') ||
-        'https://script.google.com/macros/s/AKfycby5KO2cApLJ3p5DvbVnoa446OmmOqJ2yLsJMpUu3OobHzRieCUs_jmW1BFGQCzpYQQorQ/exec'
+        localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
       );
     } catch {
-      return 'https://script.google.com/macros/s/AKfycby5KO2cApLJ3p5DvbVnoa446OmmOqJ2yLsJMpUu3OobHzRieCUs_jmW1BFGQCzpYQQorQ/exec';
+      return DEFAULT_GAS_WEB_APP_URL;
     }
   });
   const [isTestingGas, setIsTestingGas] = useState(false);
