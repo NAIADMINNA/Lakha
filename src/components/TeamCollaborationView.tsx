@@ -97,13 +97,35 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   const effectiveGroupId = rawGroupId || fallbackGroupFromTarget;
   const isValidGroupId = /^[CR][0-9a-fA-F]{32}$/.test(effectiveGroupId);
 
+  const [copiedGasCode, setCopiedGasCode] = useState(false);
+  const [gasUrlInput, setGasUrlInput] = useState<string>(() => {
+    try {
+      return typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
+        : '';
+    } catch {
+      return '';
+    }
+  });
+
   const shareableCalendarUrl = useMemo(() => {
+    const customUrl = (lineSettings.publicCalendarUrl || '').trim();
+    const isPrivateAiStudioDev =
+      typeof window !== 'undefined' &&
+      /^https:\/\/ais-dev-/i.test(window.location.origin);
+    const effectiveCustomUrl =
+      customUrl ||
+      (isPrivateAiStudioDev &&
+      gasUrlInput.trim().startsWith('https://script.google.com/macros/s/')
+        ? `${gasUrlInput.trim().split('?')[0]}?view=calendar`
+        : '');
+
     return resolveTeamCalendarAppUrl({
-      customPublicUrl: lineSettings.publicCalendarUrl,
+      customPublicUrl: effectiveCustomUrl,
       workspaceId: workspaceId || 'team-default',
       spreadsheetId: spreadsheetId || '',
     });
-  }, [lineSettings.publicCalendarUrl, workspaceId, spreadsheetId]);
+  }, [lineSettings.publicCalendarUrl, gasUrlInput, workspaceId, spreadsheetId]);
 
   const sharedStats = useMemo(() => {
     const completed = tasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
@@ -119,17 +141,6 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
       rate,
     };
   }, [tasks]);
-
-  const [copiedGasCode, setCopiedGasCode] = useState(false);
-  const [gasUrlInput, setGasUrlInput] = useState<string>(() => {
-    try {
-      return typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
-        : '';
-    } catch {
-      return '';
-    }
-  });
 
   const handleCopyGasV26Code = async () => {
     try {
@@ -417,6 +428,20 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   <ExternalLink className="h-3.5 w-3.5" />
                 </a>
               )}
+            </div>
+
+            <div className="p-3 rounded-lg bg-indigo-50/70 border border-indigo-200 text-[11px] text-indigo-950 space-y-1 leading-relaxed">
+              <div className="font-bold text-indigo-900">
+                💡 ทำไมสมาชิกในทีมถึงเปิดลิงก์หน้าเว็บหลัก (ais-dev-...) ไม่ได้?
+              </div>
+              <p>
+                ลิงก์ที่ขึ้นต้นด้วย <code className="font-bold bg-white px-1 rounded">https://ais-dev-...</code>{' '}
+                เป็นลิงก์ห้องพัฒนาส่วนตัวของ Google AI Studio ซึ่งระบบของ Google ล็อกสิทธิ์ให้เปิดได้เฉพาะ Gmail ของผู้สร้างโปรเจกต์เท่านั้น
+              </p>
+              <p>
+                ✅ <strong>วิธีให้สมาชิกในทีมเปิดหน้าเว็บปฏิทินได้ทุกคน 100%:</strong>{' '}
+                1) ใช้ลิงก์ <strong>เว็บปฏิทินทีม Apps Script</strong> (<code className="font-bold bg-white px-1 rounded">https://script.google.com/macros/s/.../exec?view=calendar</code>) ซึ่งตอนนี้เราได้ใส่ <strong>ตารางปฏิทินรายเดือน (Monthly Calendar) เหมือนหน้าเว็บหลักครบชุด</strong> ให้แล้ว หรือ 2) กดปุ่ม <strong>Deploy (Cloud Run)</strong> ที่มุมขวาบนสุดของจอ AI Studio เพื่อสร้างลิงก์เว็บหลักแบบสาธารณะ
+              </p>
             </div>
           </div>
 
