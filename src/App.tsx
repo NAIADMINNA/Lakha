@@ -9,13 +9,16 @@ import {
   Edit3,
   ExternalLink,
   FolderKanban,
+  KeyRound,
   LayoutDashboard,
+  Lock,
   MessageSquareText,
   Plus,
   RefreshCw,
   Search,
   Send,
   Trash2,
+  Unlock,
   Users,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
@@ -116,6 +119,23 @@ export default function App() {
     }
     return 'dashboard';
   });
+
+  // Passcode Protection for Admin Sections: ทีมที่ใช้ปฏิทินร่วมกัน ('team'), แจ้งเตือน & สั่งงาน LINE ('line'), ฐานข้อมูล Google Sheets ('database')
+  const ADMIN_PASSCODE = '0841543524';
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(false);
+  const [adminPasscodeInput, setAdminPasscodeInput] = useState<string>('');
+  const [adminPasscodeError, setAdminPasscodeError] = useState<string>('');
+
+  const handleVerifyAdminPasscode = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (adminPasscodeInput.trim() === ADMIN_PASSCODE) {
+      setIsAdminUnlocked(true);
+      setAdminPasscodeInput('');
+      setAdminPasscodeError('');
+    } else {
+      setAdminPasscodeError('รหัสผ่านไม่ถูกต้อง กรุณากรอกรหัสผ่านผู้ดูแลระบบอีกครั้ง');
+    }
+  };
 
   // Shared Workspace ID (supports ?workspace=... URL param for shared calendar links)
   const [workspaceId] = useState<string>(() => {
@@ -2452,43 +2472,61 @@ export default function App() {
             href="#team"
             onClick={(e) => {
               e.preventDefault();
+              setAdminPasscodeError('');
               setActiveSection('team');
             }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'team'
                 ? 'text-emerald-600 underline underline-offset-8 decoration-2 decoration-emerald-600 font-semibold'
                 : 'hover:text-emerald-600'
             }`}
           >
-            ทีมที่ใช้ปฏิทินร่วมกัน ({teamMembers.length})
+            {isAdminUnlocked ? (
+              <Unlock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+            ) : (
+              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+            )}
+            <span>ทีมที่ใช้ปฏิทินร่วมกัน ({teamMembers.length})</span>
           </a>
           <a
             href="#line"
             onClick={(e) => {
               e.preventDefault();
+              setAdminPasscodeError('');
               setActiveSection('line');
             }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'line'
                 ? 'text-[#06C755] underline underline-offset-8 decoration-2 decoration-[#06C755] font-semibold'
                 : 'hover:text-[#06C755]'
             }`}
           >
-            แจ้งเตือน & สั่งงาน LINE
+            {isAdminUnlocked ? (
+              <Unlock className="h-3.5 w-3.5 text-[#06C755] shrink-0" />
+            ) : (
+              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+            )}
+            <span>แจ้งเตือน & สั่งงาน LINE</span>
           </a>
           <a
             href="#database"
             onClick={(e) => {
               e.preventDefault();
+              setAdminPasscodeError('');
               setActiveSection('database');
             }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'database' || activeSection === 'categories'
                 ? 'text-violet-600 underline underline-offset-8 decoration-2 decoration-violet-600 font-semibold'
                 : 'hover:text-violet-600'
             }`}
           >
-            ฐานข้อมูล Google Sheets
+            {isAdminUnlocked ? (
+              <Unlock className="h-3.5 w-3.5 text-violet-600 shrink-0" />
+            ) : (
+              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+            )}
+            <span>ฐานข้อมูล Google Sheets</span>
           </a>
         </nav>
 
@@ -2536,26 +2574,40 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('team')}
+          onClick={() => {
+            setAdminPasscodeError('');
+            setActiveSection('team');
+          }}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
             activeSection === 'team'
               ? 'bg-emerald-600 text-white'
               : 'text-slate-600 bg-slate-100'
           }`}
         >
-          <Users className="h-3.5 w-3.5" />
+          {isAdminUnlocked ? (
+            <Users className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
           <span>ทีมที่ใช้ปฏิทินร่วมกัน</span>
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('line')}
+          onClick={() => {
+            setAdminPasscodeError('');
+            setActiveSection('line');
+          }}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
             activeSection === 'line'
               ? 'bg-[#06C755] text-white'
               : 'text-slate-600 bg-slate-100'
           }`}
         >
-          <MessageSquareText className="h-3.5 w-3.5" />
+          {isAdminUnlocked ? (
+            <MessageSquareText className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
           <span>สั่งงาน LINE OA</span>
         </button>
         <button
@@ -2572,14 +2624,21 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('database')}
+          onClick={() => {
+            setAdminPasscodeError('');
+            setActiveSection('database');
+          }}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
             activeSection === 'database'
               ? 'bg-violet-600 text-white'
               : 'text-slate-600 bg-slate-100'
           }`}
         >
-          <Cloud className="h-3.5 w-3.5" />
+          {isAdminUnlocked ? (
+            <Cloud className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
           <span>Google Sheets</span>
         </button>
       </div>
@@ -3302,7 +3361,117 @@ export default function App() {
           />
         )}
 
-        {activeSection === 'team' && (
+        {(activeSection === 'team' ||
+          activeSection === 'line' ||
+          activeSection === 'database') &&
+          !isAdminUnlocked && (
+            <div className="max-w-md mx-auto my-8 bg-white border-2 border-slate-200 border-t-4 border-t-indigo-600 rounded-2xl p-6 shadow-sm space-y-5">
+              <div className="flex items-start gap-3.5">
+                <div className="h-11 w-11 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0 text-indigo-600">
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-800 mb-1">
+                    <Lock className="h-3 w-3" />
+                    <span>เมนูเฉพาะผู้ดูแลระบบ (Protected Menu)</span>
+                  </span>
+                  <h2 className="text-base font-bold text-slate-900">
+                    ยืนยันรหัสผ่านเพื่อเข้าใช้งาน
+                  </h2>
+                  <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                    คุณกำลังเข้าสู่หัวข้อ{' '}
+                    <strong className="text-indigo-700">
+                      {activeSection === 'team'
+                        ? 'ทีมที่ใช้ปฏิทินร่วมกัน'
+                        : activeSection === 'line'
+                        ? 'แจ้งเตือน & สั่งงาน LINE'
+                        : 'ฐานข้อมูล Google Sheets'}
+                    </strong>{' '}
+                    กรุณากรอกรหัสผ่านเพื่อเข้าจัดการตั้งค่าระบบ
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleVerifyAdminPasscode} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-800 mb-1.5">
+                    รหัสผ่านเข้าใช้งาน (Passcode)
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoFocus
+                    value={adminPasscodeInput}
+                    onChange={(e) => {
+                      setAdminPasscodeInput(e.target.value);
+                      if (adminPasscodeError) setAdminPasscodeError('');
+                    }}
+                    placeholder="กรอกรหัสผ่านตัวเลข..."
+                    className={`w-full rounded-xl border px-3.5 py-2.5 text-sm font-mono-tabular text-slate-900 bg-slate-50/60 focus:bg-white focus:outline-none transition-colors ${
+                      adminPasscodeError
+                        ? 'border-rose-400 bg-rose-50/40 focus:border-rose-500'
+                        : 'border-slate-300 focus:border-indigo-600'
+                    }`}
+                  />
+                  {adminPasscodeError && (
+                    <p className="text-xs font-semibold text-rose-600 mt-1.5">
+                      ❌ {adminPasscodeError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
+                  >
+                    <Unlock className="h-3.5 w-3.5" />
+                    <span>ปลดล็อกเข้าใช้งาน</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdminPasscodeError('');
+                      setAdminPasscodeInput('');
+                      setActiveSection('dashboard');
+                    }}
+                    className="inline-flex items-center justify-center px-3.5 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors"
+                  >
+                    กลับหน้าสรุปงาน
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+        {(activeSection === 'team' ||
+          activeSection === 'line' ||
+          activeSection === 'database') &&
+          isAdminUnlocked && (
+            <div className="mb-4 rounded-xl bg-emerald-50/90 border border-emerald-200 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950">
+              <div className="inline-flex items-center gap-2 font-semibold">
+                <Unlock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                <span>
+                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdminUnlocked(false);
+                  setAdminPasscodeInput('');
+                  setAdminPasscodeError('');
+                  setActiveSection('dashboard');
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-900 font-bold hover:bg-emerald-100 transition-colors"
+              >
+                <Lock className="h-3 w-3 text-emerald-700" />
+                <span>ล็อกเมนูตั้งค่าทันที</span>
+              </button>
+            </div>
+          )}
+
+        {activeSection === 'team' && isAdminUnlocked && (
           <TeamCollaborationView
             tasks={tasks}
             categories={categories}
@@ -3323,7 +3492,7 @@ export default function App() {
           />
         )}
 
-        {activeSection === 'line' && (
+        {activeSection === 'line' && isAdminUnlocked && (
           <LineCenterView
             logs={lineLogs}
             categories={categories}
@@ -3356,7 +3525,7 @@ export default function App() {
           />
         )}
 
-        {activeSection === 'database' && (
+        {activeSection === 'database' && isAdminUnlocked && (
           <SheetsDatabaseView
             user={user}
             accessToken={accessToken}
