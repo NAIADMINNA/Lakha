@@ -40,6 +40,7 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_LINE_LOGS,
   INITIAL_TEAM_MEMBERS,
+  getEffectiveGasUrl,
   getInitialTasks,
 } from './data/initialData';
 import {
@@ -173,6 +174,7 @@ export default function App() {
 
   const [lastCollabSyncAt, setLastCollabSyncAt] = useState<string | null>(null);
   const lastSyncedTimestampRef = useRef<string>('');
+  const lastLocalMutationMsRef = useRef<number>(0);
 
   // Core data state (persisted locally and synced with Google Sheets & Shared Workspace)
   const [tasks, setTasks] = useState<Task[]>(() => {
@@ -390,48 +392,14 @@ export default function App() {
     setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
   };
 
-  // Save local backup whenever state changes and keep Google Apps Script Portal in sync via Server Proxy or direct GAS Bridge (for GitHub Pages)
+  // Save local backup whenever state changes (DO NOT push to server/GAS on initial mount so a team member's stale cache never overwrites Admin's calendar!)
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-      const activeGasUrl = (
-        localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-      ).trim();
-      if (tasks.length > 0) {
-        fetch('/api/line/gas-bridge-sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mode: 'push',
-            gasUrl: activeGasUrl,
-            channelAccessToken: lineSettings.channelAccessToken || undefined,
-            tasks,
-          }),
-        })
-          .then((res) => {
-            const ct = res.headers.get('content-type') || '';
-            if (!res.ok || !ct.includes('application/json')) {
-              throw new Error('Static host fallback');
-            }
-          })
-          .catch(() => {
-            if (activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
-              fetch(activeGasUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({
-                  action: 'sync_tasks',
-                  channelAccessToken: lineSettings.channelAccessToken || undefined,
-                  tasks,
-                }),
-              }).catch(() => {});
-            }
-          });
-      }
     } catch {
       // Ignore
     }
-  }, [tasks, lineSettings.channelAccessToken]);
+  }, [tasks]);
 
   useEffect(() => {
     try {
@@ -522,6 +490,7 @@ export default function App() {
       nextMembers: TeamMember[],
       deletedTaskId?: string | string[]
     ) => {
+      lastLocalMutationMsRef.current = Date.now();
       try {
         const deletedIdsArray = Array.isArray(deletedTaskId)
           ? deletedTaskId
@@ -558,9 +527,7 @@ export default function App() {
       }
 
       // Also sync tasks to Google Sheets via Server Proxy or direct Google Apps Script Bridge (works on GitHub Pages too)
-      const activeGasUrl = (
-        localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-      ).trim();
+      const activeGasUrl = getEffectiveGasUrl();
       let proxySynced = false;
       try {
         const proxyRes = await fetch('/api/line/gas-bridge-sync', {
@@ -642,41 +609,21 @@ export default function App() {
           lastSyncedTimestampRef.current = remote.updatedAt;
           setLastCollabSyncAt(remote.updatedAt);
 
-          if (Array.isArray(remote.tasks) && remote.tasks.length > 0) {
+          if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
+            recordDeletedTaskIds(data.deletedTaskIds);
+          }
+
+          if (Array.isArray(remote.tasks)) {
             const remoteDeletedIds = new Set<string>([
               ...(Array.isArray(data.deletedTaskIds) ? data.deletedTaskIds : []),
               ...Array.from(deletedTaskIdsRef.current),
             ]);
-            setTasks((prev) => {
-              const remoteTasks = remote.tasks as Task[];
-              const byId = new Map<string, Task>();
-              for (const item of [...prev, ...remoteTasks]) {
-                if (!item || !item.id || remoteDeletedIds.has(item.id)) continue;
-                const existing = byId.get(item.id);
-                if (!existing) {
-                  byId.set(item.id, item);
-                } else {
-                  const t1 = existing.updatedAt
-                    ? new Date(existing.updatedAt).getTime()
-                    : 0;
-                  const t2 = item.updatedAt
-                    ? new Date(item.updatedAt).getTime()
-                    : 0;
-                  if (t2 >= t1) {
-                    byId.set(item.id, item);
-                  }
-                }
-              }
-              const merged = Array.from(byId.values());
-              if (merged.length > remoteTasks.length) {
-                pushCollaborativeWorkspace(
-                  merged,
-                  categoriesRef.current,
-                  teamMembersRef.current
-                );
-              }
-              return merged;
-            });
+            const cleanRemoteTasks = (remote.tasks as Task[]).filter(
+              (item) => item && item.id && !remoteDeletedIds.has(item.id)
+            );
+            if (Date.now() - lastLocalMutationMsRef.current > 4000) {
+              setTasks(cleanRemoteTasks);
+            }
           }
           if (Array.isArray(remote.categories) && remote.categories.length > 0) {
             setCategories(remote.categories as Category[]);
@@ -1072,9 +1019,7 @@ export default function App() {
         }
 
         if (!handledByServer) {
-          const savedGasUrl = (
-            localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-          ).trim();
+          const savedGasUrl = getEffectiveGasUrl();
           if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
             const gasPayload = JSON.stringify({
               action: 'push_line',
@@ -1531,9 +1476,7 @@ export default function App() {
             handled = false;
           }
           if (!handled) {
-            const savedGasUrl = (
-              localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-            ).trim();
+            const savedGasUrl = getEffectiveGasUrl();
             if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
               try {
                 await fetch(savedGasUrl, {
@@ -1607,9 +1550,7 @@ export default function App() {
     }
 
     if (!foundGroup) {
-      const savedGasUrl = (
-        localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-      ).trim();
+      const savedGasUrl = getEffectiveGasUrl();
       if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
         try {
           const gasRes = await fetch(savedGasUrl, {
@@ -1690,11 +1631,61 @@ export default function App() {
   }, [handleSendLineChatCommand, lineSettings.targetGroupId, lineSettings.targetUserId]);
 
   // Zero-Login Auto-Pull via Server Proxy OR Direct Browser-to-Google-Apps-Script Bridge (works on both Cloud Run & GitHub Pages!)
-  useEffect(() => {
-    const pullFromGasBridge = async () => {
+  const pullLatestTeamCalendar = useCallback(
+    async (showFeedback = false) => {
+      if (showFeedback) setIsSyncing(true);
       try {
-        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
-        const activeGasUrl = savedGasUrl || DEFAULT_GAS_WEB_APP_URL;
+        // 0. First try Collaborative Workspace endpoint if running on Full-Stack Server
+        let workspaceHandled = false;
+        try {
+          const wsRes = await fetch(
+            `/api/collab/workspace/${encodeURIComponent(workspaceId)}`
+          );
+          const wsCt = wsRes.headers.get('content-type') || '';
+          if (wsRes.ok && wsCt.includes('application/json')) {
+            const wsData = await wsRes.json();
+            if (wsData.exists && wsData.workspace) {
+              if (
+                Array.isArray(wsData.deletedTaskIds) &&
+                wsData.deletedTaskIds.length > 0
+              ) {
+                recordDeletedTaskIds(wsData.deletedTaskIds);
+              }
+              if (Array.isArray(wsData.workspace.tasks)) {
+                const delSet = new Set<string>([
+                  ...(Array.isArray(wsData.deletedTaskIds) ? wsData.deletedTaskIds : []),
+                  ...Array.from(deletedTaskIdsRef.current),
+                ]);
+                const cleanWsTasks = (wsData.workspace.tasks as Task[]).filter(
+                  (t) => t && t.id && !delSet.has(t.id)
+                );
+                if (
+                  showFeedback ||
+                  Date.now() - lastLocalMutationMsRef.current > 4000
+                ) {
+                  setTasks(cleanWsTasks);
+                  workspaceHandled = true;
+                }
+              }
+              if (
+                Array.isArray(wsData.workspace.categories) &&
+                wsData.workspace.categories.length > 0
+              ) {
+                setCategories(wsData.workspace.categories as Category[]);
+              }
+              if (
+                Array.isArray(wsData.workspace.teamMembers) &&
+                wsData.workspace.teamMembers.length > 0
+              ) {
+                setTeamMembers(wsData.workspace.teamMembers as TeamMember[]);
+              }
+            }
+          }
+        } catch {
+          // Static host fallback
+        }
+
+        const activeGasUrl = getEffectiveGasUrl();
         let data: {
           gasUrl?: string;
           detectedGroupId?: string;
@@ -1709,7 +1700,6 @@ export default function App() {
             body: JSON.stringify({
               mode: 'pull',
               gasUrl: activeGasUrl,
-              tasks: tasksRef.current,
             }),
           });
           const ct = res.headers.get('content-type') || '';
@@ -1756,105 +1746,108 @@ export default function App() {
           }
         }
 
-        if (!data) return;
+        if (data) {
+          if (
+            typeof data.detectedGroupId === 'string' &&
+            /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
+          ) {
+            const detectedGrp = data.detectedGroupId.trim();
+            setLineSettings((prev) =>
+              prev.targetGroupId ? prev : { ...prev, targetGroupId: detectedGrp }
+            );
+          }
 
-        if (
-          typeof data.gasUrl === 'string' &&
-          data.gasUrl.startsWith('https://script.google.com/macros/s/') &&
-          !savedGasUrl
-        ) {
-          localStorage.setItem('sheetcal_gas_url_v1', data.gasUrl);
+          if (
+            Array.isArray(data.tasks) &&
+            (showFeedback || Date.now() - lastLocalMutationMsRef.current > 4000) &&
+            (!workspaceHandled || data.tasks.length > 0)
+          ) {
+            setTasks((prev) => {
+              const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
+              const nextRemoteTasks: Task[] = [];
+              for (const rt of data!.tasks as Task[]) {
+                if (!rt || !rt.id || !rt.title || !rt.date) continue;
+                if (deletedTaskIdsRef.current.has(rt.id)) continue;
+                const existing = prevById.get(rt.id);
+                nextRemoteTasks.push({
+                  id: rt.id,
+                  title: rt.title,
+                  description: rt.description ?? existing?.description ?? '',
+                  date: rt.date,
+                  time: rt.time || existing?.time || '09:00',
+                  categoryId: rt.categoryId || existing?.categoryId || 'cat-ops',
+                  priority:
+                    (rt.priority as TaskPriority) ||
+                    existing?.priority ||
+                    TaskPriority.MEDIUM,
+                  status:
+                    (rt.status as TaskStatus) ||
+                    existing?.status ||
+                    TaskStatus.PENDING,
+                  remindMinutesBefore:
+                    typeof rt.remindMinutesBefore === 'number'
+                      ? rt.remindMinutesBefore
+                      : existing?.remindMinutesBefore ?? 1,
+                  lineNotified: rt.lineNotified ?? existing?.lineNotified ?? false,
+                  source: rt.source || existing?.source || 'web',
+                  updatedAt:
+                    rt.updatedAt || existing?.updatedAt || new Date().toISOString(),
+                  assigneeId: rt.assigneeId ?? existing?.assigneeId,
+                  assigneeName: rt.assigneeName ?? existing?.assigneeName,
+                });
+              }
+
+              // Avoid unnecessary state updates if identical
+              if (
+                nextRemoteTasks.length === prev.length &&
+                nextRemoteTasks.every((nt, idx) => {
+                  const pt = prev[idx];
+                  return (
+                    pt &&
+                    pt.id === nt.id &&
+                    pt.title === nt.title &&
+                    pt.description === nt.description &&
+                    pt.date === nt.date &&
+                    pt.time === nt.time &&
+                    pt.status === nt.status &&
+                    pt.priority === nt.priority &&
+                    pt.categoryId === nt.categoryId &&
+                    pt.assigneeName === nt.assigneeName
+                  );
+                })
+              ) {
+                return prev;
+              }
+              return nextRemoteTasks;
+            });
+          }
         }
-        if (
-          typeof data.detectedGroupId === 'string' &&
-          /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
-        ) {
-          const detectedGrp = data.detectedGroupId.trim();
-          setLineSettings((prev) =>
-            prev.targetGroupId ? prev : { ...prev, targetGroupId: detectedGrp }
+
+        if (showFeedback) {
+          showNotice(
+            'success',
+            'ดึงตารางงานล่าสุดจากปฏิทินกลางของแอดมินและทีมเรียบร้อยแล้ว!'
           );
         }
-        if (Array.isArray(data.tasks) && data.tasks.length > 0) {
-          setTasks((prev) => {
-            const remoteById = new Map<string, Task>();
-            for (const rt of data!.tasks as Task[]) {
-              if (
-                rt &&
-                rt.id &&
-                rt.title &&
-                rt.date &&
-                !deletedTaskIdsRef.current.has(rt.id)
-              ) {
-                remoteById.set(rt.id, rt);
-              }
-            }
-            let changed = false;
-            const updatedPrev = prev.map((p) => {
-              const r = remoteById.get(p.id);
-              if (
-                r &&
-                (r.status !== p.status ||
-                  r.title !== p.title ||
-                  r.date !== p.date ||
-                  r.time !== p.time)
-              ) {
-                changed = true;
-                return {
-                  ...p,
-                  title: r.title,
-                  date: r.date,
-                  time: r.time || p.time,
-                  status: r.status || p.status,
-                };
-              }
-              return p;
-            });
-            const existingIds = new Set(prev.map((p) => p.id));
-            const newItems = Array.from(remoteById.values()).filter(
-              (rt) => !existingIds.has(rt.id)
-            );
-            if (newItems.length > 0) {
-              return [...newItems, ...updatedPrev];
-            }
-            if (prev.some((localTask) => !remoteById.has(localTask.id))) {
-              fetch('/api/line/gas-bridge-sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  mode: 'push',
-                  gasUrl: activeGasUrl,
-                  tasks: updatedPrev,
-                }),
-              })
-                .then((r) => {
-                  const ct = r.headers.get('content-type') || '';
-                  if (!r.ok || !ct.includes('application/json')) {
-                    throw new Error('Static fallback');
-                  }
-                })
-                .catch(() => {
-                  fetch(activeGasUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({
-                      action: 'sync_tasks',
-                      tasks: updatedPrev,
-                    }),
-                  }).catch(() => {});
-                });
-            }
-            return changed ? updatedPrev : prev;
-          });
-        }
       } catch {
-        // Silent background check
+        if (showFeedback) {
+          showNotice(
+            'error',
+            'ไม่สามารถดึงตารางงานล่าสุดได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง'
+          );
+        }
+      } finally {
+        if (showFeedback) setIsSyncing(false);
       }
-    };
+    },
+    [recordDeletedTaskIds, showNotice, workspaceId]
+  );
 
-    pullFromGasBridge();
-    const gasTimer = setInterval(pullFromGasBridge, 6000);
+  useEffect(() => {
+    pullLatestTeamCalendar(false);
+    const gasTimer = setInterval(() => pullLatestTeamCalendar(false), 5000);
     return () => clearInterval(gasTimer);
-  }, []);
+  }, [pullLatestTeamCalendar]);
 
   // Background Auto-Pull from Google Sheets every 6 seconds so tasks added via real LINE App (Google Apps Script Webhook) appear in Calendar automatically
   useEffect(() => {
@@ -1869,7 +1862,9 @@ export default function App() {
         if (!remote.tasks || remote.tasks.length === 0) return;
 
         const currentIds = new Set(tasks.map((t) => t.id));
-        const newlyAddedFromSheet = remote.tasks.filter((rt) => !currentIds.has(rt.id));
+        const newlyAddedFromSheet = remote.tasks.filter(
+          (rt) => !currentIds.has(rt.id) && !deletedTaskIdsRef.current.has(rt.id)
+        );
 
         if (newlyAddedFromSheet.length > 0) {
           const newest = newlyAddedFromSheet[0];
@@ -2124,7 +2119,7 @@ export default function App() {
       }
 
       if (!handledByServer) {
-        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        const savedGasUrl = getEffectiveGasUrl();
         if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
           const gasPayload = JSON.stringify({
             action: 'push_line',
@@ -2323,7 +2318,7 @@ export default function App() {
       }
 
       if (!handledByServer) {
-        const savedGasUrl = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+        const savedGasUrl = getEffectiveGasUrl();
         if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
           const gasPayload = JSON.stringify({
             action: 'push_line',
@@ -2865,21 +2860,36 @@ export default function App() {
                   label={isLoggingIn ? 'กำลังเชื่อมต่อ...' : 'Sign in with Google (เฉพาะแอดมิน)'}
                 />
               ) : (
-                <button
-                  type="button"
-                  disabled={isSyncing}
-                  onClick={() => {
-                    pushCollaborativeWorkspace(tasks, categories, teamMembers);
-                    showNotice(
-                      'success',
-                      'ซิงค์ตารางงานล่าสุดของทีมเรียบร้อยแล้ว (ใช้งานได้ทันทีโดยไม่ต้องล็อกอิน)'
-                    );
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
-                >
-                  <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>ซิงค์ตารางงานทีม</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isSyncing}
+                    onClick={() => pullLatestTeamCalendar(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                    title="ดึงตารางงานล่าสุดจากแอดมินและปฏิทินทีม"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>ดึงตารางงานล่าสุด</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSyncing}
+                    onClick={async () => {
+                      setIsSyncing(true);
+                      await pushCollaborativeWorkspace(tasks, categories, teamMembers);
+                      setIsSyncing(false);
+                      showNotice(
+                        'success',
+                        `อัปเดตตารางงานปัจจุบัน (${tasks.length} งาน) ไปยังปฏิทินของทีมเรียบร้อยแล้ว!`
+                      );
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors whitespace-nowrap shrink-0"
+                    title="ส่งตารางงานจากเครื่องนี้ไปอัปเดตให้ทุกคนในทีมเห็นตรงกัน"
+                  >
+                    <Cloud className="h-3 w-3" />
+                    <span>อัปเดตตารางให้ทีม</span>
+                  </button>
+                </div>
               )
             ) : (
               <>
@@ -2904,22 +2914,42 @@ export default function App() {
                     <button
                       type="button"
                       disabled={isSyncing}
-                      onClick={handlePullFromSheets}
+                      onClick={() => pullLatestTeamCalendar(true)}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
                     >
                       <RefreshCw
                         className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`}
                       />
-                      <span>ซิงค์ข้อมูลล่าสุด</span>
+                      <span>ดึงตารางงานล่าสุด</span>
                     </button>
                     <button
                       type="button"
                       disabled={isSyncing}
-                      onClick={handlePushToSheetsWithConfirm}
+                      onClick={async () => {
+                        setIsSyncing(true);
+                        await pushCollaborativeWorkspace(tasks, categories, teamMembers);
+                        if (sheetMeta && accessToken) {
+                          await syncAllToConnectedSheet(
+                            tasks,
+                            categories,
+                            lineLogs,
+                            `อัปเดตตารางงาน (${tasks.length} งาน) ให้สมาชิกในทีมทุกคนและบันทึกลง Google Sheets เรียบร้อยแล้ว!`,
+                            undefined,
+                            undefined,
+                            teamMembers
+                          );
+                        } else {
+                          showNotice(
+                            'success',
+                            `อัปเดตตารางงาน (${tasks.length} งาน) ให้สมาชิกในทีมทุกคนเรียบร้อยแล้ว!`
+                          );
+                        }
+                        setIsSyncing(false);
+                      }}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors whitespace-nowrap shrink-0"
                     >
                       <Cloud className="h-3 w-3" />
-                      <span>บันทึกขึ้น Sheets</span>
+                      <span>อัปเดตตารางให้ทีม</span>
                     </button>
                   </div>
                 )}

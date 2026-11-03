@@ -11,6 +11,29 @@ import {
 export const DEFAULT_GAS_WEB_APP_URL =
   'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
 
+export function isLegacyGasUrl(url?: string | null): boolean {
+  if (!url) return true;
+  const trimmed = url.trim();
+  return (
+    !trimmed.startsWith('https://script.google.com/macros/s/') ||
+    trimmed.includes('AKfycby0gvQ') ||
+    trimmed.includes('AKfycbxIf9k')
+  );
+}
+
+export function getEffectiveGasUrl(): string {
+  try {
+    const saved = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+    if (!isLegacyGasUrl(saved)) {
+      return saved;
+    }
+    localStorage.setItem('sheetcal_gas_url_v1', DEFAULT_GAS_WEB_APP_URL);
+  } catch {
+    // Ignore storage access errors
+  }
+  return DEFAULT_GAS_WEB_APP_URL;
+}
+
 export const DEFAULT_SPREADSHEET_ID =
   '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc';
 

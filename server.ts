@@ -831,12 +831,28 @@ function buildSingleTaskReminderFlexMessage(params: {
   };
 }
 
+const DEFAULT_TEAM_GAS_URL =
+  'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
+
+function resolveCleanGasUrl(candidate?: string | null): string {
+  const trimmed = String(candidate || '').trim();
+  if (
+    trimmed.startsWith('https://script.google.com/macros/s/') &&
+    !trimmed.includes('AKfycby0gvQ') &&
+    !trimmed.includes('AKfycbxIf9k')
+  ) {
+    return trimmed;
+  }
+  return DEFAULT_TEAM_GAS_URL;
+}
+
 let runtimeChannelAccessToken = sanitizeToken(process.env.LINE_CHANNEL_ACCESS_TOKEN || '');
 let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
 let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
-let runtimeGasUrl = '';
+let runtimeGasUrl = DEFAULT_TEAM_GAS_URL;
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
+const persistedDeletedTaskIds = new Set<string>();
 const WORKSPACE_CACHE_FILE = path.join(process.cwd(), '.sheetcal-workspace-cache.json');
 
 function loadPersistedWorkspaceCache(): void {
@@ -855,7 +871,12 @@ function loadPersistedWorkspaceCache(): void {
         runtimeDetectedGroupId = parsed.runtimeDetectedGroupId.trim();
       }
       if (typeof parsed.runtimeGasUrl === 'string' && parsed.runtimeGasUrl) {
-        runtimeGasUrl = parsed.runtimeGasUrl.trim();
+        runtimeGasUrl = resolveCleanGasUrl(parsed.runtimeGasUrl);
+      }
+      if (Array.isArray(parsed.deletedTaskIds)) {
+        for (const id of parsed.deletedTaskIds) {
+          if (id) persistedDeletedTaskIds.add(String(id));
+        }
       }
       if (parsed.workspaces && typeof parsed.workspaces === 'object') {
         for (const [k, v] of Object.entries(parsed.workspaces)) {
@@ -883,7 +904,8 @@ function savePersistedWorkspaceCache(): void {
           runtimeChannelAccessToken,
           runtimeDefaultUserId,
           runtimeDetectedGroupId,
-          runtimeGasUrl,
+          runtimeGasUrl: resolveCleanGasUrl(runtimeGasUrl),
+          deletedTaskIds: Array.from(persistedDeletedTaskIds),
           workspaces: workspacesObj,
         },
         null,
@@ -1098,7 +1120,7 @@ async function startServer() {
     next();
   });
 
-  const deletedTaskIds = new Set<string>();
+  const deletedTaskIds = persistedDeletedTaskIds;
   let lastGasPullMs = 0;
 
   function mergeTasksById(
@@ -1144,14 +1166,15 @@ async function startServer() {
       Array.from(sharedWorkspaces.values())[0];
 
     const nowMs = Date.now();
+    const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
-      runtimeGasUrl.startsWith('https://script.google.com/macros/s/') &&
+      cleanGas.startsWith('https://script.google.com/macros/s/') &&
       nowMs - lastGasPullMs > 4000
     ) {
       lastGasPullMs = nowMs;
       try {
         const gasRes = await fetch(
-          `${runtimeGasUrl}?action=get_tasks&format=json`,
+          `${cleanGas}?action=get_tasks&format=json`,
           { method: 'GET', redirect: 'follow' }
         );
         if (gasRes.ok) {
@@ -1233,7 +1256,33 @@ async function startServer() {
     const existingTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
     const incomingTasks = Array.isArray(tasks) ? tasks : [];
 
-    let nextTasks: unknown[] = mergeTasksById(incomingTasks, existingTasks);
+    // When a client pushes a full `tasks` array (without a single-item `action`),
+    // treat `incomingTasks` as the authoritative task list and mark any tasks removed from `existingTasks` as deleted!
+    let nextTasks: unknown[];
+    if (Array.isArray(tasks) && !action) {
+      const incomingIdSet = new Set<string>();
+      for (const item of incomingTasks) {
+        if (item && typeof item === 'object') {
+          const id = String((item as Record<string, unknown>).id || '').trim();
+          if (id) {
+            incomingIdSet.add(id);
+            deletedTaskIds.delete(id);
+          }
+        }
+      }
+      for (const oldItem of existingTasks) {
+        if (oldItem && typeof oldItem === 'object') {
+          const oldId = String((oldItem as Record<string, unknown>).id || '').trim();
+          if (oldId && !incomingIdSet.has(oldId)) {
+            deletedTaskIds.add(oldId);
+            explicitDeletedIds.add(oldId);
+          }
+        }
+      }
+      nextTasks = mergeTasksById(incomingTasks, []);
+    } else {
+      nextTasks = mergeTasksById(incomingTasks, existingTasks);
+    }
 
     if (action === 'add_task' && task && typeof task === 'object') {
       const rec = task as Record<string, unknown>;
@@ -1271,8 +1320,9 @@ async function startServer() {
     sharedWorkspaces.set('team-default', nextState);
     savePersistedWorkspaceCache();
 
-    if (runtimeGasUrl.startsWith('https://script.google.com/macros/s/')) {
-      postToGoogleAppsScript(runtimeGasUrl, {
+    const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+    if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+      postToGoogleAppsScript(cleanGas, {
         action: 'sync_tasks',
         tasks: nextTasks,
       }).catch(() => {});
@@ -1292,28 +1342,7 @@ async function startServer() {
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
       if (token) runtimeChannelAccessToken = token;
 
-      let targetGasUrl = String(gasUrl || runtimeGasUrl || '').trim();
-      if (!targetGasUrl.startsWith('https://script.google.com/macros/s/') && token) {
-        const whRes = await fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => null);
-        if (whRes && whRes.ok) {
-          const whData = (await whRes.json().catch(() => ({}))) as { endpoint?: string };
-          if (
-            whData.endpoint &&
-            whData.endpoint.trim().startsWith('https://script.google.com/macros/s/')
-          ) {
-            targetGasUrl = whData.endpoint.trim();
-          }
-        }
-      }
-
-      if (!targetGasUrl.startsWith('https://script.google.com/macros/s/')) {
-        res.json({ ok: false, reason: 'no_gas_url' });
-        return;
-      }
-
+      const targetGasUrl = resolveCleanGasUrl(gasUrl || runtimeGasUrl);
       runtimeGasUrl = targetGasUrl;
       savePersistedWorkspaceCache();
 
@@ -1334,7 +1363,12 @@ async function startServer() {
       const pullRes = await postToGoogleAppsScript(targetGasUrl, {
         action: 'get_tasks',
       });
-      const remoteTasks = Array.isArray(pullRes.json.tasks) ? pullRes.json.tasks : [];
+      const rawRemoteTasks = Array.isArray(pullRes.json.tasks) ? pullRes.json.tasks : [];
+      const remoteTasks = rawRemoteTasks.filter((t) => {
+        if (!t || typeof t !== 'object') return false;
+        const id = String((t as Record<string, unknown>).id || '').trim();
+        return Boolean(id && !deletedTaskIds.has(id));
+      });
       const detectedGrp =
         typeof pullRes.json.detectedGroupId === 'string' &&
         /^[CR][0-9a-fA-F]{32}$/.test(pullRes.json.detectedGroupId.trim())
@@ -1384,11 +1418,8 @@ async function startServer() {
     if (typeof targetGroupId === 'string' && /^[CR][0-9a-fA-F]{32}$/.test(targetGroupId.trim())) {
       runtimeDetectedGroupId = targetGroupId.trim();
     }
-    if (
-      typeof gasUrl === 'string' &&
-      gasUrl.trim().startsWith('https://script.google.com/macros/s/')
-    ) {
-      runtimeGasUrl = gasUrl.trim();
+    if (typeof gasUrl === 'string' && gasUrl.trim()) {
+      runtimeGasUrl = resolveCleanGasUrl(gasUrl);
     }
     savePersistedWorkspaceCache();
     if (runtimeChannelAccessToken) {
