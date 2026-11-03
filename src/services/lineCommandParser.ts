@@ -920,22 +920,23 @@ export function resolveTeamCalendarAppUrl(options?: {
   date?: string;
 }): string {
   const custom = (options?.customPublicUrl || '').trim();
-  let rawBase = '';
+  const isInvalidOrLoginGated = (u: string) =>
+    !u ||
+    !/^https?:\/\//i.test(u) ||
+    /^https:\/\/ais-(dev|pre)-/i.test(u) ||
+    u.includes('docs.google.com/spreadsheets') ||
+    u.includes('AKfycby0gvQ') ||
+    u.includes('AKfycbxIf9k');
 
-  if (
-    custom &&
-    /^https?:\/\//i.test(custom) &&
-    !/^https:\/\/ais-(dev|pre)-/i.test(custom)
-  ) {
+  let rawBase = '';
+  if (!isInvalidOrLoginGated(custom)) {
     rawBase = custom;
   } else if (
     typeof window !== 'undefined' &&
-    !/^https:\/\/ais-(dev|pre)-/i.test(window.location.origin)
+    !isInvalidOrLoginGated(window.location.origin)
   ) {
     rawBase = `${window.location.origin}${window.location.pathname}`;
   } else {
-    // Never send private ais-dev-* / ais-pre-* AI Studio URLs to LINE because Google AI Studio
-    // puts a mandatory Google Account Sign-In wall in front of them! Use the public web URL instead.
     rawBase = 'https://naiadminna.github.io/Lakha/';
   }
 
@@ -943,10 +944,7 @@ export function resolveTeamCalendarAppUrl(options?: {
     const parsedUrl = new URL(rawBase);
     const host = parsedUrl.hostname.toLowerCase();
 
-    if (
-      host.includes('calendar.google.com') ||
-      host.includes('docs.google.com')
-    ) {
+    if (host.includes('calendar.google.com')) {
       return parsedUrl.toString();
     }
 
@@ -960,31 +958,40 @@ export function resolveTeamCalendarAppUrl(options?: {
     }
 
     parsedUrl.searchParams.set('section', 'calendar');
-    if (options?.workspaceId && options.workspaceId.trim()) {
-      parsedUrl.searchParams.set('workspace', options.workspaceId.trim());
-    }
-    if (options?.spreadsheetId && options.spreadsheetId.trim()) {
-      parsedUrl.searchParams.set('sheet', options.spreadsheetId.trim());
-    }
+    parsedUrl.searchParams.set(
+      'workspace',
+      options?.workspaceId?.trim() || 'sheetcal-team-clean'
+    );
+    parsedUrl.searchParams.set(
+      'sheet',
+      options?.spreadsheetId?.trim() || '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc'
+    );
     if (options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())) {
       parsedUrl.searchParams.set('date', options.date.trim());
     }
+    const defaultPublicGas =
+      'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
+    let effectiveGas = defaultPublicGas;
     try {
       const savedGas =
         typeof localStorage !== 'undefined'
           ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
           : '';
-      if (savedGas.startsWith('https://script.google.com/macros/s/')) {
-        parsedUrl.searchParams.set('gas', savedGas);
+      if (
+        savedGas.startsWith('https://script.google.com/macros/s/') &&
+        !savedGas.includes('AKfycby0gvQ') &&
+        !savedGas.includes('AKfycbxIf9k')
+      ) {
+        effectiveGas = savedGas;
       }
     } catch {
       // Ignore storage access
     }
-    // Force LINE app on iOS/Android to open in Safari/Chrome instead of storage-partitioned LINE WebView
+    parsedUrl.searchParams.set('gas', effectiveGas);
     parsedUrl.searchParams.set('openExternalBrowser', '1');
     return parsedUrl.toString();
   } catch {
-    return 'https://calendar.google.com';
+    return 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1';
   }
 }
 
@@ -1057,16 +1064,22 @@ export function generateGoogleAppsScriptCode(
   const tokenDisplay = channelAccessToken?.trim()
     ? channelAccessToken.trim().replace(/^Bearer\s+/i, '').replace(/[\r\n']/g, '').trim()
     : 'วาง_LINE_CHANNEL_ACCESS_TOKEN_ของคุณที่นี่';
-  const mainServerOrigin = (
+  const rawWindowOrigin = (
     typeof window !== 'undefined' ? window.location.origin : ''
   )
     .split('?')[0]
     .replace(/\/+$/, '')
     .replace(/[\r\n']/g, '')
     .trim();
-  const rawAppUrl = (appUrl || mainServerOrigin || 'https://calendar.google.com')
-    .replace(/[\r\n']/g, '')
-    .trim();
+  const mainServerOrigin = /^https:\/\/ais-(dev|pre)-/i.test(rawWindowOrigin)
+    ? 'https://naiadminna.github.io/Lakha'
+    : rawWindowOrigin || 'https://naiadminna.github.io/Lakha';
+  const cleanPassedAppUrl = (appUrl || '').replace(/[\r\n']/g, '').trim();
+  const safePassedAppUrl = /^https:\/\/ais-(dev|pre)-/i.test(cleanPassedAppUrl)
+    ? ''
+    : cleanPassedAppUrl;
+  const rawAppUrl =
+    safePassedAppUrl || mainServerOrigin || 'https://naiadminna.github.io/Lakha';
   const webAppUrl = rawAppUrl.includes('script.google.com/macros/s/')
     ? rawAppUrl.split('?')[0].replace(/\/+$/, '')
     : mainServerOrigin || rawAppUrl.split('?')[0].replace(/\/+$/, '');
@@ -1104,10 +1117,17 @@ function getSelfWebAppUrl() {
 
 function getCalendarDeepLink(overrideBaseUrl, dateStr) {
   var selfGasUrl = getSelfWebAppUrl();
-  var base = String(overrideBaseUrl || selfGasUrl || WEB_APP_URL || '').trim();
+  var candidate = String(overrideBaseUrl || '').trim();
+  if (candidate.indexOf('https://ais-dev-') === 0 || candidate.indexOf('https://ais-pre-') === 0) {
+    candidate = '';
+  }
+  var base = String(candidate || selfGasUrl || WEB_APP_URL || '').trim();
+  if (base.indexOf('https://ais-dev-') === 0 || base.indexOf('https://ais-pre-') === 0) {
+    base = selfGasUrl || 'https://naiadminna.github.io/Lakha/?section=calendar';
+  }
   var sheetDirect = getSpreadsheetDirectUrl();
   if (!base || base.indexOf('http') !== 0) {
-    base = selfGasUrl || sheetDirect || 'https://calendar.google.com';
+    base = selfGasUrl || sheetDirect || 'https://naiadminna.github.io/Lakha/?section=calendar';
   }
   if (base.indexOf('calendar.google.com') !== -1 || base.indexOf('docs.google.com') !== -1) {
     return base;
@@ -1573,22 +1593,22 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
         paddingAll: '12px',
         contents: (function() {
           var targetCalUrl = getCalendarDeepLink(customOriginUrl, dateLabel || todayStr);
-          var sheetDirectUrl = getSpreadsheetDirectUrl();
+          var backupPortalUrl = getSelfWebAppUrl() ? (getSelfWebAppUrl() + '?view=calendar&openExternalBrowser=1') : '';
           var btns = [
             {
               type: 'button',
               style: 'primary',
-              color: '#4F46E5',
+              color: '#06C755',
               height: 'sm',
-              action: { type: 'uri', label: 'เปิดดูปฏิทินของทีม', uri: targetCalUrl }
+              action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCalUrl }
             }
           ];
-          if (sheetDirectUrl && targetCalUrl !== sheetDirectUrl) {
+          if (backupPortalUrl && targetCalUrl.indexOf('script.google.com') === -1) {
             btns.push({
               type: 'button',
               style: 'secondary',
               height: 'sm',
-              action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: sheetDirectUrl }
+              action: { type: 'uri', label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)', uri: backupPortalUrl }
             });
           }
           return btns;
@@ -2865,7 +2885,7 @@ function doPost(e) {
               paddingAll: '12px',
               contents: (function() {
                 var targetCal = getCalendarDeepLink('', parsed.date);
-                var directSheet = getSpreadsheetDirectUrl();
+                var backupPortal = getSelfWebAppUrl() ? (getSelfWebAppUrl() + '?view=calendar&openExternalBrowser=1') : '';
                 var btns = [
                   {
                     type: 'button',
@@ -2875,12 +2895,12 @@ function doPost(e) {
                     action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCal }
                   }
                 ];
-                if (directSheet && targetCal !== directSheet) {
+                if (backupPortal && targetCal.indexOf('script.google.com') === -1) {
                   btns.push({
                     type: 'button',
                     style: 'secondary',
                     height: 'sm',
-                    action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: directSheet }
+                    action: { type: 'uri', label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)', uri: backupPortal }
                   });
                 }
                 return btns;

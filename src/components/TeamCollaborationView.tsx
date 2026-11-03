@@ -101,9 +101,18 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   const [copiedGasCode, setCopiedGasCode] = useState(false);
   const [gasUrlInput, setGasUrlInput] = useState<string>(() => {
     try {
-      return typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL).trim()
-        : DEFAULT_GAS_WEB_APP_URL;
+      const saved =
+        typeof localStorage !== 'undefined'
+          ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
+          : '';
+      if (
+        !saved ||
+        saved.includes('AKfycby0gvQ') ||
+        saved.includes('AKfycbxIf9k')
+      ) {
+        return DEFAULT_GAS_WEB_APP_URL;
+      }
+      return saved;
     } catch {
       return DEFAULT_GAS_WEB_APP_URL;
     }
@@ -724,24 +733,6 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                         }`}
                       >
                         🌐 เว็บปฏิทินทีม Apps Script (ทุกคนในกลุ่มเปิดได้ 100%)
-                      </button>
-                    )}
-                    {spreadsheetUrl && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onUpdateLineSettings({
-                            ...lineSettings,
-                            publicCalendarUrl: spreadsheetUrl,
-                          })
-                        }
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
-                          lineSettings.publicCalendarUrl === spreadsheetUrl
-                            ? 'bg-emerald-600 text-white border-emerald-600'
-                            : 'bg-white text-emerald-800 border-emerald-200 hover:bg-emerald-50'
-                        }`}
-                      >
-                        📊 เปิดไฟล์ Google Sheets ของทีม
                       </button>
                     )}
                     <button

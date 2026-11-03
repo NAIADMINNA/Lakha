@@ -499,6 +499,8 @@ function buildDailyDigestFlexMessage(
         borderWidth: '1px',
         borderColor: '#F1F5F9',
         contents: (() => {
+          const backupPortalUrl =
+            'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec?view=calendar&openExternalBrowser=1';
           const btns: Record<string, unknown>[] = [
             {
               type: 'button',
@@ -512,23 +514,17 @@ function buildDailyDigestFlexMessage(
               },
             },
           ];
-          try {
-            const parsed = new URL(appUrl);
-            const sheetParam = (parsed.searchParams.get('sheet') || '').trim();
-            if (sheetParam && !appUrl.includes('docs.google.com/spreadsheets')) {
-              btns.push({
-                type: 'button',
-                style: 'secondary',
-                height: 'sm',
-                action: {
-                  type: 'uri',
-                  label: '📊 เปิดตารางงาน Google Sheets',
-                  uri: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetParam)}/edit`,
-                },
-              });
-            }
-          } catch {
-            // Ignore URL parse error
+          if (!appUrl.includes('script.google.com')) {
+            btns.push({
+              type: 'button',
+              style: 'secondary',
+              height: 'sm',
+              action: {
+                type: 'uri',
+                label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)',
+                uri: backupPortalUrl,
+              },
+            });
           }
           return btns;
         })(),
@@ -603,25 +599,18 @@ function buildSingleTaskReminderFlexMessage(params: {
       },
     });
   }
-  try {
-    const parsedApp = new URL(params.appUrl);
-    const sheetParam = (parsedApp.searchParams.get('sheet') || '').trim();
-    if (sheetParam && !params.appUrl.includes('docs.google.com/spreadsheets')) {
-      footerButtons.push({
-        type: 'button',
-        style: 'secondary',
-        height: 'sm',
-        action: {
-          type: 'uri',
-          label: '📊 เปิดตารางงาน Google Sheets',
-          uri: `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetParam)}/edit`,
-        },
-      });
-    }
-  } catch {
-    // Ignore URL parse error
-  }
-  if (showCalBtn && footerButtons.length < 2) {
+  if (!params.appUrl.includes('script.google.com')) {
+    footerButtons.push({
+      type: 'button',
+      style: 'secondary',
+      height: 'sm',
+      action: {
+        type: 'uri',
+        label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)',
+        uri: 'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec?view=calendar&openExternalBrowser=1',
+      },
+    });
+  } else if (showCalBtn && footerButtons.length < 2) {
     footerButtons.push({
       type: 'button',
       style: 'secondary',
@@ -1727,6 +1716,8 @@ async function startServer() {
       // Automatically clean up any lingering Messaging API Rich Menu in the background
       purgeAllLineRichMenus(token, effectiveUserId || rawTo).catch(() => {});
 
+      const defaultPublicAppUrl =
+        'https://naiadminna.github.io/Lakha/?section=calendar&workspace=sheetcal-team-clean&sheet=1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc&gas=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg%2Fexec&openExternalBrowser=1';
       const refererHeader = String(req.headers.origin || req.headers.referer || '').trim();
       const rawAppUrl =
         originUrl && String(originUrl).startsWith('https://')
@@ -1735,11 +1726,13 @@ async function startServer() {
           ? refererHeader
           : process.env.APP_URL && process.env.APP_URL.startsWith('https://')
           ? process.env.APP_URL
-          : 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1';
-      // Never send private ais-dev-* / ais-pre-* URLs to LINE because Google AI Studio forces a Google Sign-In screen on them
-      const appUrl = /^https:\/\/ais-(dev|pre)-/i.test(rawAppUrl)
-        ? 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1'
-        : rawAppUrl;
+          : defaultPublicAppUrl;
+      const isBlockedUrl =
+        /^https:\/\/ais-(dev|pre)-/i.test(rawAppUrl) ||
+        rawAppUrl.includes('docs.google.com/spreadsheets') ||
+        rawAppUrl.includes('AKfycby0gvQ') ||
+        rawAppUrl.includes('AKfycbxIf9k');
+      const appUrl = isBlockedUrl ? defaultPublicAppUrl : rawAppUrl;
 
       const { todayYMD: bangkokTodayStr } = getBangkokNowYMDAndHM();
       let flexMessage: unknown;

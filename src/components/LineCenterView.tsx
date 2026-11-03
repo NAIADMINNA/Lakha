@@ -91,9 +91,15 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   >('format');
   const [gasUrl, setGasUrl] = useState(() => {
     try {
-      return (
-        localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL
-      );
+      const saved = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+      if (
+        !saved ||
+        saved.includes('AKfycby0gvQ') ||
+        saved.includes('AKfycbxIf9k')
+      ) {
+        return DEFAULT_GAS_WEB_APP_URL;
+      }
+      return saved;
     } catch {
       return DEFAULT_GAS_WEB_APP_URL;
     }
@@ -2062,27 +2068,25 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       onClick={() =>
                         onUpdateSettings({
                           ...lineSettings,
-                          publicCalendarUrl: '',
+                          publicCalendarUrl: 'https://naiadminna.github.io/Lakha/?section=calendar',
+                        })
+                      }
+                      className="px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-medium text-emerald-800 transition-colors"
+                    >
+                      🚀 เปิดหน้าเว็บหลัก (ไม่ต้องล็อกอิน)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          publicCalendarUrl: `${DEFAULT_GAS_WEB_APP_URL}?view=calendar`,
                         })
                       }
                       className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] font-medium text-slate-700 transition-colors"
                     >
-                      ใช้ลิงก์เว็บปฏิทินอัตโนมัติ (?section=calendar)
+                      🌐 เปิดเว็บปฏิทินทีม Apps Script (ไม่ต้องล็อกอิน)
                     </button>
-                    {spreadsheetUrl && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onUpdateSettings({
-                            ...lineSettings,
-                            publicCalendarUrl: spreadsheetUrl,
-                          })
-                        }
-                        className="px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-medium text-emerald-800 transition-colors"
-                      >
-                        ให้ปุ่มเปิดไฟล์ Google Sheets ของทีม
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() =>

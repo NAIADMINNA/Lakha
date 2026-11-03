@@ -120,11 +120,21 @@ export default function App() {
   // Shared Workspace ID (supports ?workspace=... URL param for shared calendar links)
   const [workspaceId] = useState<string>(() => {
     try {
+      const existingGas = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+      if (
+        !existingGas ||
+        existingGas.includes('AKfycby0gvQ') ||
+        existingGas.includes('AKfycbxIf9k')
+      ) {
+        localStorage.setItem('sheetcal_gas_url_v1', DEFAULT_GAS_WEB_APP_URL);
+      }
       const params = new URLSearchParams(window.location.search);
       const gasFromUrl = params.get('gas');
       if (
         gasFromUrl &&
-        gasFromUrl.trim().startsWith('https://script.google.com/macros/s/')
+        gasFromUrl.trim().startsWith('https://script.google.com/macros/s/') &&
+        !gasFromUrl.includes('AKfycby0gvQ') &&
+        !gasFromUrl.includes('AKfycbxIf9k')
       ) {
         localStorage.setItem('sheetcal_gas_url_v1', gasFromUrl.trim());
       }
@@ -202,11 +212,17 @@ export default function App() {
       const saved = localStorage.getItem(STORAGE_KEYS.LINE_SETTINGS);
       if (saved) {
         const parsed = JSON.parse(saved);
+        const pubUrl = typeof parsed.publicCalendarUrl === 'string' ? parsed.publicCalendarUrl.trim() : '';
         if (
-          typeof parsed.publicCalendarUrl === 'string' &&
-          /^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim())
+          !parsed._v28PublicUrlFixed ||
+          !pubUrl ||
+          /^https:\/\/ais-(pre|dev)-/i.test(pubUrl) ||
+          pubUrl.includes('AKfycby0gvQ') ||
+          pubUrl.includes('AKfycbxIf9k') ||
+          pubUrl.includes('docs.google.com/spreadsheets')
         ) {
-          parsed.publicCalendarUrl = '';
+          parsed.publicCalendarUrl = 'https://naiadminna.github.io/Lakha/?section=calendar';
+          parsed._v28PublicUrlFixed = true;
         }
         // Migrate legacy [30, 60, 1440] default timing and overdue catch-up that caused 18:00 tasks to fire at 21:29
         if (!parsed._v27TimingFixed) {
@@ -2568,14 +2584,13 @@ export default function App() {
         </button>
       </div>
 
-      {/* In-App Browser (LINE WebView) Warning Banner with 1-Click External Browser Redirect */}
-      {isInAppWebView() && (
+      {/* In-App Browser (LINE WebView) Banner — Only shown if admin opens Database OAuth tab */}
+      {isInAppWebView() && activeSection === 'database' && (
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5">
           <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-amber-950">
             <div>
               <strong>💡 คุณกำลังเปิดผ่านเบราว์เซอร์ภายในแอป LINE:</strong>{' '}
-              คุณสามารถดูตารางงานและปฏิทินทีมได้ทันทีโดยไม่ต้องล็อกอิน Gmail แต่หากต้องการกด{' '}
-              <strong>Sign in with Google</strong> กรุณาเปิดใน Safari หรือ Chrome (เพราะเบราว์เซอร์ในแอป LINE บล็อกระบบล็อกอินของ Google)
+              สมาชิกทุกคนดูตารางงานและเพิ่มงานได้ทันทีโดยไม่ต้องล็อกอิน แต่หากแอดมินต้องการตั้งค่าบัญชี Google OAuth กรุณาเปิดใน Safari หรือ Chrome
             </div>
             <button
               type="button"
@@ -2620,7 +2635,10 @@ export default function App() {
                 )}
               </>
             ) : (
-              <span>เชื่อมต่อ Google Sheets เพื่อสำรองข้อมูลและใช้ตารางงานร่วมกับทีม</span>
+              <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>เชื่อมต่อปฏิทินทีมอัตโนมัติแล้ว (สมาชิกใช้งานได้ทันที ไม่ต้องล็อกอิน)</span>
+              </span>
             )}
             <span aria-hidden="true">·</span>
             <button
@@ -2660,11 +2678,29 @@ export default function App() {
 
           <div className="flex items-center gap-2 shrink-0">
             {needsAuth ? (
-              <GoogleSignInButton
-                onClick={handleGoogleLogin}
-                disabled={isLoggingIn}
-                label={isLoggingIn ? 'กำลังเชื่อมต่อ...' : 'Sign in with Google'}
-              />
+              activeSection === 'database' ? (
+                <GoogleSignInButton
+                  onClick={handleGoogleLogin}
+                  disabled={isLoggingIn}
+                  label={isLoggingIn ? 'กำลังเชื่อมต่อ...' : 'Sign in with Google (เฉพาะแอดมิน)'}
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSyncing}
+                  onClick={() => {
+                    pushCollaborativeWorkspace(tasks, categories, teamMembers);
+                    showNotice(
+                      'success',
+                      'ซิงค์ตารางงานล่าสุดของทีมเรียบร้อยแล้ว (ใช้งานได้ทันทีโดยไม่ต้องล็อกอิน)'
+                    );
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>ซิงค์ตารางงานทีม</span>
+                </button>
+              )
             ) : (
               <>
                 {!sheetMeta ? (
