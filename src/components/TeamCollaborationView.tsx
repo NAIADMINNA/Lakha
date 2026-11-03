@@ -26,6 +26,7 @@ import {
   generateGoogleAppsScriptCode,
   resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
+import { DEFAULT_GAS_WEB_APP_URL } from '../data/initialData';
 
 interface TeamCollaborationViewProps {
   tasks: Task[];
@@ -101,10 +102,10 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
   const [gasUrlInput, setGasUrlInput] = useState<string>(() => {
     try {
       return typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('sheetcal_gas_url_v1') || '').trim()
-        : '';
+        ? (localStorage.getItem('sheetcal_gas_url_v1') || DEFAULT_GAS_WEB_APP_URL).trim()
+        : DEFAULT_GAS_WEB_APP_URL;
     } catch {
-      return '';
+      return DEFAULT_GAS_WEB_APP_URL;
     }
   });
 
@@ -689,16 +690,21 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                       onClick={() =>
                         onUpdateLineSettings({
                           ...lineSettings,
-                          publicCalendarUrl: '',
+                          publicCalendarUrl:
+                            typeof window !== 'undefined' &&
+                            !/^https:\/\/ais-(dev|pre)-/i.test(window.location.origin)
+                              ? ''
+                              : 'https://naiadminna.github.io/Lakha/?section=calendar',
                         })
                       }
                       className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
-                        !lineSettings.publicCalendarUrl
+                        !lineSettings.publicCalendarUrl ||
+                        (lineSettings.publicCalendarUrl || '').includes('naiadminna.github.io')
                           ? 'bg-emerald-600 text-white border-emerald-600'
                           : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-50'
                       }`}
                     >
-                      เปิดหน้าเว็บปฏิทินนี้
+                      🚀 เปิดหน้าเว็บหลัก (ไม่ต้องล็อกอิน)
                     </button>
                     {gasUrlInput.trim().startsWith('https://script.google.com/macros/s/') && (
                       <button

@@ -1429,10 +1429,13 @@ async function startServer() {
         return;
       }
 
+      const rawEnvAppUrl = (process.env.APP_URL || '').trim();
       const appUrl =
-        process.env.APP_URL && process.env.APP_URL.startsWith('http')
-          ? process.env.APP_URL
-          : 'https://calendar.google.com';
+        rawEnvAppUrl &&
+        rawEnvAppUrl.startsWith('http') &&
+        !/^https:\/\/ais-(dev|pre)-/i.test(rawEnvAppUrl)
+          ? rawEnvAppUrl
+          : 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1';
 
       for (const event of events) {
         const senderGroupId = String(
@@ -1732,14 +1735,11 @@ async function startServer() {
           ? refererHeader
           : process.env.APP_URL && process.env.APP_URL.startsWith('https://')
           ? process.env.APP_URL
-          : 'https://calendar.google.com';
-      // Heal stale ais-pre- URLs (which return 404 when not published) back to active ais-dev- container URL
-      const appUrl =
-        /^https:\/\/ais-pre-/i.test(rawAppUrl) &&
-        (/^https:\/\/ais-dev-/i.test(refererHeader) ||
-          /^https:\/\/ais-dev-/i.test(process.env.APP_URL || ''))
-          ? rawAppUrl.replace(/^https:\/\/ais-pre-/i, 'https://ais-dev-')
-          : rawAppUrl;
+          : 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1';
+      // Never send private ais-dev-* / ais-pre-* URLs to LINE because Google AI Studio forces a Google Sign-In screen on them
+      const appUrl = /^https:\/\/ais-(dev|pre)-/i.test(rawAppUrl)
+        ? 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1'
+        : rawAppUrl;
 
       const { todayYMD: bangkokTodayStr } = getBangkokNowYMDAndHM();
       let flexMessage: unknown;

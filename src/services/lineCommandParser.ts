@@ -922,20 +922,21 @@ export function resolveTeamCalendarAppUrl(options?: {
   const custom = (options?.customPublicUrl || '').trim();
   let rawBase = '';
 
-  if (custom && /^https?:\/\//i.test(custom)) {
+  if (
+    custom &&
+    /^https?:\/\//i.test(custom) &&
+    !/^https:\/\/ais-(dev|pre)-/i.test(custom)
+  ) {
     rawBase = custom;
-    // Heal stale ais-pre- URLs that return 404 when running inside the active ais-dev- environment
-    if (
-      typeof window !== 'undefined' &&
-      /^https:\/\/ais-pre-/i.test(rawBase) &&
-      /^https:\/\/ais-dev-/i.test(window.location.origin)
-    ) {
-      rawBase = rawBase.replace(/^https:\/\/ais-pre-/i, 'https://ais-dev-');
-    }
-  } else if (typeof window !== 'undefined') {
+  } else if (
+    typeof window !== 'undefined' &&
+    !/^https:\/\/ais-(dev|pre)-/i.test(window.location.origin)
+  ) {
     rawBase = `${window.location.origin}${window.location.pathname}`;
   } else {
-    rawBase = 'https://calendar.google.com';
+    // Never send private ais-dev-* / ais-pre-* AI Studio URLs to LINE because Google AI Studio
+    // puts a mandatory Google Account Sign-In wall in front of them! Use the public web URL instead.
+    rawBase = 'https://naiadminna.github.io/Lakha/';
   }
 
   try {
