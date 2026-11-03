@@ -133,12 +133,15 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
 
   const handleCopyGasV26Code = async () => {
     try {
-      const appUrl = resolveTeamCalendarAppUrl({
-        customPublicUrl: lineSettings.publicCalendarUrl,
-        workspaceId,
-        spreadsheetId: spreadsheetId || '',
-        date: formatLocalDateYMD(),
-      });
+      const appUrl =
+        typeof window !== 'undefined'
+          ? window.location.origin
+          : resolveTeamCalendarAppUrl({
+              customPublicUrl: lineSettings.publicCalendarUrl,
+              workspaceId,
+              spreadsheetId: spreadsheetId || '',
+              date: formatLocalDateYMD(),
+            });
       const code = generateGoogleAppsScriptCode(
         spreadsheetId || '',
         lineSettings.channelAccessToken,
@@ -150,7 +153,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
       setGroupDetectNotice({
         ok: true,
         message:
-          '✅ คัดลอกโค้ด Apps Script v2.6 เรียบร้อยแล้ว! นำไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy จากนั้นพิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE ได้เลยครับ',
+          '✅ คัดลอกโค้ด Apps Script v2.7 (แก้บั๊กปุ่มกดหน้าเว็บทีม + ซิงค์ข้อมูลอัตโนมัติ) เรียบร้อยแล้ว! นำไปวางทับใน Google Sheets > Extensions > Apps Script กด Save แล้วกดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy ได้เลยครับ',
       });
     } catch {
       // Ignore clipboard error
@@ -171,10 +174,10 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
     setIsDetectingGroup(true);
     setGroupDetectNotice(null);
     try {
-      let detected: string | null = null;
+      let detected: string | null = isValidGroupId ? effectiveGroupId : null;
       let isOutdatedGas = false;
+      let hasPortalSyntaxBug = false;
       let webhookActive = true;
-      let webhookEndpoint = '';
       let webhookBoundSuccess = false;
 
       const activeGasUrl =
@@ -199,6 +202,8 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
             channelAccessToken: lineSettings.channelAccessToken,
             gasUrl: activeGasUrl,
             autoBindWebhook: true,
+            targetGroupId: isValidGroupId ? effectiveGroupId : undefined,
+            tasks,
           }),
         });
         if (checkRes.ok) {
@@ -217,17 +222,23 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
           if (checkData.isOutdatedGas) {
             isOutdatedGas = true;
           }
+          if (checkData.hasPortalSyntaxBug) {
+            hasPortalSyntaxBug = true;
+          }
           if (checkData.webhookActive === false) {
             webhookActive = false;
           }
           if (checkData.webhookBoundSuccess) {
             webhookBoundSuccess = true;
           }
-          if (typeof checkData.webhookEndpoint === 'string' && checkData.webhookEndpoint) {
-            webhookEndpoint = checkData.webhookEndpoint;
-            if (!gasUrlInput.trim()) {
-              setGasUrlInput(checkData.webhookEndpoint);
-            }
+          const resolvedGas = String(
+            checkData.activeGasUrl || checkData.webhookEndpoint || ''
+          ).trim();
+          if (
+            resolvedGas.startsWith('https://script.google.com/macros/s/') &&
+            !gasUrlInput.trim()
+          ) {
+            setGasUrlInput(resolvedGas);
           }
         }
       } catch {
@@ -238,10 +249,15 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
         detected = await onDetectGroupId();
       }
 
-      if (detected && /^[CR][0-9a-fA-F]{32}$/.test(detected)) {
+      if (hasPortalSyntaxBug) {
+        setGroupDetectNotice({
+          ok: false,
+          message: `⚠️ รหัสกลุ่ม (${detected || effectiveGroupId || 'C...'}) ถูกต้องแล้ว แต่ลิงก์ Google Apps Script ที่ Deploy อยู่ยังเป็นโค้ดตัวเก่าที่มีบั๊กปุ่มกดบนเว็บ! วิธีแก้: กดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.7" ด้านล่าง > นำไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy แล้วทีมจะกดเพิ่ม/ติ๊กงานบนเว็บได้ 100% ครับ`,
+        });
+      } else if (detected && /^[CR][0-9a-fA-F]{32}$/.test(detected)) {
         setGroupDetectNotice({
           ok: true,
-          message: `✅ ดึงรหัสห้องแชทกลุ่ม LINE สำเร็จ: ${detected} — พร้อมส่งแจ้งเตือนเข้ากลุ่ม LINE ทันที!`,
+          message: `✅ เชื่อมรหัสห้องแชทกลุ่ม LINE (${detected}) และซิงค์ตารางงานเข้าเว็บปฏิทินทีม Apps Script สำเร็จแล้ว! สมาชิกทุกคนในกลุ่มเปิดใช้งานร่วมกันได้ทันที`,
         });
       } else if (!webhookActive) {
         setGroupDetectNotice({
@@ -256,7 +272,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
         setGroupDetectNotice({
           ok: false,
           message:
-            '❌ ลิงก์ Google Apps Script ปัจจุบันยังเป็นโค้ดเวอร์ชันเก่า: กรุณากดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.6" ด้านล่างไปวางทับใน Apps Script > กด Deploy > New deployment > คัดลอกลิงก์ Web app URL (/exec) มาวางในช่องด้านล่างแล้วกดปุ่มผูก Webhook ครับ',
+            '❌ ลิงก์ Google Apps Script ปัจจุบันยังเป็นโค้ดเวอร์ชันเก่า: กรุณากดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.7" ด้านล่างไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > เลือก "New version" > กด Deploy ครับ',
         });
       } else {
         setGroupDetectNotice({
@@ -619,6 +635,17 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                     } catch {
                       // Ignore
                     }
+                    if (
+                      val.startsWith('https://script.google.com/macros/s/') &&
+                      (lineSettings.publicCalendarUrl || '').startsWith(
+                        'https://script.google.com/macros/s/'
+                      )
+                    ) {
+                      onUpdateLineSettings({
+                        ...lineSettings,
+                        publicCalendarUrl: `${val.split('?')[0]}?view=calendar`,
+                      });
+                    }
                   }}
                   placeholder="วางลิงก์ https://script.google.com/macros/s/.../exec ที่ได้หลังกด Deploy"
                   className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-mono-tabular text-slate-800 focus:outline-none focus:border-[#06C755]"
@@ -654,7 +681,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                         onClick={() =>
                           onUpdateLineSettings({
                             ...lineSettings,
-                            publicCalendarUrl: `${gasUrlInput.trim()}?view=calendar`,
+                            publicCalendarUrl: `${gasUrlInput.trim().split('?')[0]}?view=calendar`,
                           })
                         }
                         className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
@@ -742,12 +769,12 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   {copiedGasCode ? (
                     <>
                       <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>คัดลอกโค้ด v2.6 แล้ว! นำไป Deploy ได้เลย</span>
+                      <span>คัดลอกโค้ด v2.7 แล้ว! นำไปอัปเดต Deploy ได้เลย</span>
                     </>
                   ) : (
                     <>
                       <Copy className="h-3.5 w-3.5 text-indigo-700" />
-                      <span>📋 คัดลอกโค้ด Apps Script v2.6</span>
+                      <span>📋 คัดลอกโค้ด Apps Script v2.7 (แก้บั๊กหน้าเว็บทีม)</span>
                     </>
                   )}
                 </button>

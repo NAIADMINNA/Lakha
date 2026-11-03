@@ -202,8 +202,7 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (
           typeof parsed.publicCalendarUrl === 'string' &&
-          (/^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim()) ||
-            parsed.publicCalendarUrl.includes('script.google.com/macros/s/'))
+          /^https:\/\/ais-pre-/i.test(parsed.publicCalendarUrl.trim())
         ) {
           parsed.publicCalendarUrl = '';
         }

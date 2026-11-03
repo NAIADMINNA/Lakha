@@ -2244,9 +2244,20 @@ async function startServer() {
    */
   app.post('/api/line/check-group-webhook', async (req, res) => {
     try {
-      const { channelAccessToken, gasUrl, autoBindWebhook } = req.body || {};
+      const {
+        channelAccessToken,
+        gasUrl,
+        autoBindWebhook,
+        targetGroupId,
+        tasks: incomingTasks,
+      } = req.body || {};
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
-      const cleanGasUrl = String(gasUrl || '').trim();
+      const cleanGasUrl = String(gasUrl || '').split('?')[0].trim();
+      const cleanProvidedGroupId = String(targetGroupId || '').trim();
+      if (/^[CR][0-9a-fA-F]{32}$/.test(cleanProvidedGroupId)) {
+        runtimeDetectedGroupId = cleanProvidedGroupId;
+        savePersistedWorkspaceCache();
+      }
       let detectedGroupId = /^[CR][0-9a-fA-F]{32}$/.test(runtimeDetectedGroupId)
         ? runtimeDetectedGroupId
         : '';
@@ -2254,8 +2265,10 @@ async function startServer() {
       let webhookActive = true;
       let webhookBoundSuccess = false;
       let isOutdatedGas = false;
+      let hasPortalSyntaxBug = false;
       let gasReachable = false;
       let gasVersion = '';
+      let activeGasUrl = '';
       let botBasicId = '';
       let botDisplayName = '';
 
@@ -2269,6 +2282,8 @@ async function startServer() {
           cleanGasUrl.endsWith('/exec') &&
           autoBindWebhook !== false
         ) {
+          runtimeGasUrl = cleanGasUrl;
+          savePersistedWorkspaceCache();
           const putRes = await fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', {
             method: 'PUT',
             headers: {
@@ -2313,14 +2328,19 @@ async function startServer() {
         }
       }
 
-      // 2. Check Google Apps Script URL (prioritize cleanGasUrl then LINE's configured webhookEndpoint)
+      // 2. Check Google Apps Script URL (prioritize webhookEndpoint & cleanGasUrl)
       const candidateGasUrls = Array.from(
         new Set(
-          [cleanGasUrl, webhookEndpoint].filter((u) =>
-            u.startsWith('https://script.google.com/macros/s/')
+          [cleanGasUrl, webhookEndpoint, runtimeGasUrl].filter((u) =>
+            u && u.startsWith('https://script.google.com/macros/s/')
           )
         )
       );
+
+      const workspaceTasks =
+        Array.isArray(incomingTasks) && incomingTasks.length > 0
+          ? incomingTasks
+          : sharedWorkspaces.get('sheetcal-team-clean')?.tasks || [];
 
       for (const scriptUrl of candidateGasUrls) {
         try {
@@ -2330,6 +2350,8 @@ async function startServer() {
             body: JSON.stringify({
               action: 'check_bridge',
               channelAccessToken: token || undefined,
+              targetGroupId: detectedGroupId || undefined,
+              tasks: workspaceTasks.length > 0 ? workspaceTasks : undefined,
               events: [],
             }),
             redirect: 'manual',
@@ -2354,6 +2376,7 @@ async function startServer() {
 
           if (finalStatus >= 200 && finalStatus < 300) {
             gasReachable = true;
+            if (!activeGasUrl) activeGasUrl = scriptUrl;
           }
 
           let parsed: Record<string, unknown> = {};
@@ -2369,6 +2392,7 @@ async function startServer() {
           ) {
             detectedGroupId = parsed.detectedGroupId.trim();
             runtimeDetectedGroupId = detectedGroupId;
+            savePersistedWorkspaceCache();
           }
 
           if (typeof parsed.version === 'string') {
@@ -2378,9 +2402,36 @@ async function startServer() {
           if (
             parsed.status === 'verified' &&
             parsed.mode !== 'gas_bridge_ready' &&
-            !String(parsed.version || '').includes('2.6')
+            !String(parsed.version || '').includes('2.6') &&
+            !String(parsed.version || '').includes('2.7')
           ) {
             isOutdatedGas = true;
+          }
+
+          // Also push workspaceTasks via sync_tasks so the Apps Script portal immediately has all tasks
+          if (workspaceTasks.length > 0) {
+            await fetch(scriptUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'sync_tasks',
+                targetGroupId: detectedGroupId || undefined,
+                tasks: workspaceTasks,
+              }),
+              redirect: 'follow',
+            }).catch(() => null);
+          }
+
+          // Inspect the deployed ?view=calendar HTML to check if it has the v2.6 replace(//+$/ JS syntax bug
+          const portalRes = await fetch(`${scriptUrl}?view=calendar`, {
+            method: 'GET',
+            redirect: 'follow',
+          }).catch(() => null);
+          if (portalRes && portalRes.ok) {
+            const portalHtml = await portalRes.text().catch(() => '');
+            if (portalHtml.includes('replace(//+$/')) {
+              hasPortalSyntaxBug = true;
+            }
           }
         } catch {
           // Ignore single URL error
@@ -2391,10 +2442,12 @@ async function startServer() {
         ok: Boolean(detectedGroupId),
         detectedGroupId: detectedGroupId || undefined,
         webhookEndpoint: webhookEndpoint || undefined,
+        activeGasUrl: activeGasUrl || webhookEndpoint || cleanGasUrl || undefined,
         webhookActive,
         webhookBoundSuccess,
         gasReachable,
         isOutdatedGas,
+        hasPortalSyntaxBug,
         gasVersion: gasVersion || undefined,
         botBasicId: botBasicId || undefined,
         botDisplayName: botDisplayName || undefined,

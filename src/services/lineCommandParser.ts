@@ -922,11 +922,7 @@ export function resolveTeamCalendarAppUrl(options?: {
   const custom = (options?.customPublicUrl || '').trim();
   let rawBase = '';
 
-  if (
-    custom &&
-    /^https?:\/\//i.test(custom) &&
-    !custom.includes('script.google.com/macros/s/')
-  ) {
+  if (custom && /^https?:\/\//i.test(custom)) {
     rawBase = custom;
     // Heal stale ais-pre- URLs that return 404 when running inside the active ais-dev- environment
     if (
@@ -950,6 +946,15 @@ export function resolveTeamCalendarAppUrl(options?: {
       host.includes('calendar.google.com') ||
       host.includes('docs.google.com')
     ) {
+      return parsedUrl.toString();
+    }
+
+    if (host.includes('script.google.com')) {
+      parsedUrl.searchParams.set('view', 'calendar');
+      if (options?.date && /^\d{4}-\d{2}-\d{2}$/.test(options.date.trim())) {
+        parsedUrl.searchParams.set('date', options.date.trim());
+      }
+      parsedUrl.searchParams.set('openExternalBrowser', '1');
       return parsedUrl.toString();
     }
 
@@ -988,6 +993,7 @@ export function generateGoogleAppsScriptCode(
   appUrl?: string
 ): string {
   let effectiveSheetId = (spreadsheetId || '').trim();
+  let effectiveGroupId = '';
   let initialTasksJson = '[]';
   try {
     if (typeof localStorage !== 'undefined') {
@@ -998,6 +1004,16 @@ export function generateGoogleAppsScriptCode(
           if (parsedMeta?.spreadsheetId) {
             effectiveSheetId = String(parsedMeta.spreadsheetId).trim();
           }
+        }
+      }
+      const rawLineSettings = localStorage.getItem('sheetcal_line_settings_v2');
+      if (rawLineSettings) {
+        const parsedSettings = JSON.parse(rawLineSettings);
+        const candidateGrp = String(
+          parsedSettings?.targetGroupId || parsedSettings?.targetUserId || ''
+        ).trim();
+        if (/^[CR][0-9a-fA-F]{32}$/.test(candidateGrp)) {
+          effectiveGroupId = candidateGrp;
         }
       }
       const rawTasks = localStorage.getItem('sheetcal_tasks_v3_clean');
@@ -1027,35 +1043,52 @@ export function generateGoogleAppsScriptCode(
     // Ignore localStorage error
   }
 
-  const sheetIdDisplay = (effectiveSheetId || 'วาง_SPREADSHEET_ID_ของคุณที่นี่')
+  const sheetIdDisplay = (
+    effectiveSheetId || '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc'
+  )
+    .replace(/[\r\n']/g, '')
+    .trim();
+  const groupIdDisplay = (
+    effectiveGroupId || 'Cff150b586a4f91c883b40ae7d76b2ec9'
+  )
     .replace(/[\r\n']/g, '')
     .trim();
   const tokenDisplay = channelAccessToken?.trim()
     ? channelAccessToken.trim().replace(/^Bearer\s+/i, '').replace(/[\r\n']/g, '').trim()
     : 'วาง_LINE_CHANNEL_ACCESS_TOKEN_ของคุณที่นี่';
-  const webAppUrl = (
-    appUrl ||
-    (typeof window !== 'undefined' ? window.location.origin : 'https://calendar.google.com')
+  const mainServerOrigin = (
+    typeof window !== 'undefined' ? window.location.origin : ''
   )
+    .split('?')[0]
+    .replace(/\/+$/, '')
     .replace(/[\r\n']/g, '')
     .trim();
+  const rawAppUrl = (appUrl || mainServerOrigin || 'https://calendar.google.com')
+    .replace(/[\r\n']/g, '')
+    .trim();
+  const webAppUrl = rawAppUrl.includes('script.google.com/macros/s/')
+    ? rawAppUrl.split('?')[0].replace(/\/+$/, '')
+    : mainServerOrigin || rawAppUrl.split('?')[0].replace(/\/+$/, '');
 
   return `/**
  * ============================================================================
- * SheetCal LINE — โค้ดเชื่อมต่อแอป LINE จริง -> Google Sheets + ปฏิทินเว็บ + Flex Message สรุปงานสวยงาม
+ * SheetCal LINE (v2.7) — โค้ดเชื่อมต่อแอป LINE จริง + เว็บปฏิทินทีม Apps Script (ซิงค์ 2 ทาง 100%)
  * ============================================================================
- * วิธีติดตั้ง:
+ * วิธีติดตั้ง / อัปเดตโค้ด:
  * 1. เปิดไฟล์ Google Sheets > Extensions (ส่วนขยาย) > Apps Script
- * 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป
- * 3. กดปุ่ม "Deploy" > "New deployment" > เลือกประเภท "Web app"
+ * 2. ลบโค้ดเดิมออกทั้งหมด แล้ววางโค้ดนี้ลงไป กด Save (แผ่นดิสก์)
+ * 3. กดปุ่ม "Deploy" > "Manage deployments" > กดรูปดินสอ (Edit)
+ *    - ช่อง Version: เลือก "New version" (สำคัญมากเพื่อให้โค้ดใหม่อัปเดตขึ้นเว็บ)
  *    - Execute as: "Me"
- *    - Who has access: "Anyone" (สำคัญมาก)
- * 4. คัดลอก Web app URL ไปวางในช่อง Webhook URL บน LINE Developers Console แล้วกด Verify
+ *    - Who has access: "Anyone"
+ * 4. กด Deploy แล้วใช้งานลิงก์ Web app URL เดิมหรือลิงก์ใหม่ได้ทันที
  */
 
 const SPREADSHEET_ID = '${sheetIdDisplay}';
 const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
+const MAIN_SERVER_URL = '${mainServerOrigin}';
 const WEB_APP_URL = '${webAppUrl}';
+const INITIAL_GROUP_ID = '${groupIdDisplay}';
 const INITIAL_WEB_TASKS = ${initialTasksJson};
 
 function getSelfWebAppUrl() {
@@ -1069,8 +1102,8 @@ function getSelfWebAppUrl() {
 }
 
 function getCalendarDeepLink(overrideBaseUrl, dateStr) {
-  var base = String(overrideBaseUrl || WEB_APP_URL || '').trim();
   var selfGasUrl = getSelfWebAppUrl();
+  var base = String(overrideBaseUrl || selfGasUrl || WEB_APP_URL || '').trim();
   var sheetDirect = getSpreadsheetDirectUrl();
   if (!base || base.indexOf('http') !== 0) {
     base = selfGasUrl || sheetDirect || 'https://calendar.google.com';
@@ -1606,12 +1639,22 @@ function saveTasksToProperties(tasksList) {
   } catch (err) {}
 }
 
+function getCleanServerOrigin() {
+  var raw = String((typeof MAIN_SERVER_URL !== 'undefined' && MAIN_SERVER_URL) ? MAIN_SERVER_URL : (WEB_APP_URL || '')).trim();
+  if (!raw || raw.indexOf('http') !== 0 || raw.indexOf('calendar.google.com') !== -1 || raw.indexOf('script.google.com') !== -1) {
+    return '';
+  }
+  var base = raw.split('?')[0];
+  while (base.length > 0 && base.charAt(base.length - 1) === '/') {
+    base = base.slice(0, -1);
+  }
+  return base;
+}
+
 function fetchTasksFromMainWebApp() {
   try {
-    if (!WEB_APP_URL || WEB_APP_URL.indexOf('http') !== 0 || WEB_APP_URL.indexOf('calendar.google.com') !== -1) {
-      return null;
-    }
-    var cleanBase = WEB_APP_URL.replace(/\\/+$/, '');
+    var cleanBase = getCleanServerOrigin();
+    if (!cleanBase) return null;
     var resp = UrlFetchApp.fetch(cleanBase + '/api/collab/workspace/sheetcal-team-clean', {
       method: 'get',
       muteHttpExceptions: true
@@ -1628,10 +1671,8 @@ function fetchTasksFromMainWebApp() {
 
 function pushTasksToMainWebApp(tasksList) {
   try {
-    if (!WEB_APP_URL || WEB_APP_URL.indexOf('http') !== 0 || WEB_APP_URL.indexOf('calendar.google.com') !== -1) {
-      return;
-    }
-    var cleanBase = WEB_APP_URL.replace(/\\/+$/, '');
+    var cleanBase = getCleanServerOrigin();
+    if (!cleanBase) return;
     UrlFetchApp.fetch(cleanBase + '/api/collab/workspace/sheetcal-team-clean', {
       method: 'post',
       contentType: 'application/json',
@@ -1815,6 +1856,9 @@ function getSavedGroupId() {
     var gid = PropertiesService.getScriptProperties().getProperty('LAST_GROUP_ID') || '';
     if (/^[CR][0-9a-fA-F]{32}$/.test(gid)) return gid;
   } catch (err) {}
+  if (typeof INITIAL_GROUP_ID !== 'undefined' && /^[CR][0-9a-fA-F]{32}$/.test(String(INITIAL_GROUP_ID).trim())) {
+    return String(INITIAL_GROUP_ID).trim();
+  }
   return '';
 }
 
@@ -1952,12 +1996,12 @@ function doGet(e) {
     return ContentService
       .createTextOutput(JSON.stringify({
         status: 'verified',
-        version: '2.6-group-bridge',
+        version: '2.7-group-portal-clean',
         capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         tasks: tasks,
-        message: 'SheetCal LINE Webhook & Push Bridge Ready (v2.6 Supports 1-on-1 & Group Chat)'
+        message: 'SheetCal LINE Webhook & Team Portal Ready (v2.7)'
       }))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -1966,6 +2010,8 @@ function doGet(e) {
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
   var initDate = (params.date && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(params.date))) ? String(params.date) : todayStr;
   var sheetUrl = getSpreadsheetDirectUrl();
+  var selfGasUrl = getSelfWebAppUrl();
+  var mainOrigin = getCleanServerOrigin();
   var totalCount = tasks.length;
   var doneCount = tasks.filter(function(t) { return t.status === 'completed'; }).length;
   var pendingCount = totalCount - doneCount;
@@ -1989,6 +2035,8 @@ function doGet(e) {
           '<button class="btn-act btn-del" data-id="' + escapeServerHtml(t.id) + '" onclick="handleDelete(this.getAttribute(\\'data-id\\'))">🗑️</button>' +
           '</div></div>';
       }).join('');
+
+  var safeTasksJson = JSON.stringify(tasks).replace(/</g, '\\\\u003c');
 
   var html = [
     '<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">',
@@ -2018,6 +2066,7 @@ function doGet(e) {
     'input,select{width:100%;padding:9px 11px;border-radius:10px;border:1px solid #CBD5E1;font-size:13px;background:#fff;}',
     '.btn-add{width:100%;padding:10px;border-radius:10px;border:none;background:#06C755;color:#fff;font-size:13px;font-weight:700;cursor:pointer;}',
     '.btn-add:disabled{opacity:0.6;}',
+    '.sync-banner{display:none;margin-top:8px;padding:8px 12px;border-radius:10px;background:#DCFCE7;border:1px solid #86EFAC;color:#14532D;font-size:12px;font-weight:600;}',
     '.empty-msg{text-align:center;color:#64748B;font-size:13px;padding:18px 0;margin:0;}',
     '.task-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border-radius:12px;border:1px solid #E2E8F0;margin-bottom:8px;background:#F8FAFC;}',
     '.task-item.done{background:#F0FDF4;border-color:#BBF7D0;opacity:0.85;}',
@@ -2032,10 +2081,10 @@ function doGet(e) {
     '</style></head><body><div class="wrap">',
     '<div class="header">',
     '<h1>📅 ปฏิทินและจัดการงานของทีม (SheetCal LINE)</h1>',
-    '<p>สมาชิกทุกคนในกลุ่ม LINE สามารถเปิดดูตารางงาน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ข้อมูลตรงกับระบบหลัก)</p>',
+    '<p>สมาชิกทุกคนในกลุ่ม LINE สามารถเปิดดูตารางงาน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ Google Sheets และระบบหลักอัตโนมัติ)</p>',
     '<div class="top-links">',
     (sheetUrl ? '<a class="btn-link" href="' + sheetUrl + '" target="_blank">📊 เปิดตาราง Google Sheets</a>' : ''),
-    (WEB_APP_URL && WEB_APP_URL.indexOf('http') === 0 ? '<a class="btn-link" href="' + WEB_APP_URL + '" target="_blank">💻 เปิดหน้าเว็บระบบหลัก</a>' : ''),
+    (mainOrigin ? '<a class="btn-link" href="' + mainOrigin + '" target="_blank">💻 เปิดหน้าเว็บระบบหลัก</a>' : ''),
     '</div></div>',
     '<div class="stats">',
     '<div class="stat-card"><div class="stat-num" id="stTotal">' + totalCount + '</div><div class="stat-lbl">งานทั้งหมด</div></div>',
@@ -2045,35 +2094,55 @@ function doGet(e) {
     '<div class="card">',
     '<div class="card-title"><span>➕ เพิ่มงานใหม่เข้าปฏิทินของทีม</span></div>',
     '<div class="form-grid">',
-    '<input type="text" id="inpTitle" placeholder="ชื่องาน เช่น ประชุมสรุปยอด..." />',
+    '<input type="text" id="inpTitle" placeholder="ชื่องาน เช่น ประชุมสรุปยอด..." onkeydown="if(event.key===\\'Enter\\')handleAdd()" />',
     '<input type="date" id="inpDate" value="' + initDate + '" />',
     '<input type="time" id="inpTime" value="09:00" />',
     '</div>',
     '<div style="display:flex;gap:8px;align-items:center;">',
     '<select id="inpPrio" style="max-width:160px;"><option value="medium">ความสำคัญ: ปกติ</option><option value="high">🔥 ด่วน (#สูง)</option></select>',
-    '<button class="btn-add" id="btnAdd" onclick="handleAdd()">+ บันทึกงานลงปฏิทินทีม</button>',
-    '</div></div>',
+    '<button type="button" class="btn-add" id="btnAdd" onclick="handleAdd()">+ บันทึกงานลงปฏิทินทีม</button>',
+    '</div>',
+    '<div id="syncBanner" class="sync-banner"></div>',
+    '</div>',
     '<div class="card">',
     '<div class="card-title"><span>📋 รายการงานในปฏิทิน</span>',
     '<div class="filter-bar">',
-    '<button class="tab" id="tabDate" onclick="setMode(\\'date\\')">เฉพาะวันที่เลือก</button>',
-    '<button class="tab active" id="tabAll" onclick="setMode(\\'all\\')">ดูงานทั้งหมด</button>',
+    '<button type="button" class="tab" id="tabDate" onclick="setMode(\\'date\\')">เฉพาะวันที่เลือก</button>',
+    '<button type="button" class="tab active" id="tabAll" onclick="setMode(\\'all\\')">ดูงานทั้งหมด</button>',
     '<input type="date" id="filterDate" value="' + initDate + '" onchange="onDateChange()" style="width:auto;padding:5px 8px;font-size:12px;" />',
     '</div></div>',
     '<div id="taskList">' + initialListHtml + '</div>',
     '</div></div>',
     '<script>',
-    'var tasks = ' + JSON.stringify(tasks) + ';',
-    'var mainWebAppUrl = ' + JSON.stringify(WEB_APP_URL || '') + ';',
+    'var tasks = ' + safeTasksJson + ';',
+    'var mainWebAppUrl = ' + JSON.stringify(mainOrigin || '') + ';',
+    'var selfGasUrl = ' + JSON.stringify(selfGasUrl || '') + ';',
     'var filterMode = "all";',
     'var selectedDate = "' + initDate + '";',
+    'function showBanner(msg){',
+    '  var b = document.getElementById("syncBanner");',
+    '  if(!b) return;',
+    '  b.textContent = msg;',
+    '  b.style.display = "block";',
+    '  setTimeout(function(){ b.style.display = "none"; }, 3500);',
+    '}',
+    'function getCleanOrigin(u){',
+    '  var s = String(u || "").split("?")[0];',
+    '  while(s.length > 0 && s.charAt(s.length - 1) === "/"){ s = s.slice(0, -1); }',
+    '  return s;',
+    '}',
     'function syncWithMainServer(actionPayload){',
-    '  if(!mainWebAppUrl || mainWebAppUrl.indexOf("http") !== 0 || mainWebAppUrl.indexOf("calendar.google.com") !== -1) return;',
-    '  var apiUrl = mainWebAppUrl.replace(/\\/+$/, "") + "/api/collab/workspace/sheetcal-team-clean";',
-    '  if(actionPayload){',
-    '    fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(actionPayload) }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks)){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
-    '  } else {',
-    '    fetch(apiUrl).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks) && d.workspace.tasks.length > 0){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '  var cleanOrigin = getCleanOrigin(mainWebAppUrl);',
+    '  if(cleanOrigin && cleanOrigin.indexOf("http") === 0 && cleanOrigin.indexOf("calendar.google.com") === -1 && cleanOrigin.indexOf("script.google.com") === -1){',
+    '    var apiUrl = cleanOrigin + "/api/collab/workspace/sheetcal-team-clean";',
+    '    if(actionPayload){',
+    '      fetch(apiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(actionPayload) }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks)){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '    } else {',
+    '      fetch(apiUrl).then(function(r){ return r.json(); }).then(function(d){ if(d && d.workspace && Array.isArray(d.workspace.tasks) && d.workspace.tasks.length > 0){ tasks = d.workspace.tasks; render(); } }).catch(function(){});',
+    '    }',
+    '  }',
+    '  if(actionPayload && selfGasUrl && selfGasUrl.indexOf("https://script.google.com") === 0){',
+    '    fetch(selfGasUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "sync_tasks", tasks: tasks }) }).catch(function(){});',
     '  }',
     '}',
     'function render(){',
@@ -2116,10 +2185,12 @@ function doGet(e) {
     '    var acts = document.createElement("div");',
     '    acts.className = "actions";',
     '    var btnDone = document.createElement("button");',
+    '    btnDone.type = "button";',
     '    btnDone.className = "btn-act btn-done";',
     '    btnDone.textContent = isDone ? "↩ ย้อนสถานะ" : "✓ เสร็จแล้ว";',
     '    btnDone.onclick = function(){ handleToggle(t.id); };',
     '    var btnDel = document.createElement("button");',
+    '    btnDel.type = "button";',
     '    btnDel.className = "btn-act btn-del";',
     '    btnDel.textContent = "🗑️";',
     '    btnDel.onclick = function(){ handleDelete(t.id); };',
@@ -2142,6 +2213,7 @@ function doGet(e) {
     '  tasks = [optimisticTask].concat(tasks);',
     '  document.getElementById("inpTitle").value = "";',
     '  render();',
+    '  showBanner("✅ บันทึกงาน [" + title + "] ลงปฏิทินทีมเรียบร้อยแล้ว!");',
     '  syncWithMainServer({ action: "add_task", task: optimisticTask, tasks: tasks });',
     '  if(typeof google !== "undefined" && google.script && google.script.run){',
     '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated) && updated.length > 0){ tasks = updated; render(); } }).withFailureHandler(function(){}).addTeamTaskFromPortal(title, d, tm, pr);',
@@ -2150,6 +2222,7 @@ function doGet(e) {
     'function handleToggle(id){',
     '  tasks = tasks.map(function(t){ return String(t.id) === String(id) ? Object.assign({}, t, { status: t.status === "completed" ? "pending" : "completed" }) : t; });',
     '  render();',
+    '  showBanner("✅ อัปเดตสถานะงานเรียบร้อยแล้ว!");',
     '  syncWithMainServer({ action: "toggle_task", taskId: id, tasks: tasks });',
     '  if(typeof google !== "undefined" && google.script && google.script.run){',
     '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated) && updated.length > 0){ tasks = updated; render(); } }).withFailureHandler(function(){}).toggleTeamTaskStatusFromPortal(id);',
@@ -2158,6 +2231,7 @@ function doGet(e) {
     'function handleDelete(id){',
     '  tasks = tasks.filter(function(t){ return String(t.id) !== String(id); });',
     '  render();',
+    '  showBanner("🗑️ ลบรายการงานออกจากปฏิทินเรียบร้อยแล้ว");',
     '  syncWithMainServer({ action: "delete_task", taskId: id, tasks: tasks });',
     '  if(typeof google !== "undefined" && google.script && google.script.run){',
     '    google.script.run.withSuccessHandler(function(updated){ if(Array.isArray(updated)){ tasks = updated; render(); } }).withFailureHandler(function(){}).deleteTeamTaskFromPortal(id);',
@@ -2181,6 +2255,9 @@ function doPost(e) {
     if (payload.channelAccessToken) {
       setSavedLineToken(payload.channelAccessToken);
     }
+    if (payload.targetGroupId && /^[CR][0-9a-fA-F]{32}$/.test(String(payload.targetGroupId).trim())) {
+      setSavedGroupId(String(payload.targetGroupId).trim());
+    }
 
     // คำสั่งลบ Rich Menu ทั้งหมดออกจาก LINE OA
     if (payload.action === 'clear_richmenu') {
@@ -2188,7 +2265,7 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: rmRes.ok ? 'ok' : 'error',
         mode: 'gas_clear_richmenu',
-        version: '2.6-group-bridge',
+        version: '2.7-group-portal-clean',
         ok: rmRes.ok,
         deletedCount: rmRes.deletedCount
       })).setMimeType(ContentService.MimeType.JSON);
@@ -2196,11 +2273,17 @@ function doPost(e) {
 
     // ตรวจสอบเวอร์ชันสะพานเชื่อม (Bridge Check) หรือดึงข้อมูลตารางงาน + รหัสกลุ่ม LINE (Group ID C...)
     if (payload.action === 'check_bridge' || payload.action === 'get_tasks') {
+      if (Array.isArray(payload.tasks) && payload.tasks.length > 0) {
+        var existingTasks = getSavedTasksFromProperties();
+        if (!Array.isArray(existingTasks) || existingTasks.length === 0) {
+          writeSheetTasksFromWeb(payload.tasks);
+        }
+      }
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
-        version: '2.6-group-bridge',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat'],
+        version: '2.7-group-portal-clean',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         hasToken: Boolean(getSavedLineToken()),
@@ -2214,7 +2297,8 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: savedOk ? 'ok' : 'error',
         mode: 'gas_sync_tasks',
-        version: '2.6-group-bridge',
+        version: '2.7-group-portal-clean',
+        detectedGroupId: getSavedGroupId(),
         ok: savedOk
       })).setMimeType(ContentService.MimeType.JSON);
     }

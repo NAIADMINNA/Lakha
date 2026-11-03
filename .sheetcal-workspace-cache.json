@@ -1,0 +1,80 @@
+{
+  "runtimeChannelAccessToken": "C7JXe+drqXEpOZpBrOexF7EPOzNmRWIaMdGu+4pq3DLOxMO2krxOUetIhRoLeyRtGXFP3mrzID6oUbOCmWig4coqCeq1WvZVlbygPIwI/Ppt8B60bbnGIeTURHMpjThjiK+BJHehGzYgQ+2c5VZyigdB04t89/1O/w1cDnyilFU=",
+  "runtimeDefaultUserId": "Uf98c07a411f5c16f74988dd00b5c085c",
+  "runtimeDetectedGroupId": "Cff150b586a4f91c883b40ae7d76b2ec9",
+  "runtimeGasUrl": "https://script.google.com/macros/s/AKfycbxIf9kUHj1TqKS5K5KmVYoXIK5lrgTplHBMrHnKHItbzwbcVW3aPMeJWLcHSlZmPNKqIg/exec",
+  "workspaces": {
+    "sheetcal-team-clean": {
+      "workspaceId": "sheetcal-team-clean",
+      "updatedAt": "2026-11-02T23:46:22.914Z",
+      "updatedBy": "adjeabna@gmail.com",
+      "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
+      "tasks": [
+        {
+          "id": "task-1793630653911",
+          "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",
+          "description": "ผอ.อำนาจ กับ หัวหน้าฝ่ายบริหาร",
+          "date": "2026-11-03",
+          "time": "14:00",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-02T14:46:15.670Z"
+        }
+      ],
+      "categories": [],
+      "teamMembers": [
+        {
+          "id": "member-owner",
+          "name": "นายสุเมธ ยิ้มพงษ์",
+          "email": "adjeabna@gmail.com",
+          "role": "owner",
+          "avatarColor": "#0F172A",
+          "department": "admin",
+          "invitedAt": "2026-10-12T16:16:46.261Z",
+          "status": "active"
+        }
+      ]
+    },
+    "team-default": {
+      "workspaceId": "sheetcal-team-clean",
+      "updatedAt": "2026-11-02T23:46:22.914Z",
+      "updatedBy": "adjeabna@gmail.com",
+      "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
+      "tasks": [
+        {
+          "id": "task-1793630653911",
+          "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",
+          "description": "ผอ.อำนาจ กับ หัวหน้าฝ่ายบริหาร",
+          "date": "2026-11-03",
+          "time": "14:00",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-02T14:46:15.670Z"
+        }
+      ],
+      "categories": [],
+      "teamMembers": [
+        {
+          "id": "member-owner",
+          "name": "นายสุเมธ ยิ้มพงษ์",
+          "email": "adjeabna@gmail.com",
+          "role": "owner",
+          "avatarColor": "#0F172A",
+          "department": "admin",
+          "invitedAt": "2026-10-12T16:16:46.261Z",
+          "status": "active"
+        }
+      ]
+    }
+  }
+}
