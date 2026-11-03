@@ -21,6 +21,7 @@ interface CalendarViewProps {
   onAddTaskForDate: (date: string) => void;
   onEditTask: (task: Task) => void;
   onDeleteTask: (task: Task) => void;
+  onDeleteCompletedTasks?: () => void;
   onToggleStatus: (task: Task) => void;
   onSendLineReminderNow: (task: Task) => void;
 }
@@ -73,10 +74,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onAddTaskForDate,
   onEditTask,
   onDeleteTask,
+  onDeleteCompletedTasks,
   onToggleStatus,
   onSendLineReminderNow,
 }) => {
   const todayStr = formatLocalDateYMD();
+  const completedCount = useMemo(
+    () => tasks.filter((t) => t.status === TaskStatus.COMPLETED).length,
+    [tasks]
+  );
 
   const [currentMonthDate, setCurrentMonthDate] = useState<Date>(() => {
     const parsed = selectedDate ? new Date(`${selectedDate}T00:00:00`) : new Date();
@@ -232,6 +238,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               <Plus className="h-3.5 w-3.5" />
               <span>เพิ่มงาน</span>
             </button>
+            {onDeleteCompletedTasks && completedCount > 0 && (
+              <button
+                type="button"
+                onClick={onDeleteCompletedTasks}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors whitespace-nowrap shrink-0"
+                title="ลบงานที่ทำเสร็จแล้วทั้งหมดในคราวเดียว"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>ลบงานที่เสร็จแล้ว ({completedCount})</span>
+              </button>
+            )}
           </div>
         </div>
 

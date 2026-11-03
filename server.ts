@@ -1197,6 +1197,7 @@ async function startServer() {
       task,
       taskId,
       deletedTaskId,
+      deletedTaskIds: incomingDeletedTaskIds,
       updatedBy,
       spreadsheetId,
       spreadsheetUrl,
@@ -1211,11 +1212,22 @@ async function startServer() {
       sharedWorkspaces.get('team-default') ||
       Array.from(sharedWorkspaces.values())[0];
 
-    const explicitDeletedId = String(
+    const explicitDeletedIds = new Set<string>();
+    const singleDeletedId = String(
       deletedTaskId || (action === 'delete_task' ? taskId : '') || ''
     ).trim();
-    if (explicitDeletedId) {
-      deletedTaskIds.add(explicitDeletedId);
+    if (singleDeletedId) {
+      explicitDeletedIds.add(singleDeletedId);
+      deletedTaskIds.add(singleDeletedId);
+    }
+    if (Array.isArray(incomingDeletedTaskIds)) {
+      for (const rawId of incomingDeletedTaskIds) {
+        const cleanId = String(rawId || '').trim();
+        if (cleanId) {
+          explicitDeletedIds.add(cleanId);
+          deletedTaskIds.add(cleanId);
+        }
+      }
     }
 
     const existingTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
@@ -1238,9 +1250,9 @@ async function startServer() {
             }
           : rec;
       });
-    } else if (explicitDeletedId) {
+    } else if (explicitDeletedIds.size > 0) {
       nextTasks = nextTasks.filter(
-        (t) => String((t as Record<string, unknown>).id) !== explicitDeletedId
+        (t) => !explicitDeletedIds.has(String((t as Record<string, unknown>).id))
       );
     }
 

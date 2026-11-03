@@ -485,15 +485,49 @@ export default function App() {
     }
   }, [sheetMeta]);
 
+  const deletedTaskIdsRef = useRef<Set<string>>((() => {
+    try {
+      const raw = localStorage.getItem('sheetcal_deleted_task_ids_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return new Set<string>(parsed.map(String));
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return new Set<string>();
+  })());
+
+  const recordDeletedTaskIds = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      if (id) deletedTaskIdsRef.current.add(id);
+    }
+    try {
+      localStorage.setItem(
+        'sheetcal_deleted_task_ids_v1',
+        JSON.stringify(Array.from(deletedTaskIdsRef.current))
+      );
+    } catch {
+      // Ignore
+    }
+  }, []);
+
   // Push collaborative workspace state to server so shared calendar collaborators stay in sync
   const pushCollaborativeWorkspace = useCallback(
     async (
       nextTasks: Task[],
       nextCategories: Category[],
       nextMembers: TeamMember[],
-      deletedTaskId?: string
+      deletedTaskId?: string | string[]
     ) => {
       try {
+        const deletedIdsArray = Array.isArray(deletedTaskId)
+          ? deletedTaskId
+          : deletedTaskId
+          ? [deletedTaskId]
+          : undefined;
         const res = await fetch(
           `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
           {
@@ -503,7 +537,9 @@ export default function App() {
               updatedBy: user?.email || 'สมาชิกทีม',
               spreadsheetId: sheetMeta?.spreadsheetId,
               spreadsheetUrl: sheetMeta?.spreadsheetUrl,
-              deletedTaskId: deletedTaskId || undefined,
+              deletedTaskId:
+                typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
+              deletedTaskIds: deletedIdsArray,
               tasks: nextTasks,
               categories: nextCategories,
               teamMembers: nextMembers,
@@ -607,9 +643,10 @@ export default function App() {
           setLastCollabSyncAt(remote.updatedAt);
 
           if (Array.isArray(remote.tasks) && remote.tasks.length > 0) {
-            const remoteDeletedIds = new Set<string>(
-              Array.isArray(data.deletedTaskIds) ? data.deletedTaskIds : []
-            );
+            const remoteDeletedIds = new Set<string>([
+              ...(Array.isArray(data.deletedTaskIds) ? data.deletedTaskIds : []),
+              ...Array.from(deletedTaskIdsRef.current),
+            ]);
             setTasks((prev) => {
               const remoteTasks = remote.tasks as Task[];
               const byId = new Map<string, Task>();
@@ -733,9 +770,16 @@ export default function App() {
       nextLogs: LineMessageLog[],
       successMsg?: string,
       calendarDateToOpen?: string,
-      deletedTaskId?: string,
+      deletedTaskId?: string | string[],
       nextTeamMembers: TeamMember[] = teamMembers
     ) => {
+      const deletedSet = new Set<string>(
+        Array.isArray(deletedTaskId)
+          ? deletedTaskId
+          : deletedTaskId
+          ? [deletedTaskId]
+          : []
+      );
       await pushCollaborativeWorkspace(
         nextTasks,
         nextCategories,
@@ -758,7 +802,10 @@ export default function App() {
           const remote = await fetchDatabaseFromSheet(token, sheetMeta.spreadsheetId);
           const localIds = new Set(nextTasks.map((t) => t.id));
           const remoteOnlyTasks = remote.tasks.filter(
-            (rt) => !localIds.has(rt.id) && rt.id !== deletedTaskId
+            (rt) =>
+              !localIds.has(rt.id) &&
+              !deletedSet.has(rt.id) &&
+              !deletedTaskIdsRef.current.has(rt.id)
           );
           if (remoteOnlyTasks.length > 0) {
             mergedTasks = [...remoteOnlyTasks, ...nextTasks];
@@ -1238,6 +1285,7 @@ export default function App() {
         confirmLabel: 'ลบรายการงาน',
         isDestructive: true,
         onConfirm: async () => {
+          recordDeletedTaskIds([task.id]);
           const nextTasks = tasks.filter((t) => t.id !== task.id);
           setTasks(nextTasks);
           if (sheetMeta && accessToken) {
@@ -1251,7 +1299,7 @@ export default function App() {
               teamMembers
             );
           } else {
-            await pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+            await pushCollaborativeWorkspace(nextTasks, categories, teamMembers, task.id);
             showNotice('info', `ลบงาน "${task.title}" ออกจากตารางงานแล้ว`);
           }
           closeConfirmDialog();
@@ -1263,6 +1311,7 @@ export default function App() {
       categories,
       lineLogs,
       pushCollaborativeWorkspace,
+      recordDeletedTaskIds,
       sheetMeta,
       showNotice,
       syncAllToConnectedSheet,
@@ -1270,6 +1319,72 @@ export default function App() {
       teamMembers,
     ]
   );
+
+  // Bulk Delete All Completed Tasks at Once (Always requires explicit confirmation)
+  const handleDeleteCompletedTasks = useCallback(() => {
+    const completedTasks = tasks.filter((t) => t.status === TaskStatus.COMPLETED);
+    if (completedTasks.length === 0) {
+      showNotice('info', 'ยังไม่มีรายการงานที่ทำเสร็จแล้วสำหรับลบ');
+      return;
+    }
+
+    const previewTitles = completedTasks
+      .slice(0, 4)
+      .map((t) => `"${t.title}"`)
+      .join(', ');
+    const moreSuffix =
+      completedTasks.length > 4 ? ` และอีก ${completedTasks.length - 4} งาน` : '';
+
+    setConfirmDialog({
+      isOpen: true,
+      title: `ยืนยันการลบงานที่ทำเสร็จแล้วทั้งหมด (${completedTasks.length} งาน) ในครั้งเดียว?`,
+      description:
+        'ระบบจะลบเฉพาะงานที่มีสถานะ "เสร็จแล้ว" ทั้งหมดออกจากปฏิทินของทีมและฐานข้อมูล Google Sheets ทันที (งานที่ยังค้างอยู่จะไม่ถูกลบ)',
+      affectedItemSummary: `ลบงานที่ทำเสร็จแล้วรวม ${completedTasks.length} รายการ: ${previewTitles}${moreSuffix}`,
+      confirmLabel: `ลบงานที่เสร็จแล้วทั้งหมด (${completedTasks.length} งาน)`,
+      isDestructive: true,
+      onConfirm: async () => {
+        const completedIds = completedTasks.map((t) => t.id);
+        recordDeletedTaskIds(completedIds);
+        const nextTasks = tasks.filter((t) => t.status !== TaskStatus.COMPLETED);
+        setTasks(nextTasks);
+        if (sheetMeta && accessToken) {
+          await syncAllToConnectedSheet(
+            nextTasks,
+            categories,
+            lineLogs,
+            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${completedTasks.length} รายการ ออกจากระบบและ Google Sheets เรียบร้อยแล้ว`,
+            undefined,
+            completedIds,
+            teamMembers
+          );
+        } else {
+          await pushCollaborativeWorkspace(
+            nextTasks,
+            categories,
+            teamMembers,
+            completedIds
+          );
+          showNotice(
+            'success',
+            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${completedTasks.length} รายการ เรียบร้อยแล้ว`
+          );
+        }
+        closeConfirmDialog();
+      },
+    });
+  }, [
+    accessToken,
+    categories,
+    lineLogs,
+    pushCollaborativeWorkspace,
+    recordDeletedTaskIds,
+    sheetMeta,
+    showNotice,
+    syncAllToConnectedSheet,
+    tasks,
+    teamMembers,
+  ]);
 
   // Process Natural Language LINE Chat Command (from in-app LINE chat, quick bar, or real LINE Webhook)
   const handleSendLineChatCommand = useCallback(
@@ -1663,7 +1778,13 @@ export default function App() {
           setTasks((prev) => {
             const remoteById = new Map<string, Task>();
             for (const rt of data!.tasks as Task[]) {
-              if (rt && rt.id && rt.title && rt.date) {
+              if (
+                rt &&
+                rt.id &&
+                rt.title &&
+                rt.date &&
+                !deletedTaskIdsRef.current.has(rt.id)
+              ) {
                 remoteById.set(rt.id, rt);
               }
             }
@@ -2912,8 +3033,21 @@ export default function App() {
                     : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
                 }
               >
-                <div className="text-xs font-bold text-emerald-950">
-                  งานที่ทำเสร็จแล้ว
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-emerald-950">
+                    งานที่ทำเสร็จแล้ว
+                  </div>
+                  {metrics.completedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteCompletedTasks}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50/90 hover:bg-rose-100 text-rose-700 border border-rose-200/80 text-[10px] font-bold transition-colors whitespace-nowrap"
+                      title="ลบงานที่ทำเสร็จแล้วทั้งหมดในครั้งเดียว"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>ลบทั้งหมด</span>
+                    </button>
+                  )}
                 </div>
                 <div className="mt-2.5 flex items-baseline justify-between">
                   <span className="text-3xl font-bold text-emerald-800 font-mono-tabular">
@@ -3001,30 +3135,44 @@ export default function App() {
                       รายการงานในปฏิทินของทีม
                     </h2>
 
-                    {/* Interactive Filter Tabs */}
-                    <div className="flex items-center gap-1 p-1.5 bg-slate-100 rounded-xl clay-inset overflow-x-auto">
-                      {(
-                        [
-                          { id: 'all', label: `ทั้งหมด (${tasks.length})` },
-                          { id: 'today', label: `วันนี้ (${metrics.todayCount})` },
-                          { id: 'pending', label: `งานค้าง (${metrics.pendingCount})` },
-                          { id: 'high', label: `Priority สูง (${metrics.highPriorityCount})` },
-                          { id: 'completed', label: `เสร็จแล้ว (${metrics.completedCount})` },
-                        ] as { id: TaskFilterTab; label: string }[]
-                      ).map((tab) => (
+                    {/* Interactive Filter Tabs + 1-Click Clear Completed Button */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1 p-1.5 bg-slate-100 rounded-xl clay-inset overflow-x-auto">
+                        {(
+                          [
+                            { id: 'all', label: `ทั้งหมด (${tasks.length})` },
+                            { id: 'today', label: `วันนี้ (${metrics.todayCount})` },
+                            { id: 'pending', label: `งานค้าง (${metrics.pendingCount})` },
+                            { id: 'high', label: `Priority สูง (${metrics.highPriorityCount})` },
+                            { id: 'completed', label: `เสร็จแล้ว (${metrics.completedCount})` },
+                          ] as { id: TaskFilterTab; label: string }[]
+                        ).map((tab) => (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setTaskFilter(tab.id)}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap shrink-0 ${
+                              taskFilter === tab.id
+                                ? 'bg-indigo-600 text-white font-semibold shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {metrics.completedCount > 0 && (
                         <button
-                          key={tab.id}
                           type="button"
-                          onClick={() => setTaskFilter(tab.id)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap shrink-0 ${
-                            taskFilter === tab.id
-                              ? 'bg-indigo-600 text-white font-semibold shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
+                          onClick={handleDeleteCompletedTasks}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors whitespace-nowrap shrink-0"
+                          title="ลบงานที่ทำเสร็จแล้วทั้งหมดในครั้งเดียว"
                         >
-                          {tab.label}
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>ลบงานที่เสร็จแล้วทั้งหมด ({metrics.completedCount})</span>
                         </button>
-                      ))}
+                      )}
                     </div>
                   </div>
 
@@ -3356,6 +3504,7 @@ export default function App() {
               setIsTaskModalOpen(true);
             }}
             onDeleteTask={handleDeleteTask}
+            onDeleteCompletedTasks={handleDeleteCompletedTasks}
             onToggleStatus={handleToggleTaskStatus}
             onSendLineReminderNow={(task) => dispatchLineReminder(task, true)}
           />
