@@ -31,6 +31,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(initialDate || todayStr);
+  const [endDate, setEndDate] = useState('');
   const [time, setTime] = useState('09:30');
   const [categoryId, setCategoryId] = useState(categories[0]?.id || 'cat-work');
   const [priority, setPriority] = useState<TaskPriority>(TaskPriority.MEDIUM);
@@ -42,6 +43,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setTitle(editingTask.title);
       setDescription(editingTask.description);
       setDate(editingTask.date);
+      setEndDate(editingTask.endDate && editingTask.endDate > editingTask.date ? editingTask.endDate : '');
       setTime(editingTask.time);
       setCategoryId(editingTask.categoryId);
       setPriority(editingTask.priority);
@@ -51,6 +53,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setTitle('');
       setDescription('');
       setDate(initialDate || todayStr);
+      setEndDate('');
       setTime('09:30');
       setCategoryId(categories[0]?.id || 'cat-work');
       setPriority(TaskPriority.MEDIUM);
@@ -61,6 +64,21 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
 
   if (!isOpen) return null;
 
+  const applyQuickDurationDays = (daysCount: number) => {
+    if (daysCount <= 1) {
+      setEndDate('');
+      return;
+    }
+    const [y, m, d] = date.split('-').map((n) => parseInt(n, 10));
+    if (!y || !m || !d) return;
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + (daysCount - 1));
+    const ey = dt.getFullYear();
+    const em = String(dt.getMonth() + 1).padStart(2, '0');
+    const ed = String(dt.getDate()).padStart(2, '0');
+    setEndDate(`${ey}-${em}-${ed}`);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
@@ -70,6 +88,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
         title: title.trim(),
         description: description.trim(),
         date,
+        endDate: endDate && endDate > date ? endDate : undefined,
         time,
         categoryId,
         priority,
@@ -95,7 +114,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
               {editingTask ? 'แก้ไขงานในปฏิทิน' : 'เพิ่มงานใหม่ลงปฏิทิน'}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              บันทึกในปฏิทินร่วมกันของทีมและซิงค์กับ Google Sheets
+              บันทึกในปฏิทินร่วมกันของทีมและซิงค์กับ Google Sheets (รองรับงานวันเดียวและงานต่อเนื่องหลายวัน)
             </p>
           </div>
           <button
@@ -118,7 +137,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="เช่น ประชุมสรุปแผนงาน, ส่งรายงานงบประมาณ..."
+              placeholder="เช่น ประชุมสรุปแผนงาน, อบรมสัมมนาต่างจังหวัด..."
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
             />
           </div>
@@ -136,17 +155,37 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                วันที่กำหนด
+                วันที่เริ่มต้น *
               </label>
               <input
                 type="date"
                 required
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+                onChange={(e) => {
+                  const nextStart = e.target.value;
+                  setDate(nextStart);
+                  if (endDate && endDate < nextStart) {
+                    setEndDate('');
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                ถึงวันที่ (กรณีมากกว่า 1 วัน)
+              </label>
+              <input
+                type="date"
+                min={date}
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                placeholder="เว้นว่างถ้า 1 วัน"
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
               />
             </div>
 
@@ -159,9 +198,43 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
                 required
                 value={time}
                 onChange={(e) => setTime(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
               />
             </div>
+          </div>
+
+          {/* Quick Multi-Day Duration Selector */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span className="text-slate-500 font-medium mr-1">เลือกระยะเวลาด่วน:</span>
+            {[
+              { label: '1 วัน (วันเดียว)', days: 1 },
+              { label: '2 วัน', days: 2 },
+              { label: '3 วัน', days: 3 },
+              { label: '5 วัน', days: 5 },
+              { label: '7 วัน', days: 7 },
+            ].map((item) => (
+              <button
+                key={item.days}
+                type="button"
+                onClick={() => applyQuickDurationDays(item.days)}
+                className={`px-2.5 py-1 rounded-md border font-medium transition-colors ${
+                  (item.days === 1 && !endDate) ||
+                  (item.days > 1 &&
+                    endDate &&
+                    Math.round(
+                      (new Date(`${endDate}T00:00:00`).getTime() -
+                        new Date(`${date}T00:00:00`).getTime()) /
+                        (1000 * 60 * 60 * 24)
+                    ) +
+                      1 ===
+                      item.days)
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -237,7 +310,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3.5 py-2.5 flex items-center justify-between text-xs text-slate-600">
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>
@@ -246,9 +319,11 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
                   : 'ปิดการแจ้งเตือน LINE อัตโนมัติ'}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 font-mono-tabular text-slate-500 shrink-0 ml-2">
+            <div className="flex items-center gap-1.5 font-mono-tabular text-slate-500 shrink-0">
               <Calendar className="h-3.5 w-3.5" />
-              <span>{date}</span>
+              <span>
+                {endDate && endDate > date ? `${date} ถึง ${endDate}` : date}
+              </span>
               <Clock className="h-3.5 w-3.5 ml-1" />
               <span>{time}</span>
             </div>

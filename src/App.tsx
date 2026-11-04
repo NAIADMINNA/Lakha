@@ -62,6 +62,8 @@ import {
   formatLocalDateYMD,
   formatLocalTimeHM,
   formatRemindMinutesLabel,
+  formatTaskDateRangeLabel,
+  isTaskActiveOnDate,
   parseLineChatMessage,
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
@@ -1774,6 +1776,7 @@ export default function App() {
                   title: rt.title,
                   description: rt.description ?? existing?.description ?? '',
                   date: rt.date,
+                  endDate: rt.endDate ?? existing?.endDate,
                   time: rt.time || existing?.time || '09:00',
                   categoryId: rt.categoryId || existing?.categoryId || 'cat-ops',
                   priority:
@@ -1808,6 +1811,7 @@ export default function App() {
                     pt.title === nt.title &&
                     pt.description === nt.description &&
                     pt.date === nt.date &&
+                    pt.endDate === nt.endDate &&
                     pt.time === nt.time &&
                     pt.status === nt.status &&
                     pt.priority === nt.priority &&
@@ -2460,9 +2464,11 @@ export default function App() {
 
   // Computed Dashboard Metrics
   const metrics = useMemo(() => {
-    const todayTasks = tasks.filter((t) => t.date === todayStr);
+    const todayTasks = tasks.filter((t) => isTaskActiveOnDate(t, todayStr));
     const pendingTasks = tasks.filter((t) => t.status !== TaskStatus.COMPLETED);
-    const overdueTasks = pendingTasks.filter((t) => t.date < todayStr);
+    const overdueTasks = pendingTasks.filter(
+      (t) => (t.endDate && t.endDate > t.date ? t.endDate : t.date) < todayStr
+    );
     const completedTasks = tasks.filter((t) => t.status === TaskStatus.COMPLETED);
     const highPriorityPending = pendingTasks.filter((t) => t.priority === TaskPriority.HIGH);
     const completionRate =
@@ -2490,7 +2496,7 @@ export default function App() {
   const filteredTasks = useMemo(() => {
     return tasks
       .filter((t) => {
-        if (taskFilter === 'today' && t.date !== todayStr) return false;
+        if (taskFilter === 'today' && !isTaskActiveOnDate(t, todayStr)) return false;
         if (taskFilter === 'pending' && t.status === TaskStatus.COMPLETED) return false;
         if (
           taskFilter === 'high' &&
@@ -2505,7 +2511,8 @@ export default function App() {
           return (
             t.title.toLowerCase().includes(q) ||
             t.description.toLowerCase().includes(q) ||
-            t.date.includes(q)
+            t.date.includes(q) ||
+            (t.endDate && t.endDate.includes(q))
           );
         }
         return true;
@@ -3130,7 +3137,7 @@ export default function App() {
                   type="text"
                   value={quickLineInput}
                   onChange={(e) => setQuickLineInput(e.target.value)}
-                  placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมสรุปแผนงาน พรุ่งนี้ 10:30 #สูง"...'
+                  placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "อบรมสัมมนา 5-7 พ.ย. 09:00 #สูง" หรือ "ประชุม พรุ่งนี้ 10:30"...'
                   className="flex-1 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#06C755] focus:outline-none"
                 />
                 <button
@@ -3258,7 +3265,11 @@ export default function App() {
                       const cat = categoryMap[task.categoryId];
                       const catColor = cat?.color || '#2563EB';
                       const isDone = task.status === TaskStatus.COMPLETED;
-                      const isOverdue = !isDone && task.date < todayStr;
+                      const effectiveEndDate =
+                        task.endDate && task.endDate > task.date
+                          ? task.endDate
+                          : task.date;
+                      const isOverdue = !isDone && effectiveEndDate < todayStr;
                       const googleCalUrl = buildGoogleCalendarTemplateUrl(task, cat?.name);
 
                       return (
@@ -3323,7 +3334,7 @@ export default function App() {
                                   }`}
                                   title="คลิกเพื่อเปิดดูในปฏิทินรายเดือน"
                                 >
-                                  {task.date} เวลา {task.time} น.
+                                  {formatTaskDateRangeLabel(task)} เวลา {task.time} น.
                                   {isOverdue ? ' (เลยกำหนด)' : ''}
                                 </button>
                                 <span aria-hidden="true">·</span>

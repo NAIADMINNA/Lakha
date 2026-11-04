@@ -11,7 +11,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Category, Task, TaskPriority, TaskStatus } from '../types';
-import { formatLocalDateYMD } from '../services/lineCommandParser';
+import {
+  formatLocalDateYMD,
+  formatTaskDateRangeLabel,
+  getTaskDurationDays,
+} from '../services/lineCommandParser';
 
 interface CalendarViewProps {
   tasks: Task[];
@@ -44,14 +48,18 @@ const THAI_MONTHS = [
 const WEEKDAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
 
 export function buildGoogleCalendarTemplateUrl(task: Task, categoryName?: string): string {
-  const cleanDate = task.date.replace(/-/g, '');
+  const cleanStartDate = task.date.replace(/-/g, '');
+  const cleanEndDate =
+    task.endDate && task.endDate > task.date
+      ? task.endDate.replace(/-/g, '')
+      : cleanStartDate;
   const [hhStr = '09', mmStr = '00'] = (task.time || '09:00').split(':');
   const startHH = String(parseInt(hhStr, 10)).padStart(2, '0');
   const startMM = String(parseInt(mmStr, 10)).padStart(2, '0');
   const endHour = Math.min(23, parseInt(hhStr, 10) + 1);
   const endHH = String(endHour).padStart(2, '0');
 
-  const datesParam = `${cleanDate}T${startHH}${startMM}00/${cleanDate}T${endHH}${startMM}00`;
+  const datesParam = `${cleanStartDate}T${startHH}${startMM}00/${cleanEndDate}T${endHH}${startMM}00`;
   const details = `${task.description || ''}${
     categoryName ? `\nหมวดหมู่: ${categoryName}` : ''
   }\nบันทึกจากระบบ SheetCal LINE`;
@@ -111,10 +119,35 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   const tasksByDate = useMemo(() => {
     const map: Record<string, Task[]> = {};
+    const addTaskToDay = (dateKey: string, task: Task) => {
+      if (!map[dateKey]) map[dateKey] = [];
+      if (!map[dateKey].some((existing) => existing.id === task.id)) {
+        map[dateKey].push(task);
+      }
+    };
+
     tasks.forEach((t) => {
-      if (!map[t.date]) map[t.date] = [];
-      map[t.date].push(t);
+      if (t.endDate && t.endDate > t.date) {
+        const [sy, sm, sd] = t.date.split('-').map((n) => parseInt(n, 10));
+        const [ey, em, ed] = t.endDate.split('-').map((n) => parseInt(n, 10));
+        if (sy && sm && sd && ey && em && ed) {
+          const cur = new Date(sy, sm - 1, sd);
+          const last = new Date(ey, em - 1, ed);
+          let guard = 0;
+          while (cur <= last && guard < 90) {
+            const yStr = cur.getFullYear();
+            const mStr = String(cur.getMonth() + 1).padStart(2, '0');
+            const dStr = String(cur.getDate()).padStart(2, '0');
+            addTaskToDay(`${yStr}-${mStr}-${dStr}`, t);
+            cur.setDate(cur.getDate() + 1);
+            guard++;
+          }
+          return;
+        }
+      }
+      addTaskToDay(t.date, t);
     });
+
     Object.keys(map).forEach((d) => {
       map[d].sort((a, b) => a.time.localeCompare(b.time));
     });
@@ -358,6 +391,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         <span className="truncate text-slate-900 font-medium">
                           {t.title}
                         </span>
+                        {t.endDate && t.endDate > t.date && (
+                          <span className="ml-auto shrink-0 rounded bg-indigo-100 px-1 text-[9px] font-bold text-indigo-700">
+                            {getTaskDurationDays(t.date, t.endDate)}วัน
+                          </span>
+                        )}
                       </div>
                     );
                   })}
@@ -492,7 +530,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           </span>
                           <span aria-hidden="true">·</span>
                           <span className="font-mono-tabular font-semibold text-slate-700">
-                            {task.time} น.
+                            {task.endDate && task.endDate > task.date
+                              ? `${formatTaskDateRangeLabel(task)} · ${task.time} น.`
+                              : `${task.time} น.`}
                           </span>
                           <span aria-hidden="true">·</span>
                           <span

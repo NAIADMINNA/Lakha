@@ -41,6 +41,7 @@ const TASKS_HEADERS = [
   'UpdatedAt',
   'AssigneeID',
   'AssigneeName',
+  'EndDate (YYYY-MM-DD)',
 ];
 
 const CATEGORIES_HEADERS = ['ID', 'Name', 'Color', 'Description'];
@@ -83,6 +84,7 @@ function taskToRow(t: Task): string[] {
     t.updatedAt,
     t.assigneeId || '',
     t.assigneeName || '',
+    t.endDate && t.endDate > t.date ? t.endDate : '',
   ];
 }
 
@@ -172,11 +174,19 @@ function rowToTask(row: string[]): Task | null {
   const source: 'web' | 'line' | 'sheets' =
     sourceRaw === 'line' ? 'line' : sourceRaw === 'web' ? 'web' : 'sheets';
 
+  const startDate = normalizeSheetDateYMD(row[3]);
+  const rawEndDate = row[14] ? String(row[14]).trim() : '';
+  const normalizedEndDate = rawEndDate ? normalizeSheetDateYMD(rawEndDate) : undefined;
+
   return {
     id: String(row[0]).trim(),
     title: String(row[1]).trim(),
     description: String(row[2] || ''),
-    date: normalizeSheetDateYMD(row[3]),
+    date: startDate,
+    endDate:
+      normalizedEndDate && normalizedEndDate > startDate
+        ? normalizedEndDate
+        : undefined,
     time: normalizeSheetTimeHM(row[4]),
     categoryId: String(row[5] || 'cat-work').trim(),
     priority,
@@ -346,7 +356,7 @@ export async function ensureRequiredTabs(
 
     const valueData: { range: string; values: string[][] }[] = [];
     if (missingTabs.includes('Tasks')) {
-      valueData.push({ range: 'Tasks!A1:N1', values: [TASKS_HEADERS] });
+      valueData.push({ range: 'Tasks!A1:O1', values: [TASKS_HEADERS] });
     }
     if (missingTabs.includes('Categories')) {
       valueData.push({ range: 'Categories!A1:D1', values: [CATEGORIES_HEADERS] });
@@ -534,7 +544,7 @@ export async function fetchDatabaseFromSheet(
   const metadata = await ensureRequiredTabs(accessToken, spreadsheetId);
 
   const query = new URLSearchParams();
-  query.append('ranges', 'Tasks!A1:N1000');
+  query.append('ranges', 'Tasks!A1:O1000');
   query.append('ranges', 'Categories!A1:D200');
   query.append('ranges', 'LineLogs!A1:G500');
   query.append('ranges', 'TeamMembers!A1:I200');

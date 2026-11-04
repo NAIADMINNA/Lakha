@@ -236,10 +236,168 @@ const THAI_WEEKDAYS: { dayOfWeek: number; patterns: string[] }[] = [
   { dayOfWeek: 6, patterns: ['วันเสาร์', 'เสาร์นี้', 'เสาร์หน้า'] },
 ];
 
-export function extractThaiDate(input: string): { dateStr: string; cleanedText: string } {
+export function isTaskActiveOnDate(
+  task: Pick<Task, 'date' | 'endDate'>,
+  targetDateStr: string
+): boolean {
+  if (!task.date || !targetDateStr) return false;
+  if (task.endDate && task.endDate > task.date) {
+    return targetDateStr >= task.date && targetDateStr <= task.endDate;
+  }
+  return task.date === targetDateStr;
+}
+
+export function getTaskDurationDays(startDate: string, endDate?: string): number {
+  if (!endDate || endDate <= startDate) return 1;
+  const s = new Date(`${startDate}T00:00:00`);
+  const e = new Date(`${endDate}T00:00:00`);
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return 1;
+  const diffDays = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  return Math.max(1, diffDays);
+}
+
+export function formatTaskDateRangeLabel(
+  task: Pick<Task, 'date' | 'endDate'>
+): string {
+  if (task.endDate && task.endDate > task.date) {
+    const days = getTaskDurationDays(task.date, task.endDate);
+    return `${task.date} ถึง ${task.endDate} (${days} วัน)`;
+  }
+  return task.date;
+}
+
+function addDaysToYMD(ymd: string, daysToAdd: number): string {
+  const [y, m, d] = ymd.split('-').map((n) => parseInt(n, 10));
+  if (!y || !m || !d) return ymd;
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + daysToAdd);
+  return formatPlainDateObjYMD(dt);
+}
+
+export function extractThaiDate(input: string): {
+  dateStr: string;
+  endDateStr?: string;
+  cleanedText: string;
+} {
   let text = input;
   const nowBangkok = getBangkokDateObject(0);
   const todayStr = formatPlainDateObjYMD(nowBangkok);
+
+  // Extract optional multi-day duration phrase e.g. "จำนวน 3 วัน", "เป็นเวลา 4 วัน", "ระยะเวลา 2 วัน", "3 วัน" (when not "อีก 3 วัน")
+  let durationDays = 1;
+  const durationMatch = text.match(
+    /(?:(?<!อีก\s*)(?:เป็นเวลา|ระยะเวลา|จำนวน|รวม|ตลอด)\s*(\d{1,2})\s*วัน|(?<!อีก\s*)(?<!วันที่\s*)(\d{1,2})\s*วัน(?:\s*เต็ม)?)/i
+  );
+  if (durationMatch && !/อีก\s*\d+\s*วัน/.test(durationMatch[0])) {
+    const parsedDays = parseInt(durationMatch[1] || durationMatch[2], 10);
+    if (parsedDays >= 2 && parsedDays <= 60) {
+      durationDays = parsedDays;
+      text = text.replace(durationMatch[0], ' ');
+    }
+  }
+
+  const finalizeResult = (startStr: string, explicitEndStr?: string, cleaned = text) => {
+    let finalEnd = explicitEndStr;
+    if (!finalEnd && durationDays > 1) {
+      finalEnd = addDaysToYMD(startStr, durationDays - 1);
+    }
+    if (finalEnd && finalEnd <= startStr) {
+      finalEnd = undefined;
+    }
+    return {
+      dateStr: startStr,
+      endDateStr: finalEnd,
+      cleanedText: cleaned,
+    };
+  };
+
+  // 0A. Check YYYY-MM-DD range: "2026-11-05 ถึง 2026-11-07" or "2026-11-05 - 2026-11-07"
+  const isoRangeMatch = text.match(
+    /(?:วันที่\s*)?(\d{4})-(\d{1,2})-(\d{1,2})\s*(?:ถึง|-|–|~)\s*(?:วันที่\s*)?(\d{4})-(\d{1,2})-(\d{1,2})/
+  );
+  if (isoRangeMatch) {
+    const y1 = normalizeYear(parseInt(isoRangeMatch[1], 10));
+    const m1 = String(Math.min(12, Math.max(1, parseInt(isoRangeMatch[2], 10)))).padStart(2, '0');
+    const d1 = String(Math.min(31, Math.max(1, parseInt(isoRangeMatch[3], 10)))).padStart(2, '0');
+    const y2 = normalizeYear(parseInt(isoRangeMatch[4], 10));
+    const m2 = String(Math.min(12, Math.max(1, parseInt(isoRangeMatch[5], 10)))).padStart(2, '0');
+    const d2 = String(Math.min(31, Math.max(1, parseInt(isoRangeMatch[6], 10)))).padStart(2, '0');
+    text = text.replace(isoRangeMatch[0], ' ');
+    return finalizeResult(`${y1}-${m1}-${d1}`, `${y2}-${m2}-${d2}`, text);
+  }
+
+  // 0B. Check Thai month range in same month: e.g. "วันที่ 5 - 7 พ.ย. 69" or "5 ถึง 7 พฤศจิกายน"
+  for (const monthEntry of THAI_MONTH_ALIASES) {
+    for (const pat of monthEntry.patterns) {
+      const escapedPat = pat.replace(/\./g, '\\.');
+      const rangeRegex = new RegExp(
+        `(?:วันที่\\s*)?(\\d{1,2})\\s*(?:ถึง|-|–|~)\\s*(\\d{1,2})\\s*${escapedPat}(?:\\s*(\\d{2,4}))?`,
+        'i'
+      );
+      const rMatch = text.match(rangeRegex);
+      if (rMatch) {
+        const d1Num = Math.min(31, Math.max(1, parseInt(rMatch[1], 10)));
+        const d2Num = Math.min(31, Math.max(1, parseInt(rMatch[2], 10)));
+        const y = rMatch[3]
+          ? normalizeYear(parseInt(rMatch[3], 10))
+          : nowBangkok.getFullYear();
+        const m = String(monthEntry.monthIndex).padStart(2, '0');
+        const d1 = String(d1Num).padStart(2, '0');
+        const d2 = String(d2Num).padStart(2, '0');
+        text = text.replace(rMatch[0], ' ');
+        return finalizeResult(`${y}-${m}-${d1}`, `${y}-${m}-${d2}`, text);
+      }
+    }
+  }
+
+  // 0C. Check DD/MM/YYYY range: e.g. "5/11/69 - 7/11/69" or "5/11 ถึง 7/11"
+  const slashRangeMatch = text.match(
+    /(?:วันที่\s*)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\s*(?:ถึง|-|–|~)\s*(?:วันที่\s*)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/
+  );
+  if (slashRangeMatch) {
+    const d1Num = parseInt(slashRangeMatch[1], 10);
+    const m1Num = parseInt(slashRangeMatch[2], 10);
+    const d2Num = parseInt(slashRangeMatch[4], 10);
+    const m2Num = parseInt(slashRangeMatch[5], 10);
+    if (
+      d1Num >= 1 &&
+      d1Num <= 31 &&
+      m1Num >= 1 &&
+      m1Num <= 12 &&
+      d2Num >= 1 &&
+      d2Num <= 31 &&
+      m2Num >= 1 &&
+      m2Num <= 12
+    ) {
+      const y2 = slashRangeMatch[6]
+        ? normalizeYear(parseInt(slashRangeMatch[6], 10))
+        : nowBangkok.getFullYear();
+      const y1 = slashRangeMatch[3]
+        ? normalizeYear(parseInt(slashRangeMatch[3], 10))
+        : y2;
+      const startStr = `${y1}-${String(m1Num).padStart(2, '0')}-${String(d1Num).padStart(2, '0')}`;
+      const endStr = `${y2}-${String(m2Num).padStart(2, '0')}-${String(d2Num).padStart(2, '0')}`;
+      text = text.replace(slashRangeMatch[0], ' ');
+      return finalizeResult(startStr, endStr, text);
+    }
+  }
+
+  // 0D. Check "วันที่ 5-7" or "วันที่ 5 ถึง 7" (current month)
+  const dayRangeOnlyMatch = text.match(
+    /วันที่\s*(\d{1,2})\s*(?:ถึง|-|–|~)\s*(\d{1,2})(?!\s*[/:.-])/
+  );
+  if (dayRangeOnlyMatch) {
+    const d1Num = Math.min(31, Math.max(1, parseInt(dayRangeOnlyMatch[1], 10)));
+    const d2Num = Math.min(31, Math.max(1, parseInt(dayRangeOnlyMatch[2], 10)));
+    const y = nowBangkok.getFullYear();
+    const m = String(nowBangkok.getMonth() + 1).padStart(2, '0');
+    text = text.replace(dayRangeOnlyMatch[0], ' ');
+    return finalizeResult(
+      `${y}-${m}-${String(d1Num).padStart(2, '0')}`,
+      `${y}-${m}-${String(d2Num).padStart(2, '0')}`,
+      text
+    );
+  }
 
   // 1. Check YYYY-MM-DD
   const isoMatch = text.match(/(?:วันที่\s*)?(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -248,7 +406,7 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
     const m = String(Math.min(12, Math.max(1, parseInt(isoMatch[2], 10)))).padStart(2, '0');
     const d = String(Math.min(31, Math.max(1, parseInt(isoMatch[3], 10)))).padStart(2, '0');
     text = text.replace(isoMatch[0], ' ');
-    return { dateStr: `${y}-${m}-${d}`, cleanedText: text };
+    return finalizeResult(`${y}-${m}-${d}`, undefined, text);
   }
 
   // 2. Check DD/MM/YYYY or DD/MM/YY or DD-MM-YYYY
@@ -263,7 +421,7 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
       const m = String(mNum).padStart(2, '0');
       const d = String(dNum).padStart(2, '0');
       text = text.replace(slashMatch[0], ' ');
-      return { dateStr: `${y}-${m}-${d}`, cleanedText: text };
+      return finalizeResult(`${y}-${m}-${d}`, undefined, text);
     }
   }
 
@@ -284,7 +442,7 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
         const m = String(monthEntry.monthIndex).padStart(2, '0');
         const d = String(dNum).padStart(2, '0');
         text = text.replace(match[0], ' ');
-        return { dateStr: `${y}-${m}-${d}`, cleanedText: text };
+        return finalizeResult(`${y}-${m}-${d}`, undefined, text);
       }
     }
   }
@@ -297,7 +455,7 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
     const m = String(nowBangkok.getMonth() + 1).padStart(2, '0');
     const d = String(dNum).padStart(2, '0');
     text = text.replace(dayOnlyMatch[0], ' ');
-    return { dateStr: `${y}-${m}-${d}`, cleanedText: text };
+    return finalizeResult(`${y}-${m}-${d}`, undefined, text);
   }
 
   // 5. Relative Thai date words
@@ -306,26 +464,26 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
     const offsetDays = Math.max(0, parseInt(inDaysMatch[1], 10));
     const d = getBangkokDateObject(offsetDays);
     text = text.replace(inDaysMatch[0], ' ');
-    return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+    return finalizeResult(formatPlainDateObjYMD(d), undefined, text);
   }
   if (text.includes('มะรืนนี้') || text.includes('มะรืน')) {
     const d = getBangkokDateObject(2);
     text = text.replace(/มะรืนนี้|มะรืน/g, ' ');
-    return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+    return finalizeResult(formatPlainDateObjYMD(d), undefined, text);
   }
   if (text.includes('พรุ่งนี้')) {
     const d = getBangkokDateObject(1);
     text = text.replace(/พรุ่งนี้/g, ' ');
-    return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+    return finalizeResult(formatPlainDateObjYMD(d), undefined, text);
   }
   if (text.includes('สัปดาห์หน้า') || text.includes('อาทิตย์หน้า')) {
     const d = getBangkokDateObject(7);
     text = text.replace(/สัปดาห์หน้า|อาทิตย์หน้า/g, ' ');
-    return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+    return finalizeResult(formatPlainDateObjYMD(d), undefined, text);
   }
   if (text.includes('วันนี้')) {
     text = text.replace(/วันนี้/g, ' ');
-    return { dateStr: todayStr, cleanedText: text };
+    return finalizeResult(todayStr, undefined, text);
   }
 
   // 6. Thai weekdays
@@ -338,12 +496,12 @@ export function extractThaiDate(input: string): { dateStr: string; cleanedText: 
         if (diff === 0) diff = 7;
         d.setDate(d.getDate() + diff);
         text = text.replace(pat, ' ');
-        return { dateStr: formatPlainDateObjYMD(d), cleanedText: text };
+        return finalizeResult(formatPlainDateObjYMD(d), undefined, text);
       }
     }
   }
 
-  return { dateStr: todayStr, cleanedText: text };
+  return finalizeResult(todayStr, undefined, text);
 }
 
 export function extractThaiTime(input: string): { timeStr: string; cleanedText: string } {
@@ -463,7 +621,7 @@ export function parseLineChatMessage(
     const targetDate = parsedDate || todayStr;
 
     const dateMatchingTasks = existingTasks
-      .filter((t) => t.date === targetDate)
+      .filter((t) => isTaskActiveOnDate(t, targetDate))
       .sort((a, b) => a.time.localeCompare(b.time));
 
     const hasExplicitDateInText =
@@ -804,6 +962,7 @@ export function parseLineChatMessage(
 
   const dateResult = extractThaiDate(cleanText);
   const targetDate = dateResult.dateStr;
+  const targetEndDate = dateResult.endDateStr;
   cleanText = dateResult.cleanedText;
 
   const timeResult = extractThaiTime(cleanText);
@@ -866,6 +1025,7 @@ export function parseLineChatMessage(
     title: finalTitle,
     description: `บันทึกอัตโนมัติผ่าน LINE OA ("${text}")`,
     date: targetDate,
+    endDate: targetEndDate,
     time: targetTime,
     categoryId: selectedCategory.id,
     priority,
@@ -883,20 +1043,21 @@ export function parseLineChatMessage(
       ? 'ทั่วไป'
       : 'ความสำคัญปานกลาง';
 
+  const dateDisplayLabel = formatTaskDateRangeLabel(newTask);
   const updatedAllTasks = [newTask, ...existingTasks];
-  const sameDayTasks = updatedAllTasks.filter((t) => t.date === newTask.date);
+  const sameDayTasks = updatedAllTasks.filter((t) => isTaskActiveOnDate(t, newTask.date));
   const sameDayPending = sameDayTasks.filter((t) => t.status !== TaskStatus.COMPLETED).length;
   const sameDayCompleted = sameDayTasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
 
   return {
     action: 'add_task',
     createdTask: newTask,
-    replyText: `✅ บันทึกงานลงปฏิทินร่วมกันและฐานข้อมูลเรียบร้อยแล้ว!\n📌 ชื่องาน: ${newTask.title}\n🗓️ วันที่: ${newTask.date} เวลา ${newTask.time} น.\n🗂️ หมวดหมู่: ${selectedCategory.name}\n🔔 แจ้งเตือนล่วงหน้า: ${formatRemindMinutesLabel(remindMinutes)}\n📊 สรุปงานวันที่ ${newTask.date}: ทั้งหมด ${sameDayTasks.length} งาน (รอทำ ${sameDayPending} · เสร็จแล้ว ${sameDayCompleted})`,
+    replyText: `✅ บันทึกงานลงปฏิทินร่วมกันและฐานข้อมูลเรียบร้อยแล้ว!\n📌 ชื่องาน: ${newTask.title}\n🗓️ วันที่: ${dateDisplayLabel} เวลา ${newTask.time} น.\n🗂️ หมวดหมู่: ${selectedCategory.name}\n🔔 แจ้งเตือนล่วงหน้า: ${formatRemindMinutesLabel(remindMinutes)}\n📊 สรุปงานวันที่ ${newTask.date}: ทั้งหมด ${sameDayTasks.length} งาน (รอทำ ${sameDayPending} · เสร็จแล้ว ${sameDayCompleted})`,
     flexSummary: {
       badge: 'SAVED TO CALENDAR',
       title: newTask.title,
-      subtitle: `บันทึกลงปฏิทินวันที่ ${newTask.date} เวลา ${newTask.time} น.`,
-      dateTime: `${newTask.date} · ${newTask.time} น.`,
+      subtitle: `บันทึกลงปฏิทินวันที่ ${dateDisplayLabel} เวลา ${newTask.time} น.`,
+      dateTime: `${dateDisplayLabel} · ${newTask.time} น.`,
       date: newTask.date,
       time: newTask.time,
       categoryName: selectedCategory.name,

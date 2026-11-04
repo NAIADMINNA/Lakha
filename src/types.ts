@@ -37,7 +37,8 @@ export interface Task {
   id: string;
   title: string;
   description: string;
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD (Start Date)
+  endDate?: string; // YYYY-MM-DD (Optional End Date for multi-day tasks)
   time: string; // HH:mm
   categoryId: string;
   priority: TaskPriority;
