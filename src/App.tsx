@@ -495,7 +495,7 @@ export default function App() {
     } catch {
       // Ignore
     }
-    // Sync token, targetUserId & targetGroupId to server so real LINE Webhook can auto-reply
+    // Sync token, targetUserId, targetGroupId & schedule settings to server so 24/7 Server Scheduler & Webhook work automatically
     fetch('/api/line/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -503,6 +503,21 @@ export default function App() {
         channelAccessToken: lineSettings.channelAccessToken,
         targetUserId: lineSettings.targetUserId,
         targetGroupId: lineSettings.targetGroupId || '',
+        enabled: lineSettings.enabled,
+        dailyDigestEnabled: lineSettings.dailyDigestEnabled,
+        dailyDigestTime: lineSettings.dailyDigestTime,
+        defaultRemindMinutes: lineSettings.defaultRemindMinutes,
+        notifyOnOverdue: lineSettings.notifyOnOverdue,
+        teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+        publicCalendarUrl: lineSettings.publicCalendarUrl || '',
+        messageFormat: lineSettings.messageFormat || 'executive_flex',
+        includeDescriptionInNotification:
+          lineSettings.includeDescriptionInNotification !== false,
+        includeGoogleCalendarButton: lineSettings.includeGoogleCalendarButton !== false,
+        includeOpenAppButton: lineSettings.includeOpenAppButton !== false,
+        cardFontSize: lineSettings.cardFontSize || 'md',
+        cardTitleWeight: lineSettings.cardTitleWeight || 'bold',
+        cardLineSpacing: lineSettings.cardLineSpacing || 'relaxed',
       }),
     }).catch(() => {});
   }, [lineSettings]);
@@ -1387,6 +1402,9 @@ export default function App() {
 
       setLineLogs(nextLogs);
       setTasks(nextTasks);
+      if (!isManualTrigger) {
+        pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+      }
 
       if (deliveryChannel === 'line_messaging_api') {
         showNotice(
@@ -1406,21 +1424,147 @@ export default function App() {
       categories,
       lineLogs,
       lineSettings,
+      pushCollaborativeWorkspace,
       sheetMeta?.spreadsheetId,
       showNotice,
       spreadsheetInput,
       tasks,
+      teamMembers,
       workspaceId,
     ]
   );
 
-  // Automatic Background Check for Upcoming Tasks based on exact task timing in Thailand Time (+07:00)
+  // Automatic Background Check for:
+  // 1) Per-Task Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
+  // 2) Morning Daily Digest (แจ้งเตือนสรุปงานประจำวันตอนเช้าตามเวลา dailyDigestTime)
+  // Evaluated strictly in Thailand Time (+07:00)
   useEffect(() => {
     if (!lineSettings.enabled) return;
 
-    const checkDueTasks = () => {
+    const checkDueTasksAndMorningDigest = () => {
       const now = new Date();
+      const currentBangkokYMD = formatLocalDateYMD(now);
+      const currentBangkokHM = formatLocalTimeHM(now);
 
+      // 1. Check Morning Daily Digest (แจ้งเตือนสรุปตอนเช้า)
+      if (
+        lineSettings.dailyDigestEnabled !== false &&
+        /^\d{1,2}:\d{2}$/.test((lineSettings.dailyDigestTime || '').trim())
+      ) {
+        const digestHM = lineSettings.dailyDigestTime.trim().padStart(5, '0');
+        const digestDateTime = new Date(`${currentBangkokYMD}T${digestHM}:00+07:00`);
+        if (!isNaN(digestDateTime.getTime())) {
+          const minutesSinceDigestTime =
+            (now.getTime() - digestDateTime.getTime()) / (1000 * 60);
+          // Fire within [0 .. 15] minutes after configured morning digest time, once per day
+          if (minutesSinceDigestTime >= 0 && minutesSinceDigestTime <= 15) {
+            let lastSentDate = '';
+            try {
+              lastSentDate =
+                localStorage.getItem('sheetcal_last_morning_digest_date') || '';
+            } catch {
+              lastSentDate = '';
+            }
+            if (lastSentDate !== currentBangkokYMD) {
+              try {
+                localStorage.setItem(
+                  'sheetcal_last_morning_digest_date',
+                  currentBangkokYMD
+                );
+              } catch {
+                // Ignore
+              }
+              const parsedDigest = parseLineChatMessage(
+                'สรุปงานตามเวลา',
+                tasks,
+                categories,
+                lineSettings.defaultRemindMinutes,
+                teamMembers
+              );
+              const digestItems = parsedDigest.flexSummary?.digestItems || [];
+              const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+                customPublicUrl: lineSettings.publicCalendarUrl,
+                workspaceId,
+                spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+                date: currentBangkokYMD,
+              });
+              (async () => {
+                let sentViaServer = false;
+                if (lineSettings.channelAccessToken.trim()) {
+                  try {
+                    const res = await fetch('/api/line/push', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        channelAccessToken: lineSettings.channelAccessToken,
+                        to: lineSettings.targetUserId,
+                        targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                        teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                        text: parsedDigest.replyText,
+                        date: currentBangkokYMD,
+                        dateTime: `${currentBangkokYMD} · สรุปตอนเช้า ${currentBangkokHM} น.`,
+                        tasksList: digestItems,
+                        originUrl: calendarDeepLinkUrl,
+                        isMorningDigest: true,
+                      }),
+                    });
+                    if (res.ok) {
+                      sentViaServer = true;
+                    }
+                  } catch {
+                    sentViaServer = false;
+                  }
+
+                  if (!sentViaServer) {
+                    const savedGasUrl = getEffectiveGasUrl();
+                    if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+                      fetch(savedGasUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                        body: JSON.stringify({
+                          action: 'push_line',
+                          channelAccessToken: lineSettings.channelAccessToken.trim(),
+                          to: lineSettings.targetUserId.trim(),
+                          targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                          teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                          text: parsedDigest.replyText,
+                          date: currentBangkokYMD,
+                          dateTime: `${currentBangkokYMD} · สรุปตอนเช้า ${currentBangkokHM} น.`,
+                          tasksList: digestItems,
+                          messageFormat: lineSettings.messageFormat || 'executive_flex',
+                          originUrl: calendarDeepLinkUrl,
+                        }),
+                      }).catch(() => {});
+                    }
+                  }
+                }
+
+                const morningLog: LineMessageLog = {
+                  id: `log-morning-${Date.now()}`,
+                  timestamp: new Date().toISOString(),
+                  direction: 'auto_reminder',
+                  text: parsedDigest.replyText,
+                  deliveryChannel: lineSettings.channelAccessToken.trim()
+                    ? 'line_messaging_api'
+                    : 'simulator',
+                  status: lineSettings.channelAccessToken.trim()
+                    ? 'delivered'
+                    : 'simulated',
+                  flexSummary: parsedDigest.flexSummary,
+                };
+                setLineLogs((prev) => [...prev, morningLog]);
+                showNotice(
+                  'success',
+                  `☀️ ส่งการ์ดสรุปตารางงานประจำวันตอนเช้า (${digestHM} น.) เข้า LINE OA อัตโนมัติเรียบร้อยแล้ว!`,
+                  currentBangkokYMD
+                );
+              })();
+            }
+          }
+        }
+      }
+
+      // 2. Check Per-Task Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
       for (const task of tasks) {
         if (task.status === TaskStatus.COMPLETED || task.lineNotified) {
           continue;
@@ -1468,9 +1612,20 @@ export default function App() {
       }
     };
 
-    const timer = setInterval(checkDueTasks, 15000);
+    checkDueTasksAndMorningDigest();
+    const timer = setInterval(checkDueTasksAndMorningDigest, 15000);
     return () => clearInterval(timer);
-  }, [lineSettings, tasks, dispatchLineReminder]);
+  }, [
+    categories,
+    dispatchLineReminder,
+    lineSettings,
+    sheetMeta?.spreadsheetId,
+    showNotice,
+    spreadsheetInput,
+    tasks,
+    teamMembers,
+    workspaceId,
+  ]);
 
   // Delete Task (Always requires explicit confirmation)
   const handleDeleteTask = useCallback(

@@ -850,6 +850,38 @@ let runtimeChannelAccessToken = sanitizeToken(process.env.LINE_CHANNEL_ACCESS_TO
 let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
 let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
 let runtimeGasUrl = DEFAULT_TEAM_GAS_URL;
+let lastMorningDigestSentDate = '';
+let runtimeScheduleConfig: {
+  enabled: boolean;
+  dailyDigestEnabled: boolean;
+  dailyDigestTime: string;
+  defaultRemindMinutes: number;
+  notifyOnOverdue: boolean;
+  teamNotificationMode: 'broadcast' | 'group' | 'both';
+  publicCalendarUrl: string;
+  messageFormat: 'executive_flex' | 'compact_flex' | 'text_custom';
+  includeDescriptionInNotification: boolean;
+  includeGoogleCalendarButton: boolean;
+  includeOpenAppButton: boolean;
+  cardFontSize: 'sm' | 'md' | 'lg';
+  cardTitleWeight: 'bold' | 'regular';
+  cardLineSpacing: 'tight' | 'normal' | 'relaxed';
+} = {
+  enabled: true,
+  dailyDigestEnabled: true,
+  dailyDigestTime: '08:00',
+  defaultRemindMinutes: 1,
+  notifyOnOverdue: false,
+  teamNotificationMode: 'both',
+  publicCalendarUrl: 'https://naiadminna.github.io/Lakha/?section=calendar',
+  messageFormat: 'executive_flex',
+  includeDescriptionInNotification: true,
+  includeGoogleCalendarButton: true,
+  includeOpenAppButton: true,
+  cardFontSize: 'md',
+  cardTitleWeight: 'bold',
+  cardLineSpacing: 'relaxed',
+};
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
 const PERMANENTLY_PURGED_TASK_IDS = [
@@ -887,6 +919,15 @@ function loadPersistedWorkspaceCache(): void {
       }
       if (typeof parsed.runtimeGasUrl === 'string' && parsed.runtimeGasUrl) {
         runtimeGasUrl = resolveCleanGasUrl(parsed.runtimeGasUrl);
+      }
+      if (typeof parsed.lastMorningDigestSentDate === 'string') {
+        lastMorningDigestSentDate = parsed.lastMorningDigestSentDate;
+      }
+      if (parsed.runtimeScheduleConfig && typeof parsed.runtimeScheduleConfig === 'object') {
+        runtimeScheduleConfig = {
+          ...runtimeScheduleConfig,
+          ...parsed.runtimeScheduleConfig,
+        };
       }
       if (Array.isArray(parsed.deletedTaskIds)) {
         for (const id of parsed.deletedTaskIds) {
@@ -928,6 +969,8 @@ function savePersistedWorkspaceCache(): void {
           runtimeDefaultUserId,
           runtimeDetectedGroupId,
           runtimeGasUrl: resolveCleanGasUrl(runtimeGasUrl),
+          lastMorningDigestSentDate,
+          runtimeScheduleConfig,
           deletedTaskIds: Array.from(persistedDeletedTaskIds),
           workspaces: workspacesObj,
         },
@@ -1624,10 +1667,29 @@ async function startServer() {
     }
   });
 
-  // Save runtime LINE OA credentials from the Web UI so the Webhook can reply automatically
+  // Save runtime LINE OA credentials & schedule settings from the Web UI so the Webhook & 24/7 Server Scheduler work automatically
   // Also automatically unlinks/purges any lingering Messaging API Rich Menus!
   app.post('/api/line/config', (req, res) => {
-    const { channelAccessToken, targetUserId, targetGroupId, gasUrl } = req.body || {};
+    const {
+      channelAccessToken,
+      targetUserId,
+      targetGroupId,
+      gasUrl,
+      enabled,
+      dailyDigestEnabled,
+      dailyDigestTime,
+      defaultRemindMinutes,
+      notifyOnOverdue,
+      teamNotificationMode,
+      publicCalendarUrl,
+      messageFormat,
+      includeDescriptionInNotification,
+      includeGoogleCalendarButton,
+      includeOpenAppButton,
+      cardFontSize,
+      cardTitleWeight,
+      cardLineSpacing,
+    } = req.body || {};
     if (typeof channelAccessToken === 'string') {
       runtimeChannelAccessToken = sanitizeToken(channelAccessToken);
     }
@@ -1644,6 +1706,50 @@ async function startServer() {
     if (typeof gasUrl === 'string' && gasUrl.trim()) {
       runtimeGasUrl = resolveCleanGasUrl(gasUrl);
     }
+    if (typeof enabled === 'boolean') runtimeScheduleConfig.enabled = enabled;
+    if (typeof dailyDigestEnabled === 'boolean')
+      runtimeScheduleConfig.dailyDigestEnabled = dailyDigestEnabled;
+    if (typeof dailyDigestTime === 'string' && /^\d{1,2}:\d{2}$/.test(dailyDigestTime.trim())) {
+      runtimeScheduleConfig.dailyDigestTime = dailyDigestTime.trim().padStart(5, '0');
+    }
+    if (typeof defaultRemindMinutes === 'number')
+      runtimeScheduleConfig.defaultRemindMinutes = defaultRemindMinutes;
+    if (typeof notifyOnOverdue === 'boolean')
+      runtimeScheduleConfig.notifyOnOverdue = notifyOnOverdue;
+    if (
+      teamNotificationMode === 'broadcast' ||
+      teamNotificationMode === 'group' ||
+      teamNotificationMode === 'both'
+    ) {
+      runtimeScheduleConfig.teamNotificationMode = teamNotificationMode;
+    }
+    if (typeof publicCalendarUrl === 'string' && publicCalendarUrl.trim()) {
+      runtimeScheduleConfig.publicCalendarUrl = publicCalendarUrl.trim();
+    }
+    if (
+      messageFormat === 'executive_flex' ||
+      messageFormat === 'compact_flex' ||
+      messageFormat === 'text_custom'
+    ) {
+      runtimeScheduleConfig.messageFormat = messageFormat;
+    }
+    if (typeof includeDescriptionInNotification === 'boolean')
+      runtimeScheduleConfig.includeDescriptionInNotification = includeDescriptionInNotification;
+    if (typeof includeGoogleCalendarButton === 'boolean')
+      runtimeScheduleConfig.includeGoogleCalendarButton = includeGoogleCalendarButton;
+    if (typeof includeOpenAppButton === 'boolean')
+      runtimeScheduleConfig.includeOpenAppButton = includeOpenAppButton;
+    if (cardFontSize === 'sm' || cardFontSize === 'md' || cardFontSize === 'lg')
+      runtimeScheduleConfig.cardFontSize = cardFontSize;
+    if (cardTitleWeight === 'bold' || cardTitleWeight === 'regular')
+      runtimeScheduleConfig.cardTitleWeight = cardTitleWeight;
+    if (
+      cardLineSpacing === 'tight' ||
+      cardLineSpacing === 'normal' ||
+      cardLineSpacing === 'relaxed'
+    )
+      runtimeScheduleConfig.cardLineSpacing = cardLineSpacing;
+
     savePersistedWorkspaceCache();
     if (runtimeChannelAccessToken) {
       purgeAllLineRichMenus(runtimeChannelAccessToken, runtimeDefaultUserId).catch(() => {});
@@ -1652,6 +1758,7 @@ async function startServer() {
       ok: true,
       detectedGroupId: runtimeDetectedGroupId || undefined,
       detectedUserId: runtimeDefaultUserId || undefined,
+      scheduleConfig: runtimeScheduleConfig,
     });
   });
 
@@ -2001,6 +2108,10 @@ async function startServer() {
       const appUrl = isBlockedUrl ? defaultPublicAppUrl : rawAppUrl;
 
       const { todayYMD: bangkokTodayStr } = getBangkokNowYMDAndHM();
+      if (req.body?.isMorningDigest) {
+        lastMorningDigestSentDate = bangkokTodayStr;
+        savePersistedWorkspaceCache();
+      }
       let flexMessage: unknown;
       if (Array.isArray(tasksList)) {
         flexMessage = buildDailyDigestFlexMessage(
@@ -2858,6 +2969,271 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // 24/7 Server-Side Background Notification Scheduler (runs every 20s in Asia/Bangkok time +07:00)
+  // Handles both:
+  // 1) Morning Daily Summary Digest (แจ้งเตือนสรุปงานตอนเช้าตามเวลา dailyDigestTime)
+  // 2) Per-Task Scheduled Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
+  const deliverScheduledFlexToLine = async (flexMessage: unknown, fallbackText: string) => {
+    const token = sanitizeToken(runtimeChannelAccessToken || '');
+    if (!token) return false;
+    const mode = runtimeScheduleConfig.teamNotificationMode || 'both';
+    const effectiveGroupId = /^[CR][0-9a-fA-F]{32}$/.test(runtimeDetectedGroupId)
+      ? runtimeDetectedGroupId
+      : /^[CR][0-9a-fA-F]{32}$/.test(runtimeDefaultUserId)
+      ? runtimeDefaultUserId
+      : '';
+    const effectiveUserId = /^U[0-9a-fA-F]{32}$/.test(runtimeDefaultUserId)
+      ? runtimeDefaultUserId
+      : '';
+
+    let delivered = false;
+    if (effectiveGroupId && (mode === 'group' || mode === 'both')) {
+      const grpRes = await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ to: effectiveGroupId, messages: [flexMessage] }),
+      }).catch(() => null);
+      if (grpRes && grpRes.ok) {
+        delivered = true;
+      } else {
+        const grpTxt = await fetch('https://api.line.me/v2/bot/message/push', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            to: effectiveGroupId,
+            messages: [{ type: 'text', text: fallbackText }],
+          }),
+        }).catch(() => null);
+        if (grpTxt && grpTxt.ok) delivered = true;
+      }
+      if (delivered && mode === 'group') return true;
+    }
+
+    if (effectiveUserId && mode !== 'group') {
+      const usrRes = await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ to: effectiveUserId, messages: [flexMessage] }),
+      }).catch(() => null);
+      if (usrRes && usrRes.ok) return true;
+    }
+
+    if (!delivered || mode === 'broadcast' || mode === 'both') {
+      const bcRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ messages: [flexMessage] }),
+      }).catch(() => null);
+      if (bcRes && bcRes.ok) delivered = true;
+    }
+    return delivered;
+  };
+
+  setInterval(async () => {
+    try {
+      if (!runtimeScheduleConfig.enabled || !runtimeChannelAccessToken) return;
+      const ws =
+        sharedWorkspaces.get('sheetcal-team-clean') ||
+        sharedWorkspaces.get('team-default') ||
+        Array.from(sharedWorkspaces.values())[0];
+      if (!ws || !Array.isArray(ws.tasks)) return;
+
+      const now = new Date();
+      const { todayYMD, nowHM } = getBangkokNowYMDAndHM();
+      const defaultAppUrl =
+        'https://naiadminna.github.io/Lakha/?section=calendar&workspace=sheetcal-team-clean&sheet=1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc&gas=https%3A%2F%2Fscript.google.com%2Fmacros%2Fs%2FAKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg%2Fexec&openExternalBrowser=1';
+
+      const rawCats = Array.isArray(ws.categories) ? ws.categories : [];
+      const catById = new Map<string, { name: string; color: string }>();
+      for (const c of rawCats) {
+        if (c && typeof c === 'object') {
+          const rec = c as Record<string, unknown>;
+          if (rec.id) {
+            catById.set(String(rec.id), {
+              name: String(rec.name || 'ทั่วไป'),
+              color: String(rec.color || '#2563EB'),
+            });
+          }
+        }
+      }
+
+      // 1. Check Morning Daily Digest (แจ้งเตือนสรุปงานประจำวันตอนเช้า)
+      if (
+        runtimeScheduleConfig.dailyDigestEnabled !== false &&
+        /^\d{1,2}:\d{2}$/.test(runtimeScheduleConfig.dailyDigestTime || '')
+      ) {
+        const digestHM = runtimeScheduleConfig.dailyDigestTime.trim().padStart(5, '0');
+        const digestDateTime = new Date(`${todayYMD}T${digestHM}:00+07:00`);
+        if (!isNaN(digestDateTime.getTime())) {
+          const minsAfterDigest = (now.getTime() - digestDateTime.getTime()) / (1000 * 60);
+          // Grace window [0.25 .. 12] minutes so browser tab (if open) can fire at 0.0 min or server fires automatically
+          if (
+            minsAfterDigest >= 0.25 &&
+            minsAfterDigest <= 12 &&
+            lastMorningDigestSentDate !== todayYMD
+          ) {
+            lastMorningDigestSentDate = todayYMD;
+            savePersistedWorkspaceCache();
+
+            const decoded = extractGasMetadataFromTasks(ws.tasks);
+            const activeToday = decoded.tasks.filter((t) => {
+              const startD = String(t.date || '');
+              const endD = String(t.endDate || startD);
+              return (
+                (startD <= todayYMD && endD >= todayYMD) ||
+                String(t.status || 'pending') !== 'completed'
+              );
+            });
+            const digestItems: DigestTaskItem[] = activeToday.map((t) => {
+              const cid = String(t.categoryId || '');
+              const catInfo = catById.get(cid);
+              const tDate = String(t.date || todayYMD);
+              const tTime = String(t.time || '09:00');
+              return {
+                title: String(t.title || 'รายการงาน'),
+                date: tDate,
+                time: tTime,
+                categoryName: catInfo?.name || 'งานตารางทีม',
+                categoryColor: catInfo?.color || '#2563EB',
+                priority: (t.priority as 'low' | 'medium' | 'high') || 'medium',
+                status: (t.status as 'pending' | 'in_progress' | 'completed') || 'pending',
+                description: String(t.description || ''),
+                assigneeName: t.assigneeName ? String(t.assigneeName) : undefined,
+                timePhase:
+                  tDate < todayYMD
+                    ? 'passed'
+                    : tDate > todayYMD
+                    ? 'upcoming'
+                    : tTime <= nowHM
+                    ? 'passed'
+                    : 'upcoming',
+              };
+            });
+
+            const flexMsg = buildDailyDigestFlexMessage(
+              todayYMD,
+              digestItems,
+              defaultAppUrl
+            );
+            await deliverScheduledFlexToLine(
+              flexMsg,
+              `☀️ สรุปตารางงานประจำวัน (${todayYMD}) — ทั้งหมด ${digestItems.length} รายการ`
+            );
+          }
+        }
+      }
+
+      // 2. Check Per-Task Scheduled Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
+      const decodedTasks = extractGasMetadataFromTasks(ws.tasks).tasks;
+      let taskUpdated = false;
+      const totalCount = decodedTasks.length;
+      const completedCount = decodedTasks.filter(
+        (t) => String(t.status || '') === 'completed'
+      ).length;
+      const pendingCount = totalCount - completedCount;
+
+      for (const t of decodedTasks) {
+        if (!t || typeof t !== 'object') continue;
+        if (String(t.status || '') === 'completed' || Boolean(t.lineNotified)) continue;
+
+        const remindMins =
+          typeof t.remindMinutesBefore === 'number'
+            ? t.remindMinutesBefore
+            : runtimeScheduleConfig.defaultRemindMinutes ?? 1;
+        if (remindMins <= 0) continue;
+
+        const tDate = String(t.date || '').trim();
+        const tTimeRaw = String(t.time || '09:00').trim();
+        const cleanTime = /^\d{1,2}:\d{2}$/.test(tTimeRaw)
+          ? tTimeRaw.padStart(5, '0')
+          : '09:00';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(tDate)) continue;
+
+        const taskDateTime = new Date(`${tDate}T${cleanTime}:00+07:00`);
+        if (isNaN(taskDateTime.getTime())) continue;
+
+        const diffMinutes = (taskDateTime.getTime() - now.getTime()) / (1000 * 60);
+        // Server fires slightly after 0.2 min inside the window so if browser tab is open, they coordinate via lineNotified
+        if (diffMinutes <= remindMins && diffMinutes >= -5) {
+          t.lineNotified = true;
+          t.updatedAt = new Date().toISOString();
+          taskUpdated = true;
+
+          const cid = String(t.categoryId || '');
+          const catInfo = catById.get(cid);
+          const singleFlex = buildSingleTaskReminderFlexMessage({
+            taskTitle: String(t.title || 'รายการงาน'),
+            description: String(t.description || ''),
+            date: tDate,
+            time: cleanTime,
+            categoryName: catInfo?.name || 'ทั่วไป',
+            categoryColor: catInfo?.color || '#2563EB',
+            priority: String(t.priority || 'medium'),
+            appUrl: defaultAppUrl,
+            messageFormat: runtimeScheduleConfig.messageFormat,
+            includeDescription: runtimeScheduleConfig.includeDescriptionInNotification,
+            includeGoogleCalendarButton: runtimeScheduleConfig.includeGoogleCalendarButton,
+            includeOpenAppButton: runtimeScheduleConfig.includeOpenAppButton,
+            cardFontSize: runtimeScheduleConfig.cardFontSize,
+            cardTitleWeight: runtimeScheduleConfig.cardTitleWeight,
+            cardLineSpacing: runtimeScheduleConfig.cardLineSpacing,
+            stats: {
+              total: totalCount,
+              pending: pendingCount,
+              completed: completedCount,
+            },
+          });
+
+          await deliverScheduledFlexToLine(
+            singleFlex,
+            `🔔 แจ้งเตือนงานตามเวลา: ${String(t.title || '')} (${tDate} เวลา ${cleanTime} น.)`
+          );
+          break;
+        }
+      }
+
+      if (taskUpdated) {
+        const updatedWs: CollaborativeWorkspaceState = {
+          ...ws,
+          updatedAt: new Date().toISOString(),
+          tasks: decodedTasks,
+        };
+        sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
+        sharedWorkspaces.set('team-default', updatedWs);
+        savePersistedWorkspaceCache();
+
+        const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+        if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+          const gasTasksWithMeta = attachGasMetadataToTasks(
+            decodedTasks,
+            ws.categories,
+            ws.teamMembers
+          );
+          postToGoogleAppsScript(cleanGas, {
+            action: 'sync_tasks',
+            tasks: gasTasksWithMeta,
+            categories: ws.categories,
+            teamMembers: ws.teamMembers,
+          }).catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore background scheduler error
+    }
+  }, 20000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
