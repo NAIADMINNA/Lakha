@@ -63,7 +63,7 @@ export function renderCustomLineMessage(
     '🔔 แจ้งเตือนงาน [{priority}]\n📌 {title}\n🗓️ วันที่ {date} เวลา {time} น.\n🗂️ หมวดหมู่: {category}\n⏳ แจ้งเตือนล่วงหน้า: {remindBefore}'
   )
     .replace(/\{title\}/g, task.title)
-    .replace(/\{date\}/g, task.date)
+    .replace(/\{date\}/g, formatTaskDateRangeLabel(task))
     .replace(/\{time\}/g, task.time)
     .replace(/\{category\}/g, categoryName || 'ทั่วไป')
     .replace(/\{priority\}/g, priorityLabel)
@@ -256,14 +256,72 @@ export function getTaskDurationDays(startDate: string, endDate?: string): number
   return Math.max(1, diffDays);
 }
 
+const THAI_MONTH_SHORT = [
+  'ม.ค.',
+  'ก.พ.',
+  'มี.ค.',
+  'เม.ย.',
+  'พ.ค.',
+  'มิ.ย.',
+  'ก.ค.',
+  'ส.ค.',
+  'ก.ย.',
+  'ต.ค.',
+  'พ.ย.',
+  'ธ.ค.',
+];
+
+const THAI_MONTH_LONG = [
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม',
+];
+
+/**
+ * Formats a YYYY-MM-DD string (e.g. "2026-11-04") into Thai Buddhist Era format:
+ * - style = 'short' (default): "4 พ.ย. 2569"
+ * - style = 'long': "4 พฤศจิกายน 2569"
+ */
+export function formatThaiDateDisplay(
+  ymd: string | undefined | null,
+  style: 'short' | 'long' = 'short'
+): string {
+  const raw = String(ymd || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return raw;
+  const yearNum = parseInt(match[1], 10);
+  const monthNum = parseInt(match[2], 10);
+  const dayNum = parseInt(match[3], 10);
+  if (isNaN(yearNum) || isNaN(monthNum) || isNaN(dayNum) || monthNum < 1 || monthNum > 12) {
+    return raw;
+  }
+  const beYear = yearNum >= 2400 ? yearNum : yearNum + 543;
+  const monthLabel =
+    style === 'long' ? THAI_MONTH_LONG[monthNum - 1] : THAI_MONTH_SHORT[monthNum - 1];
+  return `${dayNum} ${monthLabel} ${beYear}`;
+}
+
 export function formatTaskDateRangeLabel(
-  task: Pick<Task, 'date' | 'endDate'>
+  task: Pick<Task, 'date' | 'endDate'>,
+  style: 'short' | 'long' = 'short'
 ): string {
   if (task.endDate && task.endDate > task.date) {
     const days = getTaskDurationDays(task.date, task.endDate);
-    return `${task.date} ถึง ${task.endDate} (${days} วัน)`;
+    return `${formatThaiDateDisplay(task.date, style)} ถึง ${formatThaiDateDisplay(
+      task.endDate,
+      style
+    )} (${days} วัน)`;
   }
-  return task.date;
+  return formatThaiDateDisplay(task.date, style);
 }
 
 function addDaysToYMD(ymd: string, daysToAdd: number): string {
@@ -678,15 +736,17 @@ export function parseLineChatMessage(
       };
     });
 
+    const targetDateThai = formatThaiDateDisplay(targetDate);
+
     if (targetTasks.length === 0) {
       return {
         action: 'query_today',
-        replyText: `📅 วันที่ ${targetDate} (เทียบเวลา ณ ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ\n• ⏮️ งานที่ผ่านเวลาที่กำหนดแล้ว: 0 งาน\n• ⏭️ งานที่ยังไม่ถึงเวลาที่กำหนด: 0 งาน`,
+        replyText: `📅 วันที่ ${targetDateThai} (เทียบเวลา ณ ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ\n• ⏮️ งานที่ผ่านเวลาที่กำหนดแล้ว: 0 งาน\n• ⏭️ งานที่ยังไม่ถึงเวลาที่กำหนด: 0 งาน`,
         flexSummary: {
           badge: 'TIME-SPLIT DAILY SUMMARY',
-          title: `สรุปตารางงานแยกตามเวลา (${targetDate})`,
+          title: `สรุปตารางงานแยกตามเวลา (${targetDateThai})`,
           subtitle: `เทียบเวลา ณ ${refTimeStr} น. · ไม่มีรายการงานในตาราง`,
-          dateTime: `${targetDate} · ณ ${refTimeStr} น.`,
+          dateTime: `${targetDateThai} · ณ ${refTimeStr} น.`,
           date: targetDate,
           time: refTimeStr,
           categoryName: 'สรุปตารางงานแยกตามเวลา',
@@ -709,7 +769,9 @@ export function parseLineChatMessage(
       passedTasks.length > 0
         ? passedTasks.map(
             (t, i) =>
-              `   ${i + 1}. ${t.time} น.${t.date !== targetDate ? ` (${t.date})` : ''} — ${t.title} [${
+              `   ${i + 1}. ${t.time} น.${
+                t.date !== targetDate ? ` (${formatTaskDateRangeLabel(t)})` : ''
+              } — ${t.title} [${
                 t.status === TaskStatus.COMPLETED
                   ? '✓ ดำเนินการเสร็จแล้ว'
                   : '⚠️ เลยเวลาแล้วยังค้างอยู่'
@@ -721,7 +783,9 @@ export function parseLineChatMessage(
       upcomingTasks.length > 0
         ? upcomingTasks.map(
             (t, i) =>
-              `   ${i + 1}. ${t.time} น.${t.date !== targetDate ? ` (${t.date})` : ''} — ${t.title} [${
+              `   ${i + 1}. ${t.time} น.${
+                t.date !== targetDate ? ` (${formatTaskDateRangeLabel(t)})` : ''
+              } — ${t.title} [${
                 t.status === TaskStatus.COMPLETED
                   ? '✓ ทำเสร็จล่วงหน้าแล้ว'
                   : t.priority === TaskPriority.HIGH
@@ -733,7 +797,7 @@ export function parseLineChatMessage(
 
     const headerTitle = isShowingAllBecauseTodayEmpty
       ? `สรุปตารางงานทั้งหมดแยกตามเวลา (${targetTasks.length} งาน)`
-      : `สรุปงานวันที่ ${targetDate} แยกตามเวลา (${targetTasks.length} งาน)`;
+      : `สรุปงานวันที่ ${targetDateThai} แยกตามเวลา (${targetTasks.length} งาน)`;
 
     const replyText = [
       `📊 ${headerTitle}`,
@@ -756,7 +820,7 @@ export function parseLineChatMessage(
         subtitle: `เทียบเวลา ${refTimeStr} น. · ผ่านเวลาแล้ว ${passedTasks.length} งาน · ยังไม่ถึงเวลา ${upcomingTasks.length} งาน${
           highCount > 0 ? ` (ด่วนสูง ${highCount})` : ''
         }`,
-        dateTime: `${targetDate} · ณ ${refTimeStr} น.`,
+        dateTime: `${targetDateThai} · ณ ${refTimeStr} น.`,
         date: targetDate,
         time: refTimeStr,
         categoryName: 'สรุปตารางงานแยกตามเวลา',
@@ -811,7 +875,7 @@ export function parseLineChatMessage(
 
     const topTasks = pendingTasks.slice(0, 8);
     const lines = topTasks.map(
-      (t, i) => `${i + 1}. ${t.date} (${t.time} น.) — ${t.title}`
+      (t, i) => `${i + 1}. ${formatTaskDateRangeLabel(t)} (${t.time} น.) — ${t.title}`
     );
 
     const digestItems = topTasks.map((t) => {
@@ -838,7 +902,7 @@ export function parseLineChatMessage(
         subtitle: `งานด่วนสำคัญสูง ${
           pendingTasks.filter((t) => t.priority === TaskPriority.HIGH).length
         } รายการ · เสร็จแล้ว ${completedCount} งาน`,
-        dateTime: todayStr,
+        dateTime: formatThaiDateDisplay(todayStr),
         date: todayStr,
         categoryName: 'ระบบติดตามงานค้าง',
         categoryColor: '#D97706',
@@ -887,7 +951,7 @@ export function parseLineChatMessage(
         badge: 'COMPLETED VIA LINE',
         title: matched.title,
         subtitle: 'เปลี่ยนสถานะเป็นเสร็จสมบูรณ์แล้ว',
-        dateTime: `${matched.date} · ${matched.time} น.`,
+        dateTime: `${formatTaskDateRangeLabel(matched)} · ${matched.time} น.`,
         date: matched.date,
         time: matched.time,
         categoryName: cat?.name || 'ทั่วไป',
@@ -1052,7 +1116,7 @@ export function parseLineChatMessage(
   return {
     action: 'add_task',
     createdTask: newTask,
-    replyText: `✅ บันทึกงานลงปฏิทินร่วมกันและฐานข้อมูลเรียบร้อยแล้ว!\n📌 ชื่องาน: ${newTask.title}\n🗓️ วันที่: ${dateDisplayLabel} เวลา ${newTask.time} น.\n🗂️ หมวดหมู่: ${selectedCategory.name}\n🔔 แจ้งเตือนล่วงหน้า: ${formatRemindMinutesLabel(remindMinutes)}\n📊 สรุปงานวันที่ ${newTask.date}: ทั้งหมด ${sameDayTasks.length} งาน (รอทำ ${sameDayPending} · เสร็จแล้ว ${sameDayCompleted})`,
+    replyText: `✅ บันทึกงานลงปฏิทินร่วมกันและฐานข้อมูลเรียบร้อยแล้ว!\n📌 ชื่องาน: ${newTask.title}\n🗓️ วันที่: ${dateDisplayLabel} เวลา ${newTask.time} น.\n🗂️ หมวดหมู่: ${selectedCategory.name}\n🔔 แจ้งเตือนล่วงหน้า: ${formatRemindMinutesLabel(remindMinutes)}\n📊 สรุปงานวันที่ ${formatThaiDateDisplay(newTask.date)}: ทั้งหมด ${sameDayTasks.length} งาน (รอทำ ${sameDayPending} · เสร็จแล้ว ${sameDayCompleted})`,
     flexSummary: {
       badge: 'SAVED TO CALENDAR',
       title: newTask.title,

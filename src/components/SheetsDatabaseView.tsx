@@ -13,6 +13,7 @@ import {
 import { User } from 'firebase/auth';
 import { Category, LineMessageLog, Task } from '../types';
 import { SheetMetadata, extractSpreadsheetId } from '../services/sheetsService';
+import { formatTaskDateRangeLabel } from '../services/lineCommandParser';
 import { GoogleSignInButton } from './GoogleSignInButton';
 
 interface SheetsDatabaseViewProps {
@@ -325,7 +326,9 @@ export const SheetsDatabaseView: React.FC<SheetsDatabaseViewProps> = ({
                     </td>
                     <td className="py-2.5 px-3 font-mono-tabular text-slate-600">{t.id}</td>
                     <td className="py-2.5 px-3 font-medium text-slate-900">{t.title}</td>
-                    <td className="py-2.5 px-3 font-mono-tabular text-slate-700">{t.date}</td>
+                    <td className="py-2.5 px-3 text-slate-700">
+                      {formatTaskDateRangeLabel(t)}
+                    </td>
                     <td className="py-2.5 px-3 font-mono-tabular text-slate-700">{t.time}</td>
                     <td className="py-2.5 px-3 font-mono-tabular text-slate-600">
                       {t.categoryId}

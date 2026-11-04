@@ -32,6 +32,8 @@ import {
   doesTaskTriggerNotification,
   formatLocalDateYMD,
   formatRemindMinutesLabel,
+  formatTaskDateRangeLabel,
+  formatThaiDateDisplay,
   generateGoogleAppsScriptCode,
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
@@ -1156,7 +1158,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                                   </span>
                                                   {item.date && item.date !== todayStr && (
                                                     <span className="text-slate-500">
-                                                      ({item.date})
+                                                      ({formatThaiDateDisplay(item.date)})
                                                     </span>
                                                   )}
                                                   <span
@@ -1243,7 +1245,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                                   </span>
                                                   {item.date && item.date !== todayStr && (
                                                     <span className="text-slate-500">
-                                                      ({item.date})
+                                                      ({formatThaiDateDisplay(item.date)})
                                                     </span>
                                                   )}
                                                   <span
@@ -1315,7 +1317,9 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                               {item.time} น.
                                             </span>
                                             {item.date && item.date !== todayStr && (
-                                              <span className="text-slate-500">({item.date})</span>
+                                              <span className="text-slate-500">
+                                                ({formatThaiDateDisplay(item.date)})
+                                              </span>
                                             )}
                                             <span
                                               className="font-semibold"
@@ -1577,7 +1581,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                           {t.title}
                         </div>
                         <div className="text-[11px] text-slate-500 font-mono-tabular mt-0.5">
-                          วันที่ {t.date} · เวลา {t.time} น. · เตือนล่วงหน้า{' '}
+                          วันที่ {formatTaskDateRangeLabel(t)} · เวลา {t.time} น. · เตือนล่วงหน้า{' '}
                           {formatRemindMinutesLabel(t.remindMinutesBefore)}
                         </div>
                       </div>
@@ -1973,7 +1977,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                     : 'font-bold'
                                 } text-slate-900`}
                               >
-                                {samplePreviewTask.date} เวลา {samplePreviewTask.time} น.
+                                {formatTaskDateRangeLabel(samplePreviewTask)} เวลา{' '}
+                                {samplePreviewTask.time} น.
                               </span>
                             </div>
                             <div className="flex justify-between">

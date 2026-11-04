@@ -16,6 +16,7 @@ import { Category, Task, TaskPriority, TaskStatus } from '../types';
 import {
   formatLocalDateYMD,
   formatTaskDateRangeLabel,
+  formatThaiDateDisplay,
   getTaskDurationDays,
 } from '../services/lineCommandParser';
 
@@ -238,10 +239,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 border-b border-slate-200 bg-indigo-50/30">
           <div>
             <h2 className="text-lg font-bold text-slate-900">
-              {THAI_MONTHS[month]} {year + 543}{' '}
-              <span className="text-indigo-600 font-semibold text-sm font-mono-tabular">
-                ({year})
-              </span>
+              {THAI_MONTHS[month]} พ.ศ. {year + 543}
             </h2>
             <p className="text-xs text-slate-600 mt-0.5">
               ปฏิทินตารางงานส่วนกลางของทีม แยกสีตามหมวดหมู่งานชัดเจน
@@ -481,8 +479,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <div className="text-xs font-medium text-emerald-700">
               รายการงานประจำวันที่เลือก
             </div>
-            <h3 className="text-base font-bold text-slate-900 font-mono-tabular mt-0.5">
-              {selectedDate}
+            <h3 className="text-base font-bold text-slate-900 mt-0.5">
+              {formatThaiDateDisplay(selectedDate, 'long')}
               {selectedDate === todayStr && (
                 <span className="ml-2 text-xs font-sans font-semibold text-emerald-600">
                   · วันนี้
@@ -503,7 +501,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         {selectedDayTasks.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-sm font-medium text-slate-700">
-              ไม่มีรายการงานในวันที่ {selectedDate}
+              ไม่มีรายการงานในวันที่ {formatThaiDateDisplay(selectedDate, 'long')}
             </p>
             <p className="text-xs text-slate-500 mt-1">
               คลิกปุ่ม &ldquo;เพิ่มงาน&rdquo; เพื่อสร้างรายการในวันนี้
@@ -564,10 +562,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             {cat?.name || 'ทั่วไป'}
                           </span>
                           <span aria-hidden="true">·</span>
-                          <span className="font-mono-tabular font-semibold text-slate-700">
-                            {task.endDate && task.endDate > task.date
-                              ? `${formatTaskDateRangeLabel(task)} · ${task.time} น.`
-                              : `${task.time} น.`}
+                          <span className="font-semibold text-slate-700">
+                            {formatTaskDateRangeLabel(task)} · เวลา {task.time} น.
                           </span>
                           <span aria-hidden="true">·</span>
                           <span

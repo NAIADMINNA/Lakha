@@ -63,6 +63,7 @@ import {
   formatLocalTimeHM,
   formatRemindMinutesLabel,
   formatTaskDateRangeLabel,
+  formatThaiDateDisplay,
   isTaskActiveOnDate,
   parseLineChatMessage,
   renderCustomLineMessage,
@@ -1257,7 +1258,7 @@ export default function App() {
               description: includeDesc ? task.description || reminderText : '',
               date: task.date,
               time: task.time,
-              dateTime: `${task.date} ${task.time} น.`,
+              dateTime: `${formatTaskDateRangeLabel(task)} ${task.time} น.`,
               categoryName,
               categoryColor: cat?.color || '#2563EB',
               priority: task.priority,
@@ -1301,7 +1302,7 @@ export default function App() {
               description: includeDesc ? task.description || reminderText : '',
               date: task.date,
               time: task.time,
-              dateTime: `${task.date} ${task.time} น.`,
+              dateTime: `${formatTaskDateRangeLabel(task)} ${task.time} น.`,
               categoryName,
               categoryColor: cat?.color || '#2563EB',
               priority: task.priority,
@@ -1380,7 +1381,7 @@ export default function App() {
                 ? `แจ้งเตือนทันที (${remindLabel})`
                 : `แจ้งเตือนล่วงหน้า (${remindLabel})`)
             : '',
-          dateTime: `${task.date} · ${task.time} น.`,
+          dateTime: `${formatTaskDateRangeLabel(task)} · ${task.time} น.`,
           date: task.date,
           time: task.time,
           categoryName,
@@ -1635,7 +1636,7 @@ export default function App() {
         title: 'ยืนยันการลบรายการงานนี้ออกจากระบบและ Google Sheets?',
         description:
           'เมื่อลบแล้ว รายการงานนี้จะถูกนำออกจากปฏิทินของทีมและลบออกจากแท็บ Tasks ใน Google Sheets ของคุณ',
-        affectedItemSummary: `ลบงาน: "${task.title}" (กำหนดวันที่ ${task.date} เวลา ${task.time} น.)`,
+        affectedItemSummary: `ลบงาน: "${task.title}" (กำหนดวันที่ ${formatTaskDateRangeLabel(task)} เวลา ${task.time} น.)`,
         confirmLabel: 'ลบรายการงาน',
         isDestructive: true,
         onConfirm: async () => {
@@ -1801,7 +1802,7 @@ export default function App() {
             'success',
             `บันทึกงาน "${created.title}"${
               created.assigneeName ? ` (มอบหมายให้ ${created.assigneeName})` : ''
-            } (วันที่ ${created.date} เวลา ${created.time} น.) ลงปฏิทินเรียบร้อยแล้ว!`,
+            } (วันที่ ${formatTaskDateRangeLabel(created)} เวลา ${created.time} น.) ลงปฏิทินเรียบร้อยแล้ว!`,
             created.date
           );
         }
@@ -2392,7 +2393,7 @@ export default function App() {
           setSelectedCalendarDate(newest.date);
           showNotice(
             'success',
-            `ซิงค์งานใหม่จาก LINE OA: "${newest.title}" (วันที่ ${newest.date} เวลา ${newest.time} น.) เข้าสู่ปฏิทินอัตโนมัติแล้ว!`,
+            `ซิงค์งานใหม่จาก LINE OA: "${newest.title}" (วันที่ ${formatTaskDateRangeLabel(newest)} เวลา ${newest.time} น.) เข้าสู่ปฏิทินอัตโนมัติแล้ว!`,
             newest.date
           );
         }
@@ -2425,7 +2426,7 @@ export default function App() {
           title: 'ยืนยันการแก้ไขข้อมูลงานใน Google Sheets?',
           description:
             'การแก้ไขรายละเอียดงานนี้จะทำการอัปเดตข้อมูลแถวงานในแท็บ Tasks บนไฟล์ Google Sheets ของคุณ',
-          affectedItemSummary: `แก้ไขงาน: "${updatedTask.title}" (วันที่ ${updatedTask.date} เวลา ${updatedTask.time} น.)`,
+          affectedItemSummary: `แก้ไขงาน: "${updatedTask.title}" (วันที่ ${formatTaskDateRangeLabel(updatedTask)} เวลา ${updatedTask.time} น.)`,
           confirmLabel: 'ยืนยันการแก้ไข',
           isDestructive: false,
           onConfirm: async () => {
@@ -3003,11 +3004,15 @@ export default function App() {
         if (categoryFilter !== 'all' && t.categoryId !== categoryFilter) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
+          const thaiShort = formatTaskDateRangeLabel(t, 'short').toLowerCase();
+          const thaiLong = formatTaskDateRangeLabel(t, 'long').toLowerCase();
           return (
             t.title.toLowerCase().includes(q) ||
             t.description.toLowerCase().includes(q) ||
             t.date.includes(q) ||
-            (t.endDate && t.endDate.includes(q))
+            (t.endDate && t.endDate.includes(q)) ||
+            thaiShort.includes(q) ||
+            thaiLong.includes(q)
           );
         }
         return true;
@@ -3485,7 +3490,7 @@ export default function App() {
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-700 text-white font-semibold hover:bg-emerald-800 transition-colors"
                 >
                   <CalendarIcon className="h-3.5 w-3.5" />
-                  <span>ดูในปฏิทิน ({statusBanner.calendarDateToOpen})</span>
+                  <span>ดูในปฏิทิน ({formatThaiDateDisplay(statusBanner.calendarDateToOpen)})</span>
                 </button>
               )}
               <button
@@ -3716,7 +3721,7 @@ export default function App() {
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="ค้นหาชื่องาน รายละเอียด หรือวันที่ (YYYY-MM-DD)..."
+                        placeholder="ค้นหาชื่องาน รายละเอียด หรือวันที่ (เช่น 4 พ.ย. 2569)..."
                         className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:border-indigo-600 focus:outline-none"
                       />
                     </div>

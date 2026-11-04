@@ -638,7 +638,7 @@ function buildSingleTaskReminderFlexMessage(params: {
         },
         {
           type: 'text',
-          text: `${readableDate} (${params.date})`,
+          text: readableDate,
           color: '#0F172A',
           size: bodySize,
           weight: textWeight,

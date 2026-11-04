@@ -5,6 +5,8 @@ import {
   REMINDER_TIMING_OPTIONS,
   formatLocalDateYMD,
   formatRemindMinutesLabel,
+  formatTaskDateRangeLabel,
+  formatThaiDateDisplay,
 } from '../services/lineCommandParser';
 
 interface TaskFormModalProps {
@@ -203,7 +205,21 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
           </div>
 
-          {/* Quick Multi-Day Duration Selector */}
+          {/* Thai Date Format Live Display & Quick Multi-Day Duration Selector */}
+          <div className="rounded-lg bg-indigo-50/70 border border-indigo-200/80 px-3 py-2 text-xs text-indigo-950 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              📅 วันที่แสดงผลภาษาไทย:{' '}
+              <strong className="font-bold text-indigo-700">
+                {endDate && endDate > date
+                  ? formatTaskDateRangeLabel({ date, endDate }, 'long')
+                  : formatThaiDateDisplay(date, 'long')}
+              </strong>
+            </span>
+            <span className="text-[11px] font-semibold text-indigo-600">
+              เวลา {time} น.
+            </span>
+          </div>
+
           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
             <span className="text-slate-500 font-medium mr-1">เลือกระยะเวลาด่วน:</span>
             {[
