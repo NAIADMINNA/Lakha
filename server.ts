@@ -1145,6 +1145,88 @@ async function startServer() {
 
   const deletedTaskIds = persistedDeletedTaskIds;
   let lastGasPullMs = 0;
+  let lastWorkspacePostMs = 0;
+
+  const GAS_META_DELIM = '#SCMETA#';
+
+  function attachGasMetadataToTasks(
+    taskList: unknown[],
+    categoriesList?: unknown[],
+    teamMembersList?: unknown[]
+  ): Record<string, unknown>[] {
+    const cleanCats = Array.isArray(categoriesList) && categoriesList.length > 0 ? categoriesList : undefined;
+    const cleanMembers = Array.isArray(teamMembersList) && teamMembersList.length > 0 ? teamMembersList : undefined;
+    return taskList
+      .filter((t): t is Record<string, unknown> => Boolean(t && typeof t === 'object'))
+      .map((t, idx) => {
+        const rawSource = String(t.source || 'web').split(GAS_META_DELIM)[0] || 'web';
+        const endDate =
+          typeof t.endDate === 'string' && t.endDate > String(t.date || '')
+            ? t.endDate
+            : undefined;
+        const metaObj: Record<string, unknown> = {};
+        if (endDate) metaObj.e = endDate;
+        if (idx === 0) {
+          if (cleanCats) metaObj.c = cleanCats;
+          if (cleanMembers) metaObj.m = cleanMembers;
+        }
+        const encodedSource =
+          Object.keys(metaObj).length > 0
+            ? `${rawSource}${GAS_META_DELIM}${JSON.stringify(metaObj)}`
+            : rawSource;
+        return {
+          ...t,
+          source: encodedSource,
+        };
+      });
+  }
+
+  function extractGasMetadataFromTasks(rawTasks: unknown[]): {
+    tasks: Record<string, unknown>[];
+    categories?: unknown[];
+    teamMembers?: unknown[];
+  } {
+    let extractedCategories: unknown[] | undefined;
+    let extractedMembers: unknown[] | undefined;
+    const cleaned: Record<string, unknown>[] = [];
+
+    for (const item of rawTasks) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = { ...(item as Record<string, unknown>) };
+      const rawSource = String(rec.source || 'web');
+      if (rawSource.includes(GAS_META_DELIM)) {
+        const [baseSource, metaJson] = rawSource.split(GAS_META_DELIM);
+        rec.source = baseSource || 'web';
+        if (metaJson) {
+          try {
+            const parsedMeta = JSON.parse(metaJson) as {
+              e?: string;
+              c?: unknown[];
+              m?: unknown[];
+            };
+            if (typeof parsedMeta.e === 'string' && parsedMeta.e && !rec.endDate) {
+              rec.endDate = parsedMeta.e;
+            }
+            if (Array.isArray(parsedMeta.c) && parsedMeta.c.length > 0 && !extractedCategories) {
+              extractedCategories = parsedMeta.c;
+            }
+            if (Array.isArray(parsedMeta.m) && parsedMeta.m.length > 0 && !extractedMembers) {
+              extractedMembers = parsedMeta.m;
+            }
+          } catch {
+            // Ignore malformed metadata
+          }
+        }
+      }
+      cleaned.push(rec);
+    }
+
+    return {
+      tasks: cleaned,
+      categories: extractedCategories,
+      teamMembers: extractedMembers,
+    };
+  }
 
   function mergeTasksById(
     primaryList: unknown[],
@@ -1168,7 +1250,11 @@ async function startServer() {
           ? new Date(String(rec.updatedAt)).getTime()
           : 0;
         if (incomingTime >= existingTime) {
-          byId.set(id, rec);
+          byId.set(id, {
+            ...existingItem,
+            ...rec,
+            endDate: rec.endDate ?? existingItem.endDate,
+          });
         }
       }
     }
@@ -1192,7 +1278,8 @@ async function startServer() {
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
       cleanGas.startsWith('https://script.google.com/macros/s/') &&
-      nowMs - lastGasPullMs > 4000
+      nowMs - lastGasPullMs > 4000 &&
+      nowMs - lastWorkspacePostMs > 10000
     ) {
       lastGasPullMs = nowMs;
       try {
@@ -1203,15 +1290,16 @@ async function startServer() {
         if (gasRes.ok) {
           const gasData = (await gasRes.json().catch(() => ({}))) as {
             tasks?: unknown[];
+            categories?: unknown[];
+            teamMembers?: unknown[];
           };
           if (Array.isArray(gasData.tasks) && state) {
+            const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
             const currentTasks = Array.isArray(state.tasks) ? state.tasks : [];
             const gasTaskIds = new Set<string>();
-            for (const gt of gasData.tasks) {
-              if (gt && typeof gt === 'object') {
-                const gid = String((gt as Record<string, unknown>).id || '').trim();
-                if (gid) gasTaskIds.add(gid);
-              }
+            for (const gt of decodedGas.tasks) {
+              const gid = String(gt.id || '').trim();
+              if (gid) gasTaskIds.add(gid);
             }
             // Only keep local tasks that are either present in GAS or created within the last 15 seconds (in-flight creation)
             const recentLocalTasks = currentTasks.filter((lt) => {
@@ -1223,12 +1311,32 @@ async function startServer() {
               const updatedMs = rec.updatedAt ? new Date(String(rec.updatedAt)).getTime() : 0;
               return updatedMs > 0 && nowMs - updatedMs < 15000;
             });
-            const merged = mergeTasksById(recentLocalTasks, gasData.tasks);
+            const merged = mergeTasksById(recentLocalTasks, decodedGas.tasks);
+            const remoteCats =
+              Array.isArray(gasData.categories) && gasData.categories.length > 0
+                ? gasData.categories
+                : decodedGas.categories;
+            const remoteMembers =
+              Array.isArray(gasData.teamMembers) && gasData.teamMembers.length > 0
+                ? gasData.teamMembers
+                : decodedGas.teamMembers;
+
+            const nextCats =
+              remoteCats && (!Array.isArray(state.categories) || state.categories.length === 0)
+                ? remoteCats
+                : state.categories;
+            const nextMembers =
+              remoteMembers && (!Array.isArray(state.teamMembers) || state.teamMembers.length === 0)
+                ? remoteMembers
+                : state.teamMembers;
+
             if (merged.length !== currentTasks.length) {
               state = {
                 ...state,
                 updatedAt: new Date().toISOString(),
                 tasks: merged,
+                categories: nextCats,
+                teamMembers: nextMembers,
               };
               sharedWorkspaces.set(workspaceId, state);
               sharedWorkspaces.set('sheetcal-team-clean', state);
@@ -1254,6 +1362,7 @@ async function startServer() {
   });
 
   app.post('/api/collab/workspace/:workspaceId', (req, res) => {
+    lastWorkspacePostMs = Date.now();
     const workspaceId = String(req.params.workspaceId || 'sheetcal-team-clean').trim();
     const {
       action,
@@ -1293,29 +1402,29 @@ async function startServer() {
       }
     }
 
-    const existingTasks = Array.isArray(existing?.tasks) ? existing.tasks : [];
-    const incomingTasks = Array.isArray(tasks) ? tasks : [];
+    const existingTasks = Array.isArray(existing?.tasks)
+      ? extractGasMetadataFromTasks(existing.tasks).tasks
+      : [];
+    const incomingTasks = Array.isArray(tasks)
+      ? extractGasMetadataFromTasks(tasks).tasks
+      : [];
 
     // When a client pushes a full `tasks` array (without a single-item `action`),
     // treat `incomingTasks` as the authoritative task list and mark any tasks removed from `existingTasks` as deleted!
-    let nextTasks: unknown[];
+    let nextTasks: Record<string, unknown>[];
     if (Array.isArray(tasks) && !action) {
       const incomingIdSet = new Set<string>();
       for (const item of incomingTasks) {
-        if (item && typeof item === 'object') {
-          const id = String((item as Record<string, unknown>).id || '').trim();
-          if (id && !deletedTaskIds.has(id)) {
-            incomingIdSet.add(id);
-          }
+        const id = String(item.id || '').trim();
+        if (id && !deletedTaskIds.has(id)) {
+          incomingIdSet.add(id);
         }
       }
       for (const oldItem of existingTasks) {
-        if (oldItem && typeof oldItem === 'object') {
-          const oldId = String((oldItem as Record<string, unknown>).id || '').trim();
-          if (oldId && !incomingIdSet.has(oldId)) {
-            deletedTaskIds.add(oldId);
-            explicitDeletedIds.add(oldId);
-          }
+        const oldId = String(oldItem.id || '').trim();
+        if (oldId && !incomingIdSet.has(oldId)) {
+          deletedTaskIds.add(oldId);
+          explicitDeletedIds.add(oldId);
         }
       }
       nextTasks = mergeTasksById(incomingTasks, []);
@@ -1344,6 +1453,15 @@ async function startServer() {
       );
     }
 
+    const nextCategories =
+      Array.isArray(categories) && categories.length > 0
+        ? categories
+        : existing?.categories || [];
+    const nextTeamMembers =
+      Array.isArray(teamMembers) && teamMembers.length > 0
+        ? teamMembers
+        : existing?.teamMembers || [];
+
     const nextState: CollaborativeWorkspaceState = {
       workspaceId,
       updatedAt: new Date().toISOString(),
@@ -1351,8 +1469,8 @@ async function startServer() {
       spreadsheetId: spreadsheetId ?? existing?.spreadsheetId,
       spreadsheetUrl: spreadsheetUrl ?? existing?.spreadsheetUrl,
       tasks: nextTasks,
-      categories: Array.isArray(categories) ? categories : existing?.categories || [],
-      teamMembers: Array.isArray(teamMembers) ? teamMembers : existing?.teamMembers || [],
+      categories: nextCategories,
+      teamMembers: nextTeamMembers,
     };
     sharedWorkspaces.set(workspaceId, nextState);
     sharedWorkspaces.set('sheetcal-team-clean', nextState);
@@ -1361,9 +1479,16 @@ async function startServer() {
 
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+      const gasTasksWithMeta = attachGasMetadataToTasks(
+        nextTasks,
+        nextCategories,
+        nextTeamMembers
+      );
       postToGoogleAppsScript(cleanGas, {
         action: 'sync_tasks',
-        tasks: nextTasks,
+        tasks: gasTasksWithMeta,
+        categories: nextCategories,
+        teamMembers: nextTeamMembers,
       }).catch(() => {});
     }
 
@@ -1381,6 +1506,8 @@ async function startServer() {
         gasUrl,
         channelAccessToken,
         tasks,
+        categories,
+        teamMembers,
         deletedTaskIds: incomingDeletedIds,
         mode,
       } = req.body || {};
@@ -1399,31 +1526,52 @@ async function startServer() {
       savePersistedWorkspaceCache();
 
       if (mode === 'push' && Array.isArray(tasks)) {
-        const cleanPushTasks = tasks.filter((t) => {
-          if (!t || typeof t !== 'object') return false;
-          const id = String((t as Record<string, unknown>).id || '').trim();
+        lastWorkspacePostMs = Date.now();
+        const decodedIncoming = extractGasMetadataFromTasks(tasks);
+        const cleanPushTasks = decodedIncoming.tasks.filter((t) => {
+          const id = String(t.id || '').trim();
           return Boolean(id && !deletedTaskIds.has(id));
         });
         const existingWs = sharedWorkspaces.get('sheetcal-team-clean');
+        const effectiveCats =
+          Array.isArray(categories) && categories.length > 0
+            ? categories
+            : decodedIncoming.categories || existingWs?.categories || [];
+        const effectiveMembers =
+          Array.isArray(teamMembers) && teamMembers.length > 0
+            ? teamMembers
+            : decodedIncoming.teamMembers || existingWs?.teamMembers || [];
+
         if (existingWs) {
           const updatedWs: CollaborativeWorkspaceState = {
             ...existingWs,
             updatedAt: new Date().toISOString(),
             tasks: cleanPushTasks,
+            categories: effectiveCats,
+            teamMembers: effectiveMembers,
           };
           sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
           sharedWorkspaces.set('team-default', updatedWs);
           savePersistedWorkspaceCache();
         }
+        const gasTasksWithMeta = attachGasMetadataToTasks(
+          cleanPushTasks,
+          effectiveCats,
+          effectiveMembers
+        );
         const syncRes = await postToGoogleAppsScript(targetGasUrl, {
           action: 'sync_tasks',
-          tasks: cleanPushTasks,
+          tasks: gasTasksWithMeta,
+          categories: effectiveCats,
+          teamMembers: effectiveMembers,
         });
         res.json({
           ok: Boolean(syncRes.json.ok),
           gasUrl: targetGasUrl,
           version: syncRes.json.version,
           deletedTaskIds: Array.from(deletedTaskIds),
+          categories: effectiveCats,
+          teamMembers: effectiveMembers,
           response: syncRes.json,
         });
         return;
@@ -1433,11 +1581,21 @@ async function startServer() {
         action: 'get_tasks',
       });
       const rawRemoteTasks = Array.isArray(pullRes.json.tasks) ? pullRes.json.tasks : [];
-      const remoteTasks = rawRemoteTasks.filter((t) => {
-        if (!t || typeof t !== 'object') return false;
-        const id = String((t as Record<string, unknown>).id || '').trim();
+      const decodedRemote = extractGasMetadataFromTasks(rawRemoteTasks);
+      const remoteTasks = decodedRemote.tasks.filter((t) => {
+        const id = String(t.id || '').trim();
         return Boolean(id && !deletedTaskIds.has(id));
       });
+      const existingWs = sharedWorkspaces.get('sheetcal-team-clean');
+      const effectiveCats =
+        Array.isArray(existingWs?.categories) && existingWs.categories.length > 0
+          ? existingWs.categories
+          : decodedRemote.categories || [];
+      const effectiveMembers =
+        Array.isArray(existingWs?.teamMembers) && existingWs.teamMembers.length > 0
+          ? existingWs.teamMembers
+          : decodedRemote.teamMembers || [];
+
       const detectedGrp =
         typeof pullRes.json.detectedGroupId === 'string' &&
         /^[CR][0-9a-fA-F]{32}$/.test(pullRes.json.detectedGroupId.trim())
@@ -1455,6 +1613,8 @@ async function startServer() {
         detectedGroupId: detectedGrp || runtimeDetectedGroupId || undefined,
         deletedTaskIds: Array.from(deletedTaskIds),
         tasks: remoteTasks,
+        categories: effectiveCats,
+        teamMembers: effectiveMembers,
       });
     } catch (err: unknown) {
       res.json({

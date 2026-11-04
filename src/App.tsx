@@ -569,6 +569,119 @@ export default function App() {
     [PERMANENTLY_PURGED_IDS]
   );
 
+  const GAS_META_DELIM = '#SCMETA#';
+
+  const isDefaultCategoryList = useCallback((cats: Category[] | undefined | null): boolean => {
+    if (!Array.isArray(cats) || cats.length === 0) return true;
+    if (cats.length !== INITIAL_CATEGORIES.length) return false;
+    return cats.every((c, i) => {
+      const def = INITIAL_CATEGORIES[i];
+      return (
+        def &&
+        c.id === def.id &&
+        c.name === def.name &&
+        c.color.toLowerCase() === def.color.toLowerCase() &&
+        (c.description || '') === (def.description || '')
+      );
+    });
+  }, []);
+
+  const attachGasMetadataToTasks = useCallback(
+    (
+      taskList: Task[],
+      categoriesList: Category[],
+      teamMembersList: TeamMember[]
+    ): Task[] => {
+      return taskList.map((t, idx) => {
+        const baseSource = (String(t.source || 'web').split(GAS_META_DELIM)[0] || 'web') as
+          | 'web'
+          | 'line'
+          | 'sheets';
+        const metaObj: Record<string, unknown> = {};
+        if (t.endDate && t.endDate > t.date) {
+          metaObj.e = t.endDate;
+        }
+        if (idx === 0) {
+          if (Array.isArray(categoriesList) && categoriesList.length > 0) {
+            metaObj.c = categoriesList;
+          }
+          if (Array.isArray(teamMembersList) && teamMembersList.length > 0) {
+            metaObj.m = teamMembersList;
+          }
+        }
+        const encodedSource =
+          Object.keys(metaObj).length > 0
+            ? (`${baseSource}${GAS_META_DELIM}${JSON.stringify(metaObj)}` as Task['source'])
+            : baseSource;
+        return {
+          ...t,
+          source: encodedSource,
+        };
+      });
+    },
+    []
+  );
+
+  const extractGasMetadataFromTasks = useCallback(
+    (
+      rawTasks: Task[]
+    ): {
+      tasks: Task[];
+      categories?: Category[];
+      teamMembers?: TeamMember[];
+    } => {
+      let extractedCategories: Category[] | undefined;
+      let extractedMembers: TeamMember[] | undefined;
+      const cleaned: Task[] = [];
+
+      for (const item of rawTasks) {
+        if (!item || typeof item !== 'object') continue;
+        const copy: Task = { ...item };
+        const rawSource = String(copy.source || 'web');
+        if (rawSource.includes(GAS_META_DELIM)) {
+          const [baseSource, metaJson] = rawSource.split(GAS_META_DELIM);
+          copy.source = ((baseSource || 'web') as 'web' | 'line' | 'sheets');
+          if (metaJson) {
+            try {
+              const parsedMeta = JSON.parse(metaJson) as {
+                e?: string;
+                c?: Category[];
+                m?: TeamMember[];
+              };
+              if (typeof parsedMeta.e === 'string' && parsedMeta.e && !copy.endDate) {
+                copy.endDate = parsedMeta.e;
+              }
+              if (
+                Array.isArray(parsedMeta.c) &&
+                parsedMeta.c.length > 0 &&
+                !extractedCategories
+              ) {
+                extractedCategories = parsedMeta.c;
+              }
+              if (
+                Array.isArray(parsedMeta.m) &&
+                parsedMeta.m.length > 0 &&
+                !extractedMembers
+              ) {
+                extractedMembers = parsedMeta.m;
+              }
+            } catch {
+              // Ignore malformed metadata
+            }
+          }
+        }
+        cleaned.push(copy);
+      }
+
+      return {
+        tasks: cleaned,
+        categories: extractedCategories,
+        teamMembers: extractedMembers,
+      };
+    },
+    []
+  );
+
   // Push collaborative workspace state to server so shared calendar collaborators stay in sync
   const pushCollaborativeWorkspace = useCallback(
     async (
@@ -587,7 +700,7 @@ export default function App() {
         recordDeletedTaskIds(explicitDeleted);
       }
       const allDeletedIds = Array.from(deletedTaskIdsRef.current);
-      const cleanNextTasks = nextTasks.filter(
+      const cleanNextTasks = extractGasMetadataFromTasks(nextTasks).tasks.filter(
         (t) => t && t.id && !deletedTaskIdsRef.current.has(t.id)
       );
 
@@ -621,8 +734,13 @@ export default function App() {
         // Silent fallback
       }
 
-      // Also sync tasks to Google Sheets via Server Proxy or direct Google Apps Script Bridge (works on GitHub Pages too)
+      // Also sync tasks + categories + teamMembers to Google Sheets via Server Proxy or direct Google Apps Script Bridge (works on GitHub Pages too)
       const activeGasUrl = getEffectiveGasUrl();
+      const gasTasksWithMeta = attachGasMetadataToTasks(
+        cleanNextTasks,
+        nextCategories,
+        nextMembers
+      );
       let proxySynced = false;
       try {
         const proxyRes = await fetch('/api/line/gas-bridge-sync', {
@@ -631,7 +749,9 @@ export default function App() {
           body: JSON.stringify({
             mode: 'push',
             gasUrl: activeGasUrl,
-            tasks: cleanNextTasks,
+            tasks: gasTasksWithMeta,
+            categories: nextCategories,
+            teamMembers: nextMembers,
             deletedTaskIds: allDeletedIds,
           }),
         });
@@ -650,7 +770,9 @@ export default function App() {
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
               action: 'sync_tasks',
-              tasks: cleanNextTasks,
+              tasks: gasTasksWithMeta,
+              categories: nextCategories,
+              teamMembers: nextMembers,
             }),
           });
         } catch {
@@ -659,6 +781,8 @@ export default function App() {
       }
     },
     [
+      attachGasMetadataToTasks,
+      extractGasMetadataFromTasks,
       recordDeletedTaskIds,
       sheetMeta?.spreadsheetId,
       sheetMeta?.spreadsheetUrl,
@@ -704,6 +828,22 @@ export default function App() {
         }
 
         const remote = data.workspace;
+        const remoteCats = Array.isArray(remote?.categories)
+          ? (remote.categories as Category[])
+          : [];
+        // If Admin's local browser has customized categories while the server still has empty/default categories, push Admin's categories to the server immediately!
+        if (
+          !isDefaultCategoryList(categoriesRef.current) &&
+          isDefaultCategoryList(remoteCats)
+        ) {
+          await pushCollaborativeWorkspace(
+            tasksRef.current,
+            categoriesRef.current,
+            teamMembersRef.current
+          );
+          return;
+        }
+
         if (
           remote?.updatedAt &&
           remote.updatedAt !== lastSyncedTimestampRef.current
@@ -715,23 +855,24 @@ export default function App() {
             recordDeletedTaskIds(data.deletedTaskIds);
           }
 
-          if (Array.isArray(remote.tasks)) {
-            const remoteDeletedIds = new Set<string>([
-              ...(Array.isArray(data.deletedTaskIds) ? data.deletedTaskIds : []),
-              ...Array.from(deletedTaskIdsRef.current),
-            ]);
-            const cleanRemoteTasks = (remote.tasks as Task[]).filter(
-              (item) => item && item.id && !remoteDeletedIds.has(item.id)
-            );
-            if (Date.now() - lastLocalMutationMsRef.current > 12000) {
+          if (Date.now() - lastLocalMutationMsRef.current > 12000) {
+            if (Array.isArray(remote.tasks)) {
+              const remoteDeletedIds = new Set<string>([
+                ...(Array.isArray(data.deletedTaskIds) ? data.deletedTaskIds : []),
+                ...Array.from(deletedTaskIdsRef.current),
+              ]);
+              const decodedWs = extractGasMetadataFromTasks(remote.tasks as Task[]);
+              const cleanRemoteTasks = decodedWs.tasks.filter(
+                (item) => item && item.id && !remoteDeletedIds.has(item.id)
+              );
               setTasks(cleanRemoteTasks);
             }
-          }
-          if (Array.isArray(remote.categories) && remote.categories.length > 0) {
-            setCategories(remote.categories as Category[]);
-          }
-          if (Array.isArray(remote.teamMembers) && remote.teamMembers.length > 0) {
-            setTeamMembers(remote.teamMembers as TeamMember[]);
+            if (remoteCats.length > 0) {
+              setCategories(remoteCats);
+            }
+            if (Array.isArray(remote.teamMembers) && remote.teamMembers.length > 0) {
+              setTeamMembers(remote.teamMembers as TeamMember[]);
+            }
           }
         }
       } catch {
@@ -745,7 +886,13 @@ export default function App() {
       isMounted = false;
       clearInterval(timer);
     };
-  }, [workspaceId, pushCollaborativeWorkspace]);
+  }, [
+    extractGasMetadataFromTasks,
+    isDefaultCategoryList,
+    pushCollaborativeWorkspace,
+    recordDeletedTaskIds,
+    workspaceId,
+  ]);
 
   // Initialize Firebase Auth listener on mount
   useEffect(() => {
@@ -1763,7 +1910,10 @@ export default function App() {
                   ...(Array.isArray(wsData.deletedTaskIds) ? wsData.deletedTaskIds : []),
                   ...Array.from(deletedTaskIdsRef.current),
                 ]);
-                const cleanWsTasks = (wsData.workspace.tasks as Task[]).filter(
+                const decodedWs = extractGasMetadataFromTasks(
+                  wsData.workspace.tasks as Task[]
+                );
+                const cleanWsTasks = decodedWs.tasks.filter(
                   (t) => t && t.id && !delSet.has(t.id)
                 );
                 if (
@@ -1774,15 +1924,28 @@ export default function App() {
                   workspaceHandled = true;
                 }
               }
+              const wsCats = Array.isArray(wsData.workspace.categories)
+                ? (wsData.workspace.categories as Category[])
+                : [];
               if (
-                Array.isArray(wsData.workspace.categories) &&
-                wsData.workspace.categories.length > 0
+                !isDefaultCategoryList(categoriesRef.current) &&
+                isDefaultCategoryList(wsCats)
               ) {
-                setCategories(wsData.workspace.categories as Category[]);
+                pushCollaborativeWorkspace(
+                  tasksRef.current,
+                  categoriesRef.current,
+                  teamMembersRef.current
+                );
+              } else if (
+                wsCats.length > 0 &&
+                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+              ) {
+                setCategories(wsCats);
               }
               if (
                 Array.isArray(wsData.workspace.teamMembers) &&
-                wsData.workspace.teamMembers.length > 0
+                wsData.workspace.teamMembers.length > 0 &&
+                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
               ) {
                 setTeamMembers(wsData.workspace.teamMembers as TeamMember[]);
               }
@@ -1797,6 +1960,8 @@ export default function App() {
           gasUrl?: string;
           detectedGroupId?: string;
           tasks?: Task[];
+          categories?: Category[];
+          teamMembers?: TeamMember[];
           deletedTaskIds?: string[];
         } | null = null;
 
@@ -1833,6 +1998,12 @@ export default function App() {
                 gasUrl: activeGasUrl,
                 detectedGroupId: directJson.detectedGroupId,
                 tasks: Array.isArray(directJson.tasks) ? directJson.tasks : [],
+                categories: Array.isArray(directJson.categories)
+                  ? directJson.categories
+                  : undefined,
+                teamMembers: Array.isArray(directJson.teamMembers)
+                  ? directJson.teamMembers
+                  : undefined,
               };
             }
           } catch {
@@ -1846,6 +2017,12 @@ export default function App() {
                   gasUrl: activeGasUrl,
                   detectedGroupId: getJson.detectedGroupId,
                   tasks: Array.isArray(getJson.tasks) ? getJson.tasks : [],
+                  categories: Array.isArray(getJson.categories)
+                    ? getJson.categories
+                    : undefined,
+                  teamMembers: Array.isArray(getJson.teamMembers)
+                    ? getJson.teamMembers
+                    : undefined,
                 };
               }
             } catch {
@@ -1869,15 +2046,53 @@ export default function App() {
             );
           }
 
+          const decodedGas = Array.isArray(data.tasks)
+            ? extractGasMetadataFromTasks(data.tasks as Task[])
+            : { tasks: [] as Task[] };
+
+          const remoteGasCats =
+            Array.isArray(data.categories) && data.categories.length > 0
+              ? data.categories
+              : decodedGas.categories;
+          const remoteGasMembers =
+            Array.isArray(data.teamMembers) && data.teamMembers.length > 0
+              ? data.teamMembers
+              : decodedGas.teamMembers;
+
+          if (
+            !isDefaultCategoryList(categoriesRef.current) &&
+            isDefaultCategoryList(remoteGasCats)
+          ) {
+            pushCollaborativeWorkspace(
+              tasksRef.current,
+              categoriesRef.current,
+              teamMembersRef.current
+            );
+          } else if (
+            Array.isArray(remoteGasCats) &&
+            remoteGasCats.length > 0 &&
+            (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+          ) {
+            setCategories(remoteGasCats);
+          }
+
+          if (
+            Array.isArray(remoteGasMembers) &&
+            remoteGasMembers.length > 0 &&
+            (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+          ) {
+            setTeamMembers(remoteGasMembers);
+          }
+
           if (
             Array.isArray(data.tasks) &&
             (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000) &&
-            (!workspaceHandled || data.tasks.length > 0)
+            (!workspaceHandled || decodedGas.tasks.length > 0)
           ) {
             setTasks((prev) => {
               const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
               const nextRemoteTasks: Task[] = [];
-              for (const rt of data!.tasks as Task[]) {
+              for (const rt of decodedGas.tasks) {
                 if (!rt || !rt.id || !rt.title || !rt.date) continue;
                 if (deletedTaskIdsRef.current.has(rt.id)) continue;
                 const existing = prevById.get(rt.id);
@@ -1904,7 +2119,7 @@ export default function App() {
                   date: rt.date,
                   endDate: inferredEndDate,
                   time: rt.time || existing?.time || '09:00',
-                  categoryId: rt.categoryId || existing?.categoryId || 'cat-ops',
+                  categoryId: rt.categoryId || existing?.categoryId || 'cat-work',
                   priority:
                     (rt.priority as TaskPriority) ||
                     existing?.priority ||
@@ -1956,7 +2171,7 @@ export default function App() {
         if (showFeedback) {
           showNotice(
             'success',
-            'ดึงตารางงานล่าสุดจากปฏิทินกลางของแอดมินและทีมเรียบร้อยแล้ว!'
+            'ดึงตารางงานและหมวดหมู่สีล่าสุดจากปฏิทินกลางของแอดมินและทีมเรียบร้อยแล้ว!'
           );
         }
       } catch {
@@ -1970,7 +2185,14 @@ export default function App() {
         if (showFeedback) setIsSyncing(false);
       }
     },
-    [recordDeletedTaskIds, showNotice, workspaceId]
+    [
+      extractGasMetadataFromTasks,
+      isDefaultCategoryList,
+      pushCollaborativeWorkspace,
+      recordDeletedTaskIds,
+      showNotice,
+      workspaceId,
+    ]
   );
 
   useEffect(() => {
@@ -2512,45 +2734,31 @@ export default function App() {
 
   // Category CRUD handlers
   const handleSaveCategory = (category: Category, isNew: boolean) => {
-    if (isNew) {
-      const nextCategories = [...categories, category];
-      setCategories(nextCategories);
-      if (sheetMeta && accessToken) {
-        syncAllToConnectedSheet(
-          tasks,
-          nextCategories,
-          lineLogs,
-          `เพิ่มหมวดหมู่ "${category.name}" ลงใน Google Sheets เรียบร้อยแล้ว`
-        );
-      } else {
-        showNotice('success', `เพิ่มหมวดหมู่ "${category.name}" เรียบร้อยแล้ว`);
-      }
+    const nextCategories = isNew
+      ? [...categories, category]
+      : categories.map((c) => (c.id === category.id ? category : c));
+
+    setCategories(nextCategories);
+    if (sheetMeta && accessToken) {
+      syncAllToConnectedSheet(
+        tasks,
+        nextCategories,
+        lineLogs,
+        isNew
+          ? `เพิ่มหมวดหมู่ "${category.name}" และอัปเดตไปที่ปฏิทินของทีมเรียบร้อยแล้ว`
+          : `แก้ไขหมวดหมู่ "${category.name}" และอัปเดตสี/ข้อความไปที่ปฏิทินของทีมเรียบร้อยแล้ว`,
+        undefined,
+        undefined,
+        teamMembers
+      );
     } else {
-      const nextCategories = categories.map((c) => (c.id === category.id ? category : c));
-      if (sheetMeta && accessToken) {
-        setConfirmDialog({
-          isOpen: true,
-          title: 'ยืนยันการแก้ไขหมวดหมู่งานใน Google Sheets?',
-          description:
-            'ระบบจะทำการอัปเดตชื่อ สี และคำอธิบายของหมวดหมู่นี้ในแท็บ Categories บน Google Sheets ของคุณ',
-          affectedItemSummary: `หมวดหมู่ "${category.name}" (สี ${category.color})`,
-          confirmLabel: 'ยืนยันการแก้ไข',
-          isDestructive: false,
-          onConfirm: async () => {
-            setCategories(nextCategories);
-            await syncAllToConnectedSheet(
-              tasks,
-              nextCategories,
-              lineLogs,
-              `อัปเดตหมวดหมู่ "${category.name}" ลงใน Google Sheets เรียบร้อยแล้ว`
-            );
-            closeConfirmDialog();
-          },
-        });
-      } else {
-        setCategories(nextCategories);
-        showNotice('success', `แก้ไขหมวดหมู่ "${category.name}" เรียบร้อยแล้ว`);
-      }
+      pushCollaborativeWorkspace(tasks, nextCategories, teamMembers);
+      showNotice(
+        'success',
+        isNew
+          ? `เพิ่มหมวดหมู่ "${category.name}" และซิงค์ไปที่ปฏิทินของทีมเรียบร้อยแล้ว`
+          : `บันทึกการแก้ไขหมวดหมู่ "${category.name}" และอัปเดตสี/ข้อความไปที่ปฏิทินของทีมเรียบร้อยแล้ว`
+      );
     }
   };
 
@@ -2560,8 +2768,8 @@ export default function App() {
 
     setConfirmDialog({
       isOpen: true,
-      title: 'ยืนยันการลบหมวดหมู่งานออกจากระบบและ Google Sheets?',
-      description: `หมวดหมู่ "${category.name}" จะถูกลบออกจากแท็บ Categories และงานที่อยู่ในหมวดหมู่นี้จะถูกย้ายไปยังหมวดหมู่ "${fallbackCategory.name}" อัตโนมัติ`,
+      title: 'ยืนยันการลบหมวดหมู่งานออกจากระบบและปฏิทินทีม?',
+      description: `หมวดหมู่ "${category.name}" จะถูกลบออก และงานที่อยู่ในหมวดหมู่นี้จะถูกย้ายไปยังหมวดหมู่ "${fallbackCategory.name}" อัตโนมัติ`,
       affectedItemSummary: `ลบหมวดหมู่: "${category.name}"`,
       confirmLabel: 'ยืนยันการลบหมวดหมู่',
       isDestructive: true,
@@ -2577,7 +2785,16 @@ export default function App() {
             nextTasks,
             nextCategories,
             lineLogs,
-            `ลบหมวดหมู่ "${category.name}" ออกจาก Google Sheets เรียบร้อยแล้ว`
+            `ลบหมวดหมู่ "${category.name}" และอัปเดตปฏิทินของทีมเรียบร้อยแล้ว`,
+            undefined,
+            undefined,
+            teamMembers
+          );
+        } else {
+          await pushCollaborativeWorkspace(nextTasks, nextCategories, teamMembers);
+          showNotice(
+            'success',
+            `ลบหมวดหมู่ "${category.name}" และอัปเดตปฏิทินของทีมเรียบร้อยแล้ว`
           );
         }
         closeConfirmDialog();
@@ -3835,6 +4052,13 @@ export default function App() {
             tasks={tasks}
             onSaveCategory={handleSaveCategory}
             onDeleteCategory={handleDeleteCategory}
+            onSyncCategoriesToTeam={() => {
+              pushCollaborativeWorkspace(tasks, categories, teamMembers);
+              showNotice(
+                'success',
+                'ซิงค์หมวดหมู่งานและสีทั้งหมดไปยังปฏิทินของทีมและ Google Sheets Bridge เรียบร้อยแล้ว!'
+              );
+            }}
           />
         )}
 
