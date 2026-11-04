@@ -852,7 +852,22 @@ let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
 let runtimeGasUrl = DEFAULT_TEAM_GAS_URL;
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
-const persistedDeletedTaskIds = new Set<string>();
+const PERMANENTLY_PURGED_TASK_IDS = [
+  'task-1793454460187',
+  'task-1793455770914-ty0d',
+  'task-1793455784374',
+  'task-1793455747775',
+  'task-1793544098273',
+  'task-1793545518340',
+  'task-1793545672609',
+  'task-1793455703389',
+  'task-1793455880542-gdhj',
+  'task-1793611662385',
+  'task-1793668054359',
+  'task-1793630653911',
+  'task-1793666764668',
+];
+const persistedDeletedTaskIds = new Set<string>(PERMANENTLY_PURGED_TASK_IDS);
 const WORKSPACE_CACHE_FILE = path.join(process.cwd(), '.sheetcal-workspace-cache.json');
 
 function loadPersistedWorkspaceCache(): void {
@@ -881,7 +896,15 @@ function loadPersistedWorkspaceCache(): void {
       if (parsed.workspaces && typeof parsed.workspaces === 'object') {
         for (const [k, v] of Object.entries(parsed.workspaces)) {
           if (v && typeof v === 'object') {
-            sharedWorkspaces.set(k, v as CollaborativeWorkspaceState);
+            const ws = v as CollaborativeWorkspaceState;
+            if (Array.isArray(ws.tasks)) {
+              ws.tasks = ws.tasks.filter((t) => {
+                if (!t || typeof t !== 'object') return false;
+                const tid = String((t as Record<string, unknown>).id || '').trim();
+                return Boolean(tid && !persistedDeletedTaskIds.has(tid));
+              });
+            }
+            sharedWorkspaces.set(k, ws);
           }
         }
       }
@@ -1181,10 +1204,27 @@ async function startServer() {
           const gasData = (await gasRes.json().catch(() => ({}))) as {
             tasks?: unknown[];
           };
-          if (Array.isArray(gasData.tasks) && gasData.tasks.length > 0 && state) {
-            const currentCount = Array.isArray(state.tasks) ? state.tasks.length : 0;
-            const merged = mergeTasksById(state.tasks || [], gasData.tasks);
-            if (merged.length !== currentCount) {
+          if (Array.isArray(gasData.tasks) && state) {
+            const currentTasks = Array.isArray(state.tasks) ? state.tasks : [];
+            const gasTaskIds = new Set<string>();
+            for (const gt of gasData.tasks) {
+              if (gt && typeof gt === 'object') {
+                const gid = String((gt as Record<string, unknown>).id || '').trim();
+                if (gid) gasTaskIds.add(gid);
+              }
+            }
+            // Only keep local tasks that are either present in GAS or created within the last 15 seconds (in-flight creation)
+            const recentLocalTasks = currentTasks.filter((lt) => {
+              if (!lt || typeof lt !== 'object') return false;
+              const rec = lt as Record<string, unknown>;
+              const lid = String(rec.id || '').trim();
+              if (!lid || deletedTaskIds.has(lid)) return false;
+              if (gasTaskIds.has(lid)) return true;
+              const updatedMs = rec.updatedAt ? new Date(String(rec.updatedAt)).getTime() : 0;
+              return updatedMs > 0 && nowMs - updatedMs < 15000;
+            });
+            const merged = mergeTasksById(recentLocalTasks, gasData.tasks);
+            if (merged.length !== currentTasks.length) {
               state = {
                 ...state,
                 updatedAt: new Date().toISOString(),
@@ -1264,9 +1304,8 @@ async function startServer() {
       for (const item of incomingTasks) {
         if (item && typeof item === 'object') {
           const id = String((item as Record<string, unknown>).id || '').trim();
-          if (id) {
+          if (id && !deletedTaskIds.has(id)) {
             incomingIdSet.add(id);
-            deletedTaskIds.delete(id);
           }
         }
       }
@@ -1338,23 +1377,53 @@ async function startServer() {
   // Server-side proxy to sync tasks between Web App and Google Apps Script (immune to browser CORS/302 issues)
   app.post('/api/line/gas-bridge-sync', async (req, res) => {
     try {
-      const { gasUrl, channelAccessToken, tasks, mode } = req.body || {};
+      const {
+        gasUrl,
+        channelAccessToken,
+        tasks,
+        deletedTaskIds: incomingDeletedIds,
+        mode,
+      } = req.body || {};
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
       if (token) runtimeChannelAccessToken = token;
+
+      if (Array.isArray(incomingDeletedIds)) {
+        for (const rawId of incomingDeletedIds) {
+          const cid = String(rawId || '').trim();
+          if (cid) deletedTaskIds.add(cid);
+        }
+      }
 
       const targetGasUrl = resolveCleanGasUrl(gasUrl || runtimeGasUrl);
       runtimeGasUrl = targetGasUrl;
       savePersistedWorkspaceCache();
 
       if (mode === 'push' && Array.isArray(tasks)) {
+        const cleanPushTasks = tasks.filter((t) => {
+          if (!t || typeof t !== 'object') return false;
+          const id = String((t as Record<string, unknown>).id || '').trim();
+          return Boolean(id && !deletedTaskIds.has(id));
+        });
+        const existingWs = sharedWorkspaces.get('sheetcal-team-clean');
+        if (existingWs) {
+          const updatedWs: CollaborativeWorkspaceState = {
+            ...existingWs,
+            updatedAt: new Date().toISOString(),
+            tasks: cleanPushTasks,
+          };
+          sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
+          sharedWorkspaces.set('team-default', updatedWs);
+          savePersistedWorkspaceCache();
+        }
         const syncRes = await postToGoogleAppsScript(targetGasUrl, {
           action: 'sync_tasks',
-          tasks,
+          tasks: cleanPushTasks,
         });
         res.json({
           ok: Boolean(syncRes.json.ok),
           gasUrl: targetGasUrl,
           version: syncRes.json.version,
+          deletedTaskIds: Array.from(deletedTaskIds),
           response: syncRes.json,
         });
         return;
@@ -1379,18 +1448,12 @@ async function startServer() {
         savePersistedWorkspaceCache();
       }
 
-      if (remoteTasks.length === 0 && Array.isArray(tasks) && tasks.length > 0) {
-        await postToGoogleAppsScript(targetGasUrl, {
-          action: 'sync_tasks',
-          tasks,
-        }).catch(() => {});
-      }
-
       res.json({
         ok: true,
         gasUrl: targetGasUrl,
         version: pullRes.json.version,
         detectedGroupId: detectedGrp || runtimeDetectedGroupId || undefined,
+        deletedTaskIds: Array.from(deletedTaskIds),
         tasks: remoteTasks,
       });
     } catch (err: unknown) {

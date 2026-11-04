@@ -1868,73 +1868,71 @@ function pushTasksToMainWebApp(tasksList) {
 }
 
 function readSheetTasksForWeb() {
-  var webTasks = fetchTasksFromMainWebApp();
-  var sheetTasks = [];
+  var sheetTasks = null;
+  var hasTasksSheet = false;
   try {
     var ss = openSafeSpreadsheet();
     if (ss) {
       var taskSheet = ss.getSheetByName('Tasks');
-      if (taskSheet && taskSheet.getLastRow() > 1) {
-        var rows = taskSheet.getDataRange().getValues().slice(1);
-        sheetTasks = rows.map(function(r, idx) {
-          return {
-            id: String(r[0] || ('sheet-task-' + idx)),
-            title: String(r[1] || 'งาน'),
-            description: String(r[2] || ''),
-            date: formatCellDateYMD(r[3]),
-            time: formatCellTimeHM(r[4]),
-            categoryId: String(r[5] || 'cat-work'),
-            priority: String(r[6] || 'medium'),
-            status: String(r[7] || 'pending'),
-            remindMinutesBefore: Number(r[8] || 1),
-            lineNotified: String(r[9]).toUpperCase() === 'TRUE',
-            source: String(r[10] || 'sheets'),
-            updatedAt: String(r[11] || new Date().toISOString())
-          };
-        }).filter(function(t) { return Boolean(t.title && t.date); });
+      if (taskSheet) {
+        hasTasksSheet = true;
+        if (taskSheet.getLastRow() > 1) {
+          var rows = taskSheet.getDataRange().getValues().slice(1);
+          sheetTasks = rows.map(function(r, idx) {
+            var startD = formatCellDateYMD(r[3]);
+            var endD = r[14] ? formatCellDateYMD(r[14]) : '';
+            return {
+              id: String(r[0] || ('sheet-task-' + idx)),
+              title: String(r[1] || 'งาน'),
+              description: String(r[2] || ''),
+              date: startD,
+              endDate: (endD && endD > startD) ? endD : undefined,
+              time: formatCellTimeHM(r[4]),
+              categoryId: String(r[5] || 'cat-work'),
+              priority: String(r[6] || 'medium'),
+              status: String(r[7] || 'pending'),
+              remindMinutesBefore: Number(r[8] || 1),
+              lineNotified: String(r[9]).toUpperCase() === 'TRUE',
+              source: String(r[10] || 'sheets'),
+              updatedAt: String(r[11] || new Date().toISOString())
+            };
+          }).filter(function(t) { return Boolean(t.title && t.date); });
+        } else {
+          sheetTasks = [];
+        }
       }
     }
   } catch (err) {}
 
   var propTasks = getSavedTasksFromProperties();
-  var initTasks = (typeof INITIAL_WEB_TASKS !== 'undefined' && Array.isArray(INITIAL_WEB_TASKS)) ? INITIAL_WEB_TASKS : [];
+  var hasSyncedBefore = false;
+  try {
+    hasSyncedBefore = PropertiesService.getScriptProperties().getProperty('HAS_SYNCED_TASKS') === 'true';
+  } catch (err) {}
 
-  var mergedById = {};
-  var mergedOrder = [];
-  function addList(arr) {
-    if (!Array.isArray(arr)) return;
-    arr.forEach(function(item) {
-      if (!item || !item.id || !item.title) return;
-      var k = String(item.id);
-      if (!mergedById[k]) {
-        mergedById[k] = item;
-        mergedOrder.push(k);
-      } else {
-        var tOld = mergedById[k].updatedAt ? new Date(mergedById[k].updatedAt).getTime() : 0;
-        var tNew = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
-        if (tNew >= tOld) {
-          mergedById[k] = item;
-        }
-      }
-    });
+  if (Array.isArray(sheetTasks) && hasTasksSheet) {
+    saveTasksToProperties(sheetTasks);
+    return sheetTasks;
   }
-
-  addList(sheetTasks);
-  addList(propTasks);
-  addList(webTasks);
-  if (mergedOrder.length === 0) {
-    addList(initTasks);
+  if (Array.isArray(propTasks)) {
+    return propTasks;
   }
-
-  var finalTasks = mergedOrder.map(function(k) { return mergedById[k]; });
-  if (finalTasks.length > 0) {
-    saveTasksToProperties(finalTasks);
+  var webTasks = fetchTasksFromMainWebApp();
+  if (Array.isArray(webTasks)) {
+    saveTasksToProperties(webTasks);
+    return webTasks;
   }
-  return finalTasks;
+  if (!hasSyncedBefore && typeof INITIAL_WEB_TASKS !== 'undefined' && Array.isArray(INITIAL_WEB_TASKS)) {
+    return INITIAL_WEB_TASKS;
+  }
+  return [];
 }
 
 function writeSheetTasksFromWeb(tasksList) {
   var validList = Array.isArray(tasksList) ? tasksList.filter(function(t) { return Boolean(t && t.title); }) : [];
+  try {
+    PropertiesService.getScriptProperties().setProperty('HAS_SYNCED_TASKS', 'true');
+  } catch (err) {}
   saveTasksToProperties(validList);
   pushTasksToMainWebApp(validList);
   try {
@@ -1943,7 +1941,7 @@ function writeSheetTasksFromWeb(tasksList) {
     var taskSheet = ss.getSheetByName('Tasks') || ss.insertSheet('Tasks');
     taskSheet.clearContents();
     var rows = [
-      ['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt']
+      ['ID', 'Title', 'Description', 'Date (YYYY-MM-DD)', 'Time (HH:mm)', 'CategoryID', 'Priority', 'Status', 'RemindMinutesBefore', 'LineNotified', 'Source', 'UpdatedAt', 'AssigneeID', 'AssigneeName', 'EndDate (YYYY-MM-DD)']
     ];
     validList.forEach(function(t) {
       rows.push([
@@ -1958,10 +1956,13 @@ function writeSheetTasksFromWeb(tasksList) {
         Number(t.remindMinutesBefore || 1),
         t.lineNotified ? 'TRUE' : 'FALSE',
         String(t.source || 'web'),
-        String(t.updatedAt || new Date().toISOString())
+        String(t.updatedAt || new Date().toISOString()),
+        String(t.assigneeId || ''),
+        String(t.assigneeName || ''),
+        (t.endDate && String(t.endDate) > String(t.date)) ? ("'" + String(t.endDate)) : ''
       ]);
     });
-    taskSheet.getRange(1, 1, rows.length, 12).setValues(rows);
+    taskSheet.getRange(1, 1, rows.length, 15).setValues(rows);
     return true;
   } catch (err) {
     return true;

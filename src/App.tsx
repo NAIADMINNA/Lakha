@@ -178,13 +178,75 @@ export default function App() {
   const lastSyncedTimestampRef = useRef<string>('');
   const lastLocalMutationMsRef = useRef<number>(0);
 
+  const PERMANENTLY_PURGED_IDS = useMemo(
+    () =>
+      new Set<string>([
+        'task-1793454460187',
+        'task-1793455770914-ty0d',
+        'task-1793455784374',
+        'task-1793455747775',
+        'task-1793544098273',
+        'task-1793545518340',
+        'task-1793545672609',
+        'task-1793455703389',
+        'task-1793455880542-gdhj',
+        'task-1793611662385',
+        'task-1793668054359',
+        'task-1793630653911',
+        'task-1793666764668',
+      ]),
+    []
+  );
+
   // Core data state (persisted locally and synced with Google Sheets & Shared Workspace)
   const [tasks, setTasks] = useState<Task[]>(() => {
+    const purged = new Set<string>([
+      'task-1793454460187',
+      'task-1793455770914-ty0d',
+      'task-1793455784374',
+      'task-1793455747775',
+      'task-1793544098273',
+      'task-1793545518340',
+      'task-1793545672609',
+      'task-1793455703389',
+      'task-1793455880542-gdhj',
+      'task-1793611662385',
+      'task-1793668054359',
+      'task-1793630653911',
+      'task-1793666764668',
+    ]);
     try {
+      const rawDel = localStorage.getItem('sheetcal_deleted_task_ids_v1');
+      if (rawDel) {
+        const parsedDel = JSON.parse(rawDel);
+        if (Array.isArray(parsedDel)) {
+          parsedDel.forEach((id) => purged.add(String(id)));
+        }
+      }
       const saved = localStorage.getItem(STORAGE_KEYS.TASKS);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return (parsed as Task[])
+            .filter((t) => t && t.id && !purged.has(t.id))
+            .map((t) => {
+              if (!t.endDate && t.description) {
+                const durMatch = t.description.match(/(\d{1,2})\s*วัน/);
+                if (durMatch) {
+                  const days = parseInt(durMatch[1], 10);
+                  if (days >= 2 && days <= 60) {
+                    const [y, m, d] = t.date.split('-').map(Number);
+                    const dt = new Date(y, m - 1, d + (days - 1));
+                    const ey = dt.getFullYear();
+                    const em = String(dt.getMonth() + 1).padStart(2, '0');
+                    const ed = String(dt.getDate()).padStart(2, '0');
+                    return { ...t, endDate: `${ey}-${em}-${ed}` };
+                  }
+                }
+              }
+              return t;
+            });
+        }
       }
     } catch {
       // Ignore parse error
@@ -456,33 +518,56 @@ export default function App() {
   }, [sheetMeta]);
 
   const deletedTaskIdsRef = useRef<Set<string>>((() => {
+    const initialSet = new Set<string>([
+      'task-1793454460187',
+      'task-1793455770914-ty0d',
+      'task-1793455784374',
+      'task-1793455747775',
+      'task-1793544098273',
+      'task-1793545518340',
+      'task-1793545672609',
+      'task-1793455703389',
+      'task-1793455880542-gdhj',
+      'task-1793611662385',
+      'task-1793668054359',
+      'task-1793630653911',
+      'task-1793666764668',
+    ]);
     try {
       const raw = localStorage.getItem('sheetcal_deleted_task_ids_v1');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return new Set<string>(parsed.map(String));
+          parsed.forEach((id) => initialSet.add(String(id)));
         }
       }
-    } catch {
-      // Ignore
-    }
-    return new Set<string>();
-  })());
-
-  const recordDeletedTaskIds = useCallback((ids: string[]) => {
-    for (const id of ids) {
-      if (id) deletedTaskIdsRef.current.add(id);
-    }
-    try {
       localStorage.setItem(
         'sheetcal_deleted_task_ids_v1',
-        JSON.stringify(Array.from(deletedTaskIdsRef.current))
+        JSON.stringify(Array.from(initialSet))
       );
     } catch {
       // Ignore
     }
-  }, []);
+    return initialSet;
+  })());
+
+  const recordDeletedTaskIds = useCallback(
+    (ids: string[]) => {
+      for (const id of ids) {
+        if (id) deletedTaskIdsRef.current.add(id);
+      }
+      PERMANENTLY_PURGED_IDS.forEach((id) => deletedTaskIdsRef.current.add(id));
+      try {
+        localStorage.setItem(
+          'sheetcal_deleted_task_ids_v1',
+          JSON.stringify(Array.from(deletedTaskIdsRef.current))
+        );
+      } catch {
+        // Ignore
+      }
+    },
+    [PERMANENTLY_PURGED_IDS]
+  );
 
   // Push collaborative workspace state to server so shared calendar collaborators stay in sync
   const pushCollaborativeWorkspace = useCallback(
@@ -493,12 +578,20 @@ export default function App() {
       deletedTaskId?: string | string[]
     ) => {
       lastLocalMutationMsRef.current = Date.now();
+      const explicitDeleted = Array.isArray(deletedTaskId)
+        ? deletedTaskId
+        : deletedTaskId
+        ? [deletedTaskId]
+        : [];
+      if (explicitDeleted.length > 0) {
+        recordDeletedTaskIds(explicitDeleted);
+      }
+      const allDeletedIds = Array.from(deletedTaskIdsRef.current);
+      const cleanNextTasks = nextTasks.filter(
+        (t) => t && t.id && !deletedTaskIdsRef.current.has(t.id)
+      );
+
       try {
-        const deletedIdsArray = Array.isArray(deletedTaskId)
-          ? deletedTaskId
-          : deletedTaskId
-          ? [deletedTaskId]
-          : undefined;
         const res = await fetch(
           `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
           {
@@ -510,8 +603,8 @@ export default function App() {
               spreadsheetUrl: sheetMeta?.spreadsheetUrl,
               deletedTaskId:
                 typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
-              deletedTaskIds: deletedIdsArray,
-              tasks: nextTasks,
+              deletedTaskIds: allDeletedIds,
+              tasks: cleanNextTasks,
               categories: nextCategories,
               teamMembers: nextMembers,
             }),
@@ -538,7 +631,8 @@ export default function App() {
           body: JSON.stringify({
             mode: 'push',
             gasUrl: activeGasUrl,
-            tasks: nextTasks,
+            tasks: cleanNextTasks,
+            deletedTaskIds: allDeletedIds,
           }),
         });
         const ct = proxyRes.headers.get('content-type') || '';
@@ -556,7 +650,7 @@ export default function App() {
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
               action: 'sync_tasks',
-              tasks: nextTasks,
+              tasks: cleanNextTasks,
             }),
           });
         } catch {
@@ -564,7 +658,13 @@ export default function App() {
         }
       }
     },
-    [sheetMeta?.spreadsheetId, sheetMeta?.spreadsheetUrl, user?.email, workspaceId]
+    [
+      recordDeletedTaskIds,
+      sheetMeta?.spreadsheetId,
+      sheetMeta?.spreadsheetUrl,
+      user?.email,
+      workspaceId,
+    ]
   );
 
   const tasksRef = useRef<Task[]>(tasks);
@@ -623,7 +723,7 @@ export default function App() {
             const cleanRemoteTasks = (remote.tasks as Task[]).filter(
               (item) => item && item.id && !remoteDeletedIds.has(item.id)
             );
-            if (Date.now() - lastLocalMutationMsRef.current > 4000) {
+            if (Date.now() - lastLocalMutationMsRef.current > 12000) {
               setTasks(cleanRemoteTasks);
             }
           }
@@ -745,29 +845,34 @@ export default function App() {
       }
       setIsSyncing(true);
       try {
-        let mergedTasks = nextTasks;
+        let mergedTasks = nextTasks.filter(
+          (t) => t && t.id && !deletedSet.has(t.id) && !deletedTaskIdsRef.current.has(t.id)
+        );
         let mergedLogs = nextLogs;
-        try {
-          const remote = await fetchDatabaseFromSheet(token, sheetMeta.spreadsheetId);
-          const localIds = new Set(nextTasks.map((t) => t.id));
-          const remoteOnlyTasks = remote.tasks.filter(
-            (rt) =>
-              !localIds.has(rt.id) &&
-              !deletedSet.has(rt.id) &&
-              !deletedTaskIdsRef.current.has(rt.id)
-          );
-          if (remoteOnlyTasks.length > 0) {
-            mergedTasks = [...remoteOnlyTasks, ...nextTasks];
-            setTasks(mergedTasks);
+        // Only merge remote-only tasks when NOT performing a deletion so deleted tasks in Google Sheets are never re-imported
+        if (deletedSet.size === 0) {
+          try {
+            const remote = await fetchDatabaseFromSheet(token, sheetMeta.spreadsheetId);
+            const localIds = new Set(mergedTasks.map((t) => t.id));
+            const remoteOnlyTasks = remote.tasks.filter(
+              (rt) =>
+                !localIds.has(rt.id) &&
+                !deletedSet.has(rt.id) &&
+                !deletedTaskIdsRef.current.has(rt.id)
+            );
+            if (remoteOnlyTasks.length > 0) {
+              mergedTasks = [...remoteOnlyTasks, ...mergedTasks];
+              setTasks(mergedTasks);
+            }
+            const localLogIds = new Set(nextLogs.map((l) => l.id));
+            const remoteOnlyLogs = remote.logs.filter((rl) => !localLogIds.has(rl.id));
+            if (remoteOnlyLogs.length > 0) {
+              mergedLogs = [...nextLogs, ...remoteOnlyLogs];
+              setLineLogs(mergedLogs);
+            }
+          } catch {
+            // Proceed with local state if remote pre-fetch fails
           }
-          const localLogIds = new Set(nextLogs.map((l) => l.id));
-          const remoteOnlyLogs = remote.logs.filter((rl) => !localLogIds.has(rl.id));
-          if (remoteOnlyLogs.length > 0) {
-            mergedLogs = [...nextLogs, ...remoteOnlyLogs];
-            setLineLogs(mergedLogs);
-          }
-        } catch {
-          // Proceed with local state if remote pre-fetch fails
         }
 
         await writeDatabaseToSheet(
@@ -1663,7 +1768,7 @@ export default function App() {
                 );
                 if (
                   showFeedback ||
-                  Date.now() - lastLocalMutationMsRef.current > 4000
+                  Date.now() - lastLocalMutationMsRef.current > 12000
                 ) {
                   setTasks(cleanWsTasks);
                   workspaceHandled = true;
@@ -1692,6 +1797,7 @@ export default function App() {
           gasUrl?: string;
           detectedGroupId?: string;
           tasks?: Task[];
+          deletedTaskIds?: string[];
         } | null = null;
 
         // 1. Try full-stack Server Proxy first
@@ -1749,6 +1855,10 @@ export default function App() {
         }
 
         if (data) {
+          if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
+            recordDeletedTaskIds(data.deletedTaskIds);
+          }
+
           if (
             typeof data.detectedGroupId === 'string' &&
             /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim())
@@ -1761,7 +1871,7 @@ export default function App() {
 
           if (
             Array.isArray(data.tasks) &&
-            (showFeedback || Date.now() - lastLocalMutationMsRef.current > 4000) &&
+            (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000) &&
             (!workspaceHandled || data.tasks.length > 0)
           ) {
             setTasks((prev) => {
@@ -1771,12 +1881,28 @@ export default function App() {
                 if (!rt || !rt.id || !rt.title || !rt.date) continue;
                 if (deletedTaskIdsRef.current.has(rt.id)) continue;
                 const existing = prevById.get(rt.id);
+                let inferredEndDate = rt.endDate ?? existing?.endDate;
+                const descText = rt.description ?? existing?.description ?? '';
+                if (!inferredEndDate && descText) {
+                  const durMatch = descText.match(/(\d{1,2})\s*วัน/);
+                  if (durMatch) {
+                    const days = parseInt(durMatch[1], 10);
+                    if (days >= 2 && days <= 60) {
+                      const [y, m, d] = rt.date.split('-').map(Number);
+                      const dt = new Date(y, m - 1, d + (days - 1));
+                      const ey = dt.getFullYear();
+                      const em = String(dt.getMonth() + 1).padStart(2, '0');
+                      const ed = String(dt.getDate()).padStart(2, '0');
+                      inferredEndDate = `${ey}-${em}-${ed}`;
+                    }
+                  }
+                }
                 nextRemoteTasks.push({
                   id: rt.id,
                   title: rt.title,
-                  description: rt.description ?? existing?.description ?? '',
+                  description: descText,
                   date: rt.date,
-                  endDate: rt.endDate ?? existing?.endDate,
+                  endDate: inferredEndDate,
                   time: rt.time || existing?.time || '09:00',
                   categoryId: rt.categoryId || existing?.categoryId || 'cat-ops',
                   priority:
@@ -1994,38 +2120,35 @@ export default function App() {
         : t
     );
 
+    setTasks(nextTasks);
     if (sheetMeta && accessToken) {
-      setConfirmDialog({
-        isOpen: true,
-        title: 'ยืนยันการเปลี่ยนสถานะงานใน Google Sheets?',
-        description:
-          'ระบบจะทำการอัปเดตสถานะของงานนี้ในแท็บ Tasks บนไฟล์ Google Sheets ของคุณ',
-        affectedItemSummary: `งาน "${task.title}" เปลี่ยนสถานะเป็น "${
+      syncAllToConnectedSheet(
+        nextTasks,
+        categories,
+        lineLogs,
+        `อัปเดตสถานะงาน "${task.title}" เป็น "${
           nextStatus === TaskStatus.COMPLETED
-            ? 'เสร็จสิ้นแล้ว (Completed)'
+            ? 'เสร็จแล้ว'
             : nextStatus === TaskStatus.IN_PROGRESS
-            ? 'กำลังดำเนินการ (In Progress)'
-            : 'รอดำเนินการ (Pending)'
-        }"`,
-        confirmLabel: 'ยืนยันอัปเดตสถานะ',
-        isDestructive: false,
-        onConfirm: async () => {
-          setTasks(nextTasks);
-          await syncAllToConnectedSheet(
-            nextTasks,
-            categories,
-            lineLogs,
-            `อัปเดตสถานะงาน "${task.title}" ลง Google Sheets เรียบร้อยแล้ว`,
-            undefined,
-            undefined,
-            teamMembers
-          );
-          closeConfirmDialog();
-        },
-      });
+            ? 'กำลังทำ'
+            : 'รอดำเนินการ'
+        }" เรียบร้อยแล้ว`,
+        undefined,
+        undefined,
+        teamMembers
+      );
     } else {
-      setTasks(nextTasks);
       pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+      showNotice(
+        'success',
+        `อัปเดตสถานะงาน "${task.title}" เป็น "${
+          nextStatus === TaskStatus.COMPLETED
+            ? 'เสร็จแล้ว'
+            : nextStatus === TaskStatus.IN_PROGRESS
+            ? 'กำลังทำ'
+            : 'รอดำเนินการ'
+        }" เรียบร้อยแล้ว`
+      );
     }
   };
 

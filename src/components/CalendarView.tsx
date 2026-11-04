@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Circle,
   Edit3,
+  Eye,
+  EyeOff,
   Plus,
   Trash2,
 } from 'lucide-react';
@@ -87,9 +89,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onSendLineReminderNow,
 }) => {
   const todayStr = formatLocalDateYMD();
+  const [hideCompleted, setHideCompleted] = useState<boolean>(false);
   const completedCount = useMemo(
     () => tasks.filter((t) => t.status === TaskStatus.COMPLETED).length,
     [tasks]
+  );
+
+  const visibleTasks = useMemo(
+    () =>
+      hideCompleted
+        ? tasks.filter((t) => t.status !== TaskStatus.COMPLETED)
+        : tasks,
+    [tasks, hideCompleted]
   );
 
   const [currentMonthDate, setCurrentMonthDate] = useState<Date>(() => {
@@ -126,7 +137,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       }
     };
 
-    tasks.forEach((t) => {
+    visibleTasks.forEach((t) => {
       if (t.endDate && t.endDate > t.date) {
         const [sy, sm, sd] = t.date.split('-').map((n) => parseInt(n, 10));
         const [ey, em, ed] = t.endDate.split('-').map((n) => parseInt(n, 10));
@@ -152,7 +163,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       map[d].sort((a, b) => a.time.localeCompare(b.time));
     });
     return map;
-  }, [tasks]);
+  }, [visibleTasks]);
 
   const calendarCells = useMemo(() => {
     const firstDayOfWeek = new Date(year, month, 1).getDay();
@@ -271,6 +282,30 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               <Plus className="h-3.5 w-3.5" />
               <span>เพิ่มงาน</span>
             </button>
+            {completedCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setHideCompleted((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  hideCompleted
+                    ? 'text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100'
+                    : 'text-slate-700 bg-slate-100 border-slate-300 hover:bg-slate-200'
+                }`}
+                title="ซ่อนหรือแสดงงานที่ทำเสร็จแล้วบนตารางปฏิทิน"
+              >
+                {hideCompleted ? (
+                  <>
+                    <Eye className="h-3.5 w-3.5" />
+                    <span>แสดงงานที่เสร็จแล้ว ({completedCount})</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="h-3.5 w-3.5" />
+                    <span>ซ่อนงานที่เสร็จแล้ว ({completedCount})</span>
+                  </>
+                )}
+              </button>
+            )}
             {onDeleteCompletedTasks && completedCount > 0 && (
               <button
                 type="button"
