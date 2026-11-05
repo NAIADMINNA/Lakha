@@ -2062,14 +2062,19 @@ export default function App() {
                 wsCats.length > 0 &&
                 (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
               ) {
-                setCategories(wsCats);
+                setCategories((prev) =>
+                  JSON.stringify(prev) === JSON.stringify(wsCats) ? prev : wsCats
+                );
               }
               if (
                 Array.isArray(wsData.workspace.teamMembers) &&
                 wsData.workspace.teamMembers.length > 0 &&
                 (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
               ) {
-                setTeamMembers(wsData.workspace.teamMembers as TeamMember[]);
+                const wsMembers = wsData.workspace.teamMembers as TeamMember[];
+                setTeamMembers((prev) =>
+                  JSON.stringify(prev) === JSON.stringify(wsMembers) ? prev : wsMembers
+                );
               }
             }
           }
@@ -2187,7 +2192,11 @@ export default function App() {
               remoteGasCats.length > 0 &&
               (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
             ) {
-              setCategories(remoteGasCats);
+              setCategories((prev) =>
+                JSON.stringify(prev) === JSON.stringify(remoteGasCats)
+                  ? prev
+                  : remoteGasCats
+              );
             }
 
             if (
@@ -2195,7 +2204,11 @@ export default function App() {
               remoteGasMembers.length > 0 &&
               (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
             ) {
-              setTeamMembers(remoteGasMembers);
+              setTeamMembers((prev) =>
+                JSON.stringify(prev) === JSON.stringify(remoteGasMembers)
+                  ? prev
+                  : remoteGasMembers
+              );
             }
 
             if (

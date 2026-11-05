@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bell, Calendar, Clock, X } from 'lucide-react';
 import { Category, Task, TaskPriority, TaskStatus } from '../types';
 import {
@@ -28,11 +28,9 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   editingTask,
   defaultRemindMinutes,
 }) => {
-  const todayStr = formatLocalDateYMD();
-
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [date, setDate] = useState(initialDate || todayStr);
+  const [date, setDate] = useState(() => initialDate || formatLocalDateYMD());
   const [endDate, setEndDate] = useState('');
   const [time, setTime] = useState('09:30');
   const [categoryId, setCategoryId] = useState(categories[0]?.id || 'cat-work');
@@ -40,7 +38,20 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   const [status, setStatus] = useState<TaskStatus>(TaskStatus.PENDING);
   const [remindMinutesBefore, setRemindMinutesBefore] = useState<number>(defaultRemindMinutes);
 
+  const prevOpenSessionKeyRef = useRef<string>('');
+
   useEffect(() => {
+    if (!isOpen) {
+      prevOpenSessionKeyRef.current = '';
+      return;
+    }
+
+    const sessionKey = `${editingTask?.id || 'new'}:${initialDate || ''}`;
+    if (prevOpenSessionKeyRef.current === sessionKey) {
+      return;
+    }
+    prevOpenSessionKeyRef.current = sessionKey;
+
     if (editingTask) {
       setTitle(editingTask.title);
       setDescription(editingTask.description);
@@ -54,7 +65,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
     } else {
       setTitle('');
       setDescription('');
-      setDate(initialDate || todayStr);
+      setDate(initialDate || formatLocalDateYMD());
       setEndDate('');
       setTime('09:30');
       setCategoryId(categories[0]?.id || 'cat-work');
@@ -62,7 +73,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setStatus(TaskStatus.PENDING);
       setRemindMinutesBefore(defaultRemindMinutes);
     }
-  }, [editingTask, initialDate, isOpen, categories, defaultRemindMinutes, todayStr]);
+  }, [isOpen, editingTask, initialDate, categories, defaultRemindMinutes]);
 
   if (!isOpen) return null;
 
