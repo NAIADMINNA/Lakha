@@ -1282,6 +1282,19 @@ async function startServer() {
       const id = String(rec.id || '').trim();
       const title = String(rec.title || '').trim();
       if (!id || !title || deletedTaskIds.has(id)) continue;
+      const dateStr = String(rec.date || '').trim();
+      if (dateStr === '2026-11-03' || dateStr === '2026-11-04') {
+        const numMatch = id.match(/^task-(\d+)/);
+        const createdMs = numMatch ? Number(numMatch[1]) : 0;
+        const updatedMs = rec.updatedAt ? new Date(String(rec.updatedAt)).getTime() : 0;
+        if (
+          (createdMs > 0 && createdMs < 1793841300000) ||
+          (updatedMs > 0 && updatedMs < 1793841300000)
+        ) {
+          deletedTaskIds.add(id);
+          continue;
+        }
+      }
       const existingItem = byId.get(id);
       if (!existingItem) {
         byId.set(id, rec);

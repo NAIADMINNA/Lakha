@@ -3,225 +3,46 @@
   "runtimeDefaultUserId": "Uf98c07a411f5c16f74988dd00b5c085c",
   "runtimeDetectedGroupId": "Cff150b586a4f91c883b40ae7d76b2ec9",
   "runtimeGasUrl": "https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec",
-  "deletedTaskIds": [],
+  "lastMorningDigestSentDate": "",
+  "runtimeScheduleConfig": {
+    "enabled": true,
+    "dailyDigestEnabled": true,
+    "dailyDigestTime": "08:30",
+    "defaultRemindMinutes": 1,
+    "notifyOnOverdue": false,
+    "teamNotificationMode": "group",
+    "publicCalendarUrl": "https://naiadminna.github.io/Lakha/?section=calendar",
+    "messageFormat": "executive_flex",
+    "includeDescriptionInNotification": true,
+    "includeGoogleCalendarButton": true,
+    "includeOpenAppButton": true,
+    "cardFontSize": "md",
+    "cardTitleWeight": "bold",
+    "cardLineSpacing": "relaxed"
+  },
+  "deletedTaskIds": [
+    "task-1793454460187",
+    "task-1793455770914-ty0d",
+    "task-1793455784374",
+    "task-1793455747775",
+    "task-1793544098273",
+    "task-1793545518340",
+    "task-1793545672609",
+    "task-1793455703389",
+    "task-1793455880542-gdhj",
+    "task-1793611662385",
+    "task-1793668054359",
+    "task-1793630653911",
+    "task-1793666764668"
+  ],
   "workspaces": {
     "sheetcal-team-clean": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-04T01:04:32.088Z",
+      "updatedAt": "2026-11-05T01:06:05.448Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
       "tasks": [
-        {
-          "id": "task-1793454460187",
-          "title": "อยากตั้งเตือนนัดหมายลงปฏิทิน Google ค่ะ",
-          "description": "บันทึกผ่านแชท LINE OA (\"อยากตั้งเตือนนัดหมายลงปฏิทิน Google ค่ะ\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:00:34.182Z"
-        },
-        {
-          "id": "task-1793455770914-ty0d",
-          "title": "ทดสอบส่งงานจาก LINE",
-          "description": "บันทึกอัตโนมัติผ่าน LINE OA (\"ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:16:37.494Z"
-        },
-        {
-          "id": "task-1793455784374",
-          "title": "กินข้าว วันที่ 1 พย 69",
-          "description": "บันทึกผ่านแชท LINE OA (\"กินข้าว 12.00 วันที่ 1 พย 69\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": false,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:09:44.374Z"
-        },
-        {
-          "id": "task-1793455747775",
-          "title": "ทดสอบส่งงานจาก LINE",
-          "description": "บันทึกผ่านแชท LINE OA (\"ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง\")",
-          "date": "2026-10-31",
-          "time": "15:30",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:11:10.267Z"
-        },
-        {
-          "id": "task-1793544098273",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T14:42:38.531Z"
-        },
-        {
-          "id": "task-1793545518340",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T15:09:11.349Z"
-        },
-        {
-          "id": "task-1793545672609",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T15:10:04.372Z"
-        },
-        {
-          "id": "task-1793455703389",
-          "title": "ไปทำงาน วันที่1",
-          "description": "บันทึกผ่านแชท LINE OA (\"ไปทำงาน 09.30 วันที่1 พรุ่งนี้\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:09:22.777Z"
-        },
-        {
-          "id": "task-1793455880542-gdhj",
-          "title": "ทำงาน",
-          "description": "บันทึกอัตโนมัติผ่าน LINE OA (\"ทำงาน 12.00 วันที่ 1 พย 69\")",
-          "date": "2026-11-01",
-          "time": "12:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:11:50.551Z"
-        },
-        {
-          "id": "task-1793611662385",
-          "title": "กินข้าว",
-          "description": "บันทึกผ่านแชท LINE OA (\"กินข้าว 18.00\")",
-          "date": "2026-11-02",
-          "time": "18:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-02T10:52:27.855Z"
-        },
-        {
-          "id": "task-1793668054359",
-          "title": "ประชุมส่วนราชการที่เกี่ยวข้องฯ",
-          "description": "เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)",
-          "date": "2026-11-03",
-          "time": "10:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 1,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-03T01:07:34.359Z"
-        },
-        {
-          "id": "task-1793630653911",
-          "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",
-          "description": "ผอ.อำนาจ กับ หัวหน้าฝ่ายบริหาร",
-          "date": "2026-11-03",
-          "time": "14:00",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "web",
-          "updatedAt": "2026-11-02T14:46:15.670Z"
-        },
-        {
-          "id": "task-1793666764668",
-          "title": "พบเจ้าหน้าที่ BOI ณ. ONE BANGKOK",
-          "description": "ผอ.อำนาจ กับ หัวหน้าบริหาร",
-          "date": "2026-11-03",
-          "time": "15:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "web",
-          "updatedAt": "2026-11-03T06:36:18.350Z"
-        },
-        {
-          "id": "task-1793752083584",
-          "title": "Brief คบต. ท่านปลัดกระทรวงฯ",
-          "description": "ห้องปลัดกระทรวงแรงงาน",
-          "date": "2026-11-04",
-          "time": "10:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-04T00:28:03.584Z"
-        },
-        {
-          "id": "task-1793752869312",
-          "title": "ประชุมคณะกรรมการสนับสนุนกระตุ้นเศรษฐกิจ  ณ.กระทรวงการคลัง",
-          "description": "ประชุมคณะกรรมการสนับสนุนกระตุ้นเศรษฐกิจและการลงทุนโครงการดึงดูดชาวต่างชาติที่มีศักยภาพสูงสู่ประเทศไทยครั้งที่ 2/2569",
-          "date": "2026-11-04",
-          "time": "14:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-04T00:41:09.312Z"
-        },
         {
           "id": "task-1793752939659",
           "title": "หารือกับฑูตเมียนมา ณ.ห้องประชุม สบต. ชั้น 2",
@@ -232,9 +53,9 @@
           "priority": "medium",
           "status": "pending",
           "remindMinutesBefore": 30,
-          "lineNotified": false,
+          "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-04T00:42:19.659Z"
+          "updatedAt": "2026-11-04T12:21:31.735Z"
         },
         {
           "id": "task-1793752971479",
@@ -262,7 +83,8 @@
           "remindMinutesBefore": 60,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:57:49.617Z"
+          "updatedAt": "2026-11-04T00:57:49.617Z",
+          "endDate": "2026-11-12"
         },
         {
           "id": "task-1793753960813",
@@ -290,7 +112,8 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:00:10.524Z"
+          "updatedAt": "2026-11-04T01:00:10.524Z",
+          "endDate": "2026-11-26"
         },
         {
           "id": "task-1793754078147",
@@ -307,7 +130,32 @@
           "updatedAt": "2026-11-04T01:01:18.147Z"
         }
       ],
-      "categories": [],
+      "categories": [
+        {
+          "id": "cat-work",
+          "name": "งานบริหาร&การประชุม",
+          "color": "#2563EB",
+          "description": "งานประชุม"
+        },
+        {
+          "id": "cat-client",
+          "name": "นัดหมาย & ขอพบ",
+          "color": "#0D9488",
+          "description": ""
+        },
+        {
+          "id": "cat-urgent",
+          "name": "งานด่วน",
+          "color": "#DC2626",
+          "description": "งานเร่งด่วน หรือเดดไลน์สำคัญภายในวัน"
+        },
+        {
+          "id": "cat-1793753857364",
+          "name": "ดูงาน",
+          "color": "#f906d8",
+          "description": ""
+        }
+      ],
       "teamMembers": [
         {
           "id": "member-owner",
@@ -323,221 +171,11 @@
     },
     "team-default": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-04T01:04:32.088Z",
+      "updatedAt": "2026-11-05T01:06:05.448Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
       "tasks": [
-        {
-          "id": "task-1793454460187",
-          "title": "อยากตั้งเตือนนัดหมายลงปฏิทิน Google ค่ะ",
-          "description": "บันทึกผ่านแชท LINE OA (\"อยากตั้งเตือนนัดหมายลงปฏิทิน Google ค่ะ\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:00:34.182Z"
-        },
-        {
-          "id": "task-1793455770914-ty0d",
-          "title": "ทดสอบส่งงานจาก LINE",
-          "description": "บันทึกอัตโนมัติผ่าน LINE OA (\"ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:16:37.494Z"
-        },
-        {
-          "id": "task-1793455784374",
-          "title": "กินข้าว วันที่ 1 พย 69",
-          "description": "บันทึกผ่านแชท LINE OA (\"กินข้าว 12.00 วันที่ 1 พย 69\")",
-          "date": "2026-10-31",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": false,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:09:44.374Z"
-        },
-        {
-          "id": "task-1793455747775",
-          "title": "ทดสอบส่งงานจาก LINE",
-          "description": "บันทึกผ่านแชท LINE OA (\"ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง\")",
-          "date": "2026-10-31",
-          "time": "15:30",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:11:10.267Z"
-        },
-        {
-          "id": "task-1793544098273",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T14:42:38.531Z"
-        },
-        {
-          "id": "task-1793545518340",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T15:09:11.349Z"
-        },
-        {
-          "id": "task-1793545672609",
-          "title": "เชื่อมกลุ่ม",
-          "description": "บันทึกผ่านแชท LINE OA (\"เชื่อมกลุ่ม\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-01T15:10:04.372Z"
-        },
-        {
-          "id": "task-1793455703389",
-          "title": "ไปทำงาน วันที่1",
-          "description": "บันทึกผ่านแชท LINE OA (\"ไปทำงาน 09.30 วันที่1 พรุ่งนี้\")",
-          "date": "2026-11-01",
-          "time": "09:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:09:22.777Z"
-        },
-        {
-          "id": "task-1793455880542-gdhj",
-          "title": "ทำงาน",
-          "description": "บันทึกอัตโนมัติผ่าน LINE OA (\"ทำงาน 12.00 วันที่ 1 พย 69\")",
-          "date": "2026-11-01",
-          "time": "12:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-10-31T14:11:50.551Z"
-        },
-        {
-          "id": "task-1793611662385",
-          "title": "กินข้าว",
-          "description": "บันทึกผ่านแชท LINE OA (\"กินข้าว 18.00\")",
-          "date": "2026-11-02",
-          "time": "18:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "line",
-          "updatedAt": "2026-11-02T10:52:27.855Z"
-        },
-        {
-          "id": "task-1793668054359",
-          "title": "ประชุมส่วนราชการที่เกี่ยวข้องฯ",
-          "description": "เพิ่มผ่านหน้าปฏิทินทีม (LINE Group Portal)",
-          "date": "2026-11-03",
-          "time": "10:00",
-          "categoryId": "cat-work",
-          "priority": "medium",
-          "status": "pending",
-          "remindMinutesBefore": 1,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-03T01:07:34.359Z"
-        },
-        {
-          "id": "task-1793630653911",
-          "title": "ไปพบเจ้าหน้าที่ boi @one bangkok เวลา 14.00 น.",
-          "description": "ผอ.อำนาจ กับ หัวหน้าฝ่ายบริหาร",
-          "date": "2026-11-03",
-          "time": "14:00",
-          "categoryId": "cat-work",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 30,
-          "lineNotified": true,
-          "source": "web",
-          "updatedAt": "2026-11-02T14:46:15.670Z"
-        },
-        {
-          "id": "task-1793666764668",
-          "title": "พบเจ้าหน้าที่ BOI ณ. ONE BANGKOK",
-          "description": "ผอ.อำนาจ กับ หัวหน้าบริหาร",
-          "date": "2026-11-03",
-          "time": "15:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": true,
-          "source": "web",
-          "updatedAt": "2026-11-03T06:36:18.350Z"
-        },
-        {
-          "id": "task-1793752083584",
-          "title": "Brief คบต. ท่านปลัดกระทรวงฯ",
-          "description": "ห้องปลัดกระทรวงแรงงาน",
-          "date": "2026-11-04",
-          "time": "10:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-04T00:28:03.584Z"
-        },
-        {
-          "id": "task-1793752869312",
-          "title": "ประชุมคณะกรรมการสนับสนุนกระตุ้นเศรษฐกิจ  ณ.กระทรวงการคลัง",
-          "description": "ประชุมคณะกรรมการสนับสนุนกระตุ้นเศรษฐกิจและการลงทุนโครงการดึงดูดชาวต่างชาติที่มีศักยภาพสูงสู่ประเทศไทยครั้งที่ 2/2569",
-          "date": "2026-11-04",
-          "time": "14:00",
-          "categoryId": "cat-urgent",
-          "priority": "high",
-          "status": "pending",
-          "remindMinutesBefore": 60,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-04T00:41:09.312Z"
-        },
         {
           "id": "task-1793752939659",
           "title": "หารือกับฑูตเมียนมา ณ.ห้องประชุม สบต. ชั้น 2",
@@ -548,9 +186,9 @@
           "priority": "medium",
           "status": "pending",
           "remindMinutesBefore": 30,
-          "lineNotified": false,
+          "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-04T00:42:19.659Z"
+          "updatedAt": "2026-11-04T12:21:31.735Z"
         },
         {
           "id": "task-1793752971479",
@@ -578,7 +216,8 @@
           "remindMinutesBefore": 60,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:57:49.617Z"
+          "updatedAt": "2026-11-04T00:57:49.617Z",
+          "endDate": "2026-11-12"
         },
         {
           "id": "task-1793753960813",
@@ -606,7 +245,8 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:00:10.524Z"
+          "updatedAt": "2026-11-04T01:00:10.524Z",
+          "endDate": "2026-11-26"
         },
         {
           "id": "task-1793754078147",
@@ -623,7 +263,32 @@
           "updatedAt": "2026-11-04T01:01:18.147Z"
         }
       ],
-      "categories": [],
+      "categories": [
+        {
+          "id": "cat-work",
+          "name": "งานบริหาร&การประชุม",
+          "color": "#2563EB",
+          "description": "งานประชุม"
+        },
+        {
+          "id": "cat-client",
+          "name": "นัดหมาย & ขอพบ",
+          "color": "#0D9488",
+          "description": ""
+        },
+        {
+          "id": "cat-urgent",
+          "name": "งานด่วน",
+          "color": "#DC2626",
+          "description": "งานเร่งด่วน หรือเดดไลน์สำคัญภายในวัน"
+        },
+        {
+          "id": "cat-1793753857364",
+          "name": "ดูงาน",
+          "color": "#f906d8",
+          "description": ""
+        }
+      ],
       "teamMembers": [
         {
           "id": "member-owner",
