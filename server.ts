@@ -272,7 +272,7 @@ function buildDailyDigestFlexMessage(
       margin: 'lg',
     });
     if (passedItems.length > 0) {
-      passedItems.slice(0, 5).forEach((item) => {
+      passedItems.forEach((item) => {
         timelineSectionBoxes.push(renderTaskBox(item, true));
       });
     } else {
@@ -294,7 +294,7 @@ function buildDailyDigestFlexMessage(
       margin: 'lg',
     });
     if (upcomingItems.length > 0) {
-      upcomingItems.slice(0, 5).forEach((item) => {
+      upcomingItems.forEach((item) => {
         timelineSectionBoxes.push(renderTaskBox(item, false));
       });
     } else {
@@ -3142,18 +3142,24 @@ async function startServer() {
         }
       }
 
-      // 2. Check Per-Task Scheduled Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
+      // 2. Check Per-Task Scheduled Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนดให้ครบทุกงานในวันนั้น ๆ)
       const decodedTasks = extractGasMetadataFromTasks(ws.tasks).tasks;
       let taskUpdated = false;
-      const totalCount = decodedTasks.length;
-      const completedCount = decodedTasks.filter(
+      const sameDayTasksList = decodedTasks.filter((item) => {
+        const sD = String(item.date || '').trim();
+        const eD = String(item.endDate || sD).trim();
+        return sD && sD <= todayYMD && eD >= todayYMD;
+      });
+      const statsPool = sameDayTasksList.length > 0 ? sameDayTasksList : decodedTasks;
+      const totalCount = statsPool.length;
+      const completedCount = statsPool.filter(
         (t) => String(t.status || '') === 'completed'
       ).length;
       const pendingCount = totalCount - completedCount;
 
       for (const t of decodedTasks) {
         if (!t || typeof t !== 'object') continue;
-        if (String(t.status || '') === 'completed' || Boolean(t.lineNotified)) continue;
+        if (String(t.status || '') === 'completed') continue;
 
         const remindMins =
           typeof t.remindMinutesBefore === 'number'
@@ -3162,18 +3168,45 @@ async function startServer() {
         if (remindMins <= 0) continue;
 
         const tDate = String(t.date || '').trim();
+        const tEndDate = String(t.endDate || tDate).trim();
         const tTimeRaw = String(t.time || '09:00').trim();
         const cleanTime = /^\d{1,2}:\d{2}$/.test(tTimeRaw)
           ? tTimeRaw.padStart(5, '0')
           : '09:00';
         if (!/^\d{4}-\d{2}-\d{2}$/.test(tDate)) continue;
 
-        const taskDateTime = new Date(`${tDate}T${cleanTime}:00+07:00`);
+        const isTaskActiveToday = tDate <= todayYMD && tEndDate >= todayYMD;
+        const effectiveDate = isTaskActiveToday ? todayYMD : tDate;
+
+        const taskDateTime = new Date(`${effectiveDate}T${cleanTime}:00+07:00`);
         if (isNaN(taskDateTime.getTime())) continue;
 
         const diffMinutes = (taskDateTime.getTime() - now.getTime()) / (1000 * 60);
-        // Server fires slightly after 0.2 min inside the window so if browser tab is open, they coordinate via lineNotified
-        if (diffMinutes <= remindMins && diffMinutes >= -5) {
+
+        // If lineNotified was set while the scheduled reminder window is still in the future
+        // or on a previous day of a multi-day task, reset it so the task will notify on schedule
+        if (Boolean(t.lineNotified)) {
+          let updatedYMD = '';
+          if (t.updatedAt) {
+            const dtUpd = new Date(String(t.updatedAt));
+            if (!isNaN(dtUpd.getTime())) {
+              const bangkokUpd = new Date(dtUpd.getTime() + 7 * 60 * 60 * 1000);
+              updatedYMD = bangkokUpd.toISOString().slice(0, 10);
+            }
+          }
+          const isNewDayOfMultiDay =
+            tEndDate > tDate && Boolean(updatedYMD && updatedYMD < todayYMD);
+          if (diffMinutes > remindMins + 1 || isNewDayOfMultiDay) {
+            t.lineNotified = false;
+            t.updatedAt = new Date().toISOString();
+            taskUpdated = true;
+          }
+          continue;
+        }
+
+        // Notify strictly within the task's configured reminder window [0..remindMins] before start
+        // (with at most 1 minute grace [-1..0] — never fire late after the task time has already passed!)
+        if (diffMinutes <= remindMins && diffMinutes >= -1) {
           t.lineNotified = true;
           t.updatedAt = new Date().toISOString();
           taskUpdated = true;
@@ -3183,7 +3216,7 @@ async function startServer() {
           const singleFlex = buildSingleTaskReminderFlexMessage({
             taskTitle: String(t.title || 'รายการงาน'),
             description: String(t.description || ''),
-            date: tDate,
+            date: effectiveDate,
             time: cleanTime,
             categoryName: catInfo?.name || 'ทั่วไป',
             categoryColor: catInfo?.color || '#2563EB',
@@ -3205,9 +3238,8 @@ async function startServer() {
 
           await deliverScheduledFlexToLine(
             singleFlex,
-            `🔔 แจ้งเตือนงานตามเวลา: ${String(t.title || '')} (${tDate} เวลา ${cleanTime} น.)`
+            `🔔 แจ้งเตือนงานตามเวลา: ${String(t.title || '')} (${formatThaiDateReadable(effectiveDate)} เวลา ${cleanTime} น.)`
           );
-          break;
         }
       }
 

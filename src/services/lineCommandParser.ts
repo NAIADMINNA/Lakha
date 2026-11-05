@@ -88,6 +88,18 @@ export function doesTaskTriggerNotification(
   task: Task,
   settings: LineSettings
 ): { allowed: boolean; reason?: string } {
+  if (task.status === TaskStatus.COMPLETED) {
+    return {
+      allowed: false,
+      reason: `สถานะงาน "${task.status}" ดำเนินการเสร็จสิ้นแล้ว`,
+    };
+  }
+
+  // If the task explicitly has automatic reminder minutes configured (> 0), always allow it to notify
+  if (typeof task.remindMinutesBefore === 'number' && task.remindMinutesBefore > 0) {
+    return { allowed: true };
+  }
+
   const allowedStatuses =
     Array.isArray(settings.triggerStatuses) && settings.triggerStatuses.length > 0
       ? settings.triggerStatuses
@@ -96,39 +108,6 @@ export function doesTaskTriggerNotification(
     return {
       allowed: false,
       reason: `สถานะงาน "${task.status}" ไม่อยู่ในเกณฑ์ที่เปิดแจ้งเตือน`,
-    };
-  }
-
-  const allowedPriorities =
-    Array.isArray(settings.triggerPriorities) && settings.triggerPriorities.length > 0
-      ? settings.triggerPriorities
-      : [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW];
-  if (!allowedPriorities.includes(task.priority)) {
-    return {
-      allowed: false,
-      reason: `ระดับความสำคัญ "${task.priority}" ถูกปิดการแจ้งเตือนไว้`,
-    };
-  }
-
-  if (
-    Array.isArray(settings.triggerCategoryIds) &&
-    settings.triggerCategoryIds.length > 0 &&
-    !settings.triggerCategoryIds.includes(task.categoryId)
-  ) {
-    return {
-      allowed: false,
-      reason: 'หมวดหมู่งานนี้ไม่ได้เปิดรับการแจ้งเตือน',
-    };
-  }
-
-  const allowedSources =
-    Array.isArray(settings.triggerSources) && settings.triggerSources.length > 0
-      ? settings.triggerSources
-      : ['web', 'line', 'sheets'];
-  if (!allowedSources.includes(task.source)) {
-    return {
-      allowed: false,
-      reason: `แหล่งที่มา "${task.source}" ถูกปิดการแจ้งเตือนไว้`,
     };
   }
 
@@ -714,7 +693,7 @@ export function parseLineChatMessage(
       (t) => t.priority === TaskPriority.HIGH && t.status !== TaskStatus.COMPLETED
     ).length;
 
-    const digestItems = targetTasks.slice(0, 12).map((t) => {
+    const digestItems = targetTasks.map((t) => {
       const cat = categories.find((c) => c.id === t.categoryId);
       return {
         title: t.title,
@@ -1684,7 +1663,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       margin: 'md'
     });
     if (passedRows.length > 0) {
-      passedRows.slice(0, 5).forEach(function(r) {
+      passedRows.forEach(function(r) {
         sectionContents.push(renderRowBox(r, true));
       });
     } else {
@@ -1706,7 +1685,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       margin: 'md'
     });
     if (upcomingRows.length > 0) {
-      upcomingRows.slice(0, 5).forEach(function(r) {
+      upcomingRows.forEach(function(r) {
         sectionContents.push(renderRowBox(r, false));
       });
     } else {

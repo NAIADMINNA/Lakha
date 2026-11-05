@@ -1144,30 +1144,40 @@ export default function App() {
     });
   };
 
+  const inFlightReminderIdsRef = useRef<Set<string>>(new Set());
+
   // Dispatch LINE OA notification (Real Messaging API Push/Broadcast if token configured + Simulator log)
   const dispatchLineReminder = useCallback(
     async (task: Task, isManualTrigger = false) => {
       if (!isManualTrigger) {
+        if (inFlightReminderIdsRef.current.has(task.id)) return;
         const triggerCheck = doesTaskTriggerNotification(task, lineSettings);
         if (!triggerCheck.allowed) return;
+        inFlightReminderIdsRef.current.add(task.id);
       }
 
-      const cat = categories.find((c) => c.id === task.categoryId);
-      const categoryName = cat?.name || 'ทั่วไป';
-      const formatMode = lineSettings.messageFormat || 'executive_flex';
-      const includeDesc = lineSettings.includeDescriptionInNotification !== false;
-      const remindLabel = formatRemindMinutesLabel(
-        task.remindMinutesBefore || lineSettings.defaultRemindMinutes || 60
-      );
+      try {
+        const cat = categories.find((c) => c.id === task.categoryId);
+        const categoryName = cat?.name || 'ทั่วไป';
+        const formatMode = lineSettings.messageFormat || 'executive_flex';
+        const includeDesc = lineSettings.includeDescriptionInNotification !== false;
+        const remindLabel = formatRemindMinutesLabel(
+          task.remindMinutesBefore || lineSettings.defaultRemindMinutes || 60
+        );
 
-      const sameDayTasks = tasks.filter((t) => t.date === task.date);
-      const baseSummaryTasks = sameDayTasks.length > 0 ? sameDayTasks : tasks;
-      const summaryTasks =
-        baseSummaryTasks.length > 0
-          ? baseSummaryTasks.some((t) => t.id === task.id)
-            ? baseSummaryTasks
-            : [...baseSummaryTasks, task]
-          : [task];
+        const activeDateForStats = isTaskActiveOnDate(task, formatLocalDateYMD())
+          ? formatLocalDateYMD()
+          : task.date;
+        const sameDayTasks = tasksRef.current.filter((t) =>
+          isTaskActiveOnDate(t, activeDateForStats)
+        );
+        const baseSummaryTasks = sameDayTasks.length > 0 ? sameDayTasks : [task];
+        const summaryTasks =
+          baseSummaryTasks.length > 0
+            ? baseSummaryTasks.some((t) => t.id === task.id)
+              ? baseSummaryTasks
+              : [...baseSummaryTasks, task]
+            : [task];
       const summaryStats = {
         total: summaryTasks.length,
         pending: summaryTasks.filter((t) => t.status !== TaskStatus.COMPLETED).length,
@@ -1353,41 +1363,54 @@ export default function App() {
         },
       };
 
-      const nextLogs = [...lineLogs, newLog];
-      const nextTasks = tasks.map((t) =>
-        t.id === task.id ? { ...t, lineNotified: true, updatedAt: new Date().toISOString() } : t
-      );
+        setLineLogs((prev) => [...prev, newLog]);
 
-      setLineLogs(nextLogs);
-      setTasks(nextTasks);
-      if (!isManualTrigger) {
-        pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
-      }
+        // Only mark lineNotified = true when triggered by the automatic scheduled reminder
+        // (so a manual test click earlier in the day never prevents the scheduled time reminder from firing)
+        if (!isManualTrigger) {
+          const nowIso = new Date().toISOString();
+          let updatedTasksList: Task[] = [];
+          setTasks((prev) => {
+            updatedTasksList = prev.map((t) =>
+              t.id === task.id ? { ...t, lineNotified: true, updatedAt: nowIso } : t
+            );
+            return updatedTasksList;
+          });
+          const toPush =
+            updatedTasksList.length > 0
+              ? updatedTasksList
+              : tasksRef.current.map((t) =>
+                  t.id === task.id ? { ...t, lineNotified: true, updatedAt: nowIso } : t
+                );
+          pushCollaborativeWorkspace(toPush, categoriesRef.current, teamMembersRef.current);
+        }
 
-      if (deliveryChannel === 'line_messaging_api') {
-        showNotice(
-          'success',
-          apiNotice || `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าแอป LINE OA สำเร็จ!`
-        );
-      } else if (lineSettings.channelAccessToken.trim() && apiNotice) {
-        showNotice('error', apiNotice);
-      } else {
-        showNotice(
-          'success',
-          `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว`
-        );
+        if (deliveryChannel === 'line_messaging_api') {
+          showNotice(
+            'success',
+            apiNotice || `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าแอป LINE OA สำเร็จ!`
+          );
+        } else if (lineSettings.channelAccessToken.trim() && apiNotice) {
+          showNotice('error', apiNotice);
+        } else {
+          showNotice(
+            'success',
+            `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว`
+          );
+        }
+      } finally {
+        if (!isManualTrigger) {
+          inFlightReminderIdsRef.current.delete(task.id);
+        }
       }
     },
     [
       categories,
-      lineLogs,
       lineSettings,
       pushCollaborativeWorkspace,
       sheetMeta?.spreadsheetId,
       showNotice,
       spreadsheetInput,
-      tasks,
-      teamMembers,
       workspaceId,
     ]
   );
@@ -1524,12 +1547,16 @@ export default function App() {
         }
       }
 
-      // 2. Check Per-Task Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนด)
-      for (const task of tasks) {
-        if (task.status === TaskStatus.COMPLETED || task.lineNotified) {
+      // 2. Check Per-Task Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนดให้ครบทุกงานในวันนั้น ๆ)
+      const resetNotifiedTaskIds: string[] = [];
+      const sortedTasksForCheck = [...tasks].sort((a, b) =>
+        `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
+      );
+
+      for (const task of sortedTasksForCheck) {
+        if (task.status === TaskStatus.COMPLETED) {
           continue;
         }
-        // Check if task matches user-selected priority, category, status, and source triggers
         if (!doesTaskTriggerNotification(task, lineSettings).allowed) {
           continue;
         }
@@ -1546,35 +1573,91 @@ export default function App() {
         const cleanTime = /^\d{1,2}:\d{2}$/.test((task.time || '').trim())
           ? task.time.trim().padStart(5, '0')
           : '09:00';
-        // Explicit +07:00 (Asia/Bangkok) so task time is always evaluated in Thailand time
-        const taskDateTime = new Date(`${task.date}T${cleanTime}:00+07:00`);
+        // Support both single-day and multi-day tasks active on currentBangkokYMD
+        const effectiveDate = isTaskActiveOnDate(task, currentBangkokYMD)
+          ? currentBangkokYMD
+          : task.date;
+        const taskDateTime = new Date(`${effectiveDate}T${cleanTime}:00+07:00`);
         if (isNaN(taskDateTime.getTime())) continue;
 
         const diffMinutes = (taskDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-        // Trigger ONLY within the task's configured reminder window (e.g. [0..taskRemindMins] before start,
-        // with a 5-minute grace window [-5..0] in case the tab just opened right at the scheduled minute).
-        // Never fire hours late (e.g. 21:29 for an 18:00 task) or 24 hours early!
-        if (diffMinutes <= taskRemindMins && diffMinutes >= -5) {
-          dispatchLineReminder(task, false);
-          break;
+        // If lineNotified was set prematurely while the scheduled reminder window is still in the future
+        // (e.g. task time was edited to a later time, or it is a new day of a multi-day task),
+        // reset lineNotified = false so the task is guaranteed to notify when its time arrives.
+        const updatedDateBangkok = task.updatedAt
+          ? formatLocalDateYMD(new Date(task.updatedAt))
+          : '';
+        const isMultiDayNewDay =
+          Boolean(task.endDate && task.endDate > task.date) &&
+          Boolean(updatedDateBangkok && updatedDateBangkok < currentBangkokYMD);
+
+        if (task.lineNotified && (diffMinutes > taskRemindMins + 1 || isMultiDayNewDay)) {
+          resetNotifiedTaskIds.push(task.id);
+          continue;
         }
 
-        // Optional overdue alert: only if user explicitly enabled notifyOnOverdue AND within 15 minutes past due
-        if (
+        if (task.lineNotified || inFlightReminderIdsRef.current.has(task.id)) {
+          continue;
+        }
+
+        // Notify strictly within the task's configured reminder window [0..taskRemindMins] before start
+        // (with at most 1 minute grace [-1..0] for clock alignment — never fire late e.g. at 15:24 for a 15:00 task!)
+        if (diffMinutes <= taskRemindMins && diffMinutes >= -1) {
+          dispatchLineReminder(task, false);
+        } else if (
           lineSettings.notifyOnOverdue === true &&
-          diffMinutes < -5 &&
+          diffMinutes < -1 &&
           diffMinutes >= -15
         ) {
           dispatchLineReminder(task, false);
-          break;
         }
+      }
+
+      if (resetNotifiedTaskIds.length > 0) {
+        const resetSet = new Set(resetNotifiedTaskIds);
+        const nowIso = new Date().toISOString();
+        setTasks((prev) => {
+          const next = prev.map((t) =>
+            resetSet.has(t.id) ? { ...t, lineNotified: false, updatedAt: nowIso } : t
+          );
+          pushCollaborativeWorkspace(next, categoriesRef.current, teamMembersRef.current);
+          return next;
+        });
       }
     };
 
     checkDueTasksAndMorningDigest();
-    const timer = setInterval(checkDueTasksAndMorningDigest, 15000);
-    return () => clearInterval(timer);
+    const timer = setInterval(checkDueTasksAndMorningDigest, 10000);
+
+    // Also run an un-throttled Web Worker ticker so background browser tabs still fire at the exact scheduled minute
+    let worker: Worker | null = null;
+    let workerUrl = '';
+    try {
+      const blob = new Blob(
+        [
+          'setInterval(function(){ postMessage("tick"); }, 10000);',
+        ],
+        { type: 'application/javascript' }
+      );
+      workerUrl = URL.createObjectURL(blob);
+      worker = new Worker(workerUrl);
+      worker.onmessage = () => {
+        checkDueTasksAndMorningDigest();
+      };
+    } catch {
+      // Fallback to standard setInterval
+    }
+
+    return () => {
+      clearInterval(timer);
+      if (worker) {
+        worker.terminate();
+      }
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
+    };
   }, [
     categories,
     dispatchLineReminder,
@@ -2347,10 +2430,17 @@ export default function App() {
   ) => {
     if (existingId) {
       const target = tasks.find((t) => t.id === existingId);
+      const scheduleChanged =
+        !target ||
+        target.date !== taskData.date ||
+        (target.endDate || '') !== (taskData.endDate || '') ||
+        target.time !== taskData.time ||
+        target.remindMinutesBefore !== taskData.remindMinutesBefore ||
+        target.status !== taskData.status;
       const updatedTask: Task = {
         ...taskData,
         id: existingId,
-        lineNotified: target?.lineNotified || false,
+        lineNotified: scheduleChanged ? false : target?.lineNotified || false,
         updatedAt: new Date().toISOString(),
       };
       const nextTasks = tasks.map((t) => (t.id === existingId ? updatedTask : t));

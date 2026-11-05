@@ -38,7 +38,7 @@
   "workspaces": {
     "sheetcal-team-clean": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-05T01:06:05.448Z",
+      "updatedAt": "2026-11-05T07:02:37.905Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -51,11 +51,25 @@
           "time": "10:00",
           "categoryId": "cat-client",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-04T12:21:31.735Z"
+          "updatedAt": "2026-11-05T05:36:20.121Z"
+        },
+        {
+          "id": "task-1793856779434",
+          "title": "หารือประเด็น CI @ห้องรองฯ เสกสิทธิ์ ชั้น 9",
+          "description": "กับท่านรองฯ เสกสิทธิ์และผต.สมมาตร",
+          "date": "2026-11-05",
+          "time": "15:00",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T07:01:56.758Z"
         },
         {
           "id": "task-1793752971479",
@@ -70,6 +84,20 @@
           "lineNotified": false,
           "source": "web",
           "updatedAt": "2026-11-04T00:44:11.729Z"
+        },
+        {
+          "id": "task-1793857869240",
+          "title": "ประชุมชี้แจงศรีลังกา",
+          "description": "",
+          "date": "2026-11-06",
+          "time": "13:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T05:51:09.240Z"
         },
         {
           "id": "task-1793753826610",
@@ -128,6 +156,21 @@
           "lineNotified": false,
           "source": "web",
           "updatedAt": "2026-11-04T01:01:18.147Z"
+        },
+        {
+          "id": "task-1793848902405",
+          "title": "เดินทางไปประเทศญี่ปุ่น 8-10 ธันวาคม 69",
+          "description": "เข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569 ณ.กรุงโตเกียว ประเทศญี่ปุ่น",
+          "date": "2026-12-08",
+          "time": "08:00",
+          "categoryId": "cat-1793753857364",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T03:21:42.405Z",
+          "endDate": "2026-12-10"
         }
       ],
       "categories": [
@@ -171,7 +214,7 @@
     },
     "team-default": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-05T01:06:05.448Z",
+      "updatedAt": "2026-11-05T07:02:37.905Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -184,11 +227,25 @@
           "time": "10:00",
           "categoryId": "cat-client",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-04T12:21:31.735Z"
+          "updatedAt": "2026-11-05T05:36:20.121Z"
+        },
+        {
+          "id": "task-1793856779434",
+          "title": "หารือประเด็น CI @ห้องรองฯ เสกสิทธิ์ ชั้น 9",
+          "description": "กับท่านรองฯ เสกสิทธิ์และผต.สมมาตร",
+          "date": "2026-11-05",
+          "time": "15:00",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T07:01:56.758Z"
         },
         {
           "id": "task-1793752971479",
@@ -203,6 +260,20 @@
           "lineNotified": false,
           "source": "web",
           "updatedAt": "2026-11-04T00:44:11.729Z"
+        },
+        {
+          "id": "task-1793857869240",
+          "title": "ประชุมชี้แจงศรีลังกา",
+          "description": "",
+          "date": "2026-11-06",
+          "time": "13:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T05:51:09.240Z"
         },
         {
           "id": "task-1793753826610",
@@ -261,6 +332,21 @@
           "lineNotified": false,
           "source": "web",
           "updatedAt": "2026-11-04T01:01:18.147Z"
+        },
+        {
+          "id": "task-1793848902405",
+          "title": "เดินทางไปประเทศญี่ปุ่น 8-10 ธันวาคม 69",
+          "description": "เข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569 ณ.กรุงโตเกียว ประเทศญี่ปุ่น",
+          "date": "2026-12-08",
+          "time": "08:00",
+          "categoryId": "cat-1793753857364",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-05T03:21:42.405Z",
+          "endDate": "2026-12-10"
         }
       ],
       "categories": [
