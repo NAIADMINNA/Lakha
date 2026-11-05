@@ -3103,48 +3103,41 @@ async function startServer() {
 
             const decoded = extractGasMetadataFromTasks(ws.tasks);
             const activeToday = decoded.tasks.filter((t) => {
-              const startD = String(t.date || '');
-              const endD = String(t.endDate || startD);
-              return (
-                (startD <= todayYMD && endD >= todayYMD) ||
-                String(t.status || 'pending') !== 'completed'
-              );
+              const startD = String(t.date || '').trim();
+              const endD = String(t.endDate || startD).trim();
+              if (!startD) return false;
+              return startD <= todayYMD && endD >= todayYMD;
             });
-            const digestItems: DigestTaskItem[] = activeToday.map((t) => {
-              const cid = String(t.categoryId || '');
-              const catInfo = catById.get(cid);
-              const tDate = String(t.date || todayYMD);
-              const tTime = String(t.time || '09:00');
-              return {
-                title: String(t.title || 'รายการงาน'),
-                date: tDate,
-                time: tTime,
-                categoryName: catInfo?.name || 'งานตารางทีม',
-                categoryColor: catInfo?.color || '#2563EB',
-                priority: (t.priority as 'low' | 'medium' | 'high') || 'medium',
-                status: (t.status as 'pending' | 'in_progress' | 'completed') || 'pending',
-                description: String(t.description || ''),
-                assigneeName: t.assigneeName ? String(t.assigneeName) : undefined,
-                timePhase:
-                  tDate < todayYMD
-                    ? 'passed'
-                    : tDate > todayYMD
-                    ? 'upcoming'
-                    : tTime <= nowHM
-                    ? 'passed'
-                    : 'upcoming',
-              };
-            });
+            if (activeToday.length > 0) {
+              const digestItems: DigestTaskItem[] = activeToday.map((t) => {
+                const cid = String(t.categoryId || '');
+                const catInfo = catById.get(cid);
+                const tDate = String(t.date || todayYMD);
+                const tTime = String(t.time || '09:00');
+                return {
+                  title: String(t.title || 'รายการงาน'),
+                  date: tDate,
+                  time: tTime,
+                  categoryName: catInfo?.name || 'งานตารางทีม',
+                  categoryColor: catInfo?.color || '#2563EB',
+                  priority: (t.priority as 'low' | 'medium' | 'high') || 'medium',
+                  status: (t.status as 'pending' | 'in_progress' | 'completed') || 'pending',
+                  description: String(t.description || ''),
+                  assigneeName: t.assigneeName ? String(t.assigneeName) : undefined,
+                  timePhase: tTime <= nowHM ? 'passed' : 'upcoming',
+                };
+              });
 
-            const flexMsg = buildDailyDigestFlexMessage(
-              todayYMD,
-              digestItems,
-              defaultAppUrl
-            );
-            await deliverScheduledFlexToLine(
-              flexMsg,
-              `☀️ สรุปตารางงานประจำวัน (${todayYMD}) — ทั้งหมด ${digestItems.length} รายการ`
-            );
+              const flexMsg = buildDailyDigestFlexMessage(
+                todayYMD,
+                digestItems,
+                defaultAppUrl
+              );
+              await deliverScheduledFlexToLine(
+                flexMsg,
+                `☀️ สรุปตารางงานประจำวัน (${formatThaiDateReadable(todayYMD)}) — ทั้งหมด ${digestItems.length} รายการ`
+              );
+            }
           }
         }
       }

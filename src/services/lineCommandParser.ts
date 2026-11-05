@@ -682,22 +682,15 @@ export function parseLineChatMessage(
       .filter((t) => isTaskActiveOnDate(t, targetDate))
       .sort((a, b) => a.time.localeCompare(b.time));
 
-    const hasExplicitDateInText =
-      text.includes('พรุ่งนี้') ||
-      text.includes('มะรืน') ||
-      /(\d{1,2})[/-](\d{1,2})/.test(text) ||
-      /(\d{4})-(\d{1,2})-(\d{1,2})/.test(text) ||
-      /วันที่\s*\d{1,2}/.test(text);
+    const isAllSummaryCommand = lower === 'สรุปงานทั้งหมด';
 
-    const targetTasks =
-      dateMatchingTasks.length > 0 || hasExplicitDateInText
-        ? dateMatchingTasks
-        : [...existingTasks].sort((a, b) =>
-            `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
-          );
+    const targetTasks = isAllSummaryCommand
+      ? [...existingTasks].sort((a, b) =>
+          `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
+        )
+      : dateMatchingTasks;
 
-    const isShowingAllBecauseTodayEmpty =
-      dateMatchingTasks.length === 0 && !hasExplicitDateInText && targetTasks.length > 0;
+    const isShowingAllBecauseTodayEmpty = isAllSummaryCommand;
 
     // แยกงานตามเวลา: 1) งานที่ผ่านเวลาที่กำหนดมาแล้ว (passed) vs 2) งานที่ยังไม่ถึงเวลาที่กำหนด (upcoming)
     const classifyTimePhase = (t: Task): 'passed' | 'upcoming' => {
@@ -2998,7 +2991,6 @@ function doPost(e) {
           var filtered = userMessage === 'งานค้าง'
             ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
             : rows.filter(function(r) { return String(r[3]).replace(/^'/, '') === queryDate; });
-          if (filtered.length === 0 && queryDate === todayStr && userMessage === 'สรุปงาน') filtered = rows;
           var flexBubble = buildSummaryFlexBubble(
             userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : ('สรุปตารางงานวันที่ ' + queryDate),
             queryDate,

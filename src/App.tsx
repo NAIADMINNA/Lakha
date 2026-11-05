@@ -1424,6 +1424,14 @@ export default function App() {
               lastSentDate = '';
             }
             if (lastSentDate !== currentBangkokYMD) {
+              const parsedDigest = parseLineChatMessage(
+                'สรุปงานวันนี้',
+                tasks,
+                categories,
+                lineSettings.defaultRemindMinutes,
+                teamMembers
+              );
+              const digestItems = parsedDigest.flexSummary?.digestItems || [];
               try {
                 localStorage.setItem(
                   'sheetcal_last_morning_digest_date',
@@ -1432,21 +1440,14 @@ export default function App() {
               } catch {
                 // Ignore
               }
-              const parsedDigest = parseLineChatMessage(
-                'สรุปงานตามเวลา',
-                tasks,
-                categories,
-                lineSettings.defaultRemindMinutes,
-                teamMembers
-              );
-              const digestItems = parsedDigest.flexSummary?.digestItems || [];
-              const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
-                customPublicUrl: lineSettings.publicCalendarUrl,
-                workspaceId,
-                spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
-                date: currentBangkokYMD,
-              });
-              (async () => {
+              if (digestItems.length > 0) {
+                const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+                  customPublicUrl: lineSettings.publicCalendarUrl,
+                  workspaceId,
+                  spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+                  date: currentBangkokYMD,
+                });
+                (async () => {
                 let sentViaServer = false;
                 if (lineSettings.channelAccessToken.trim()) {
                   try {
@@ -1517,6 +1518,7 @@ export default function App() {
                   currentBangkokYMD
                 );
               })();
+              }
             }
           }
         }
@@ -2704,7 +2706,7 @@ export default function App() {
     setIsSendingPush(true);
     const nowTimeHM = formatLocalTimeHM();
     const parsedDigest = parseLineChatMessage(
-      'สรุปงานตามเวลา',
+      'สรุปงานวันนี้',
       tasks,
       categories,
       lineSettings.defaultRemindMinutes,
