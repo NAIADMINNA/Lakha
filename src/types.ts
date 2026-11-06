@@ -53,7 +53,9 @@ export interface Task {
 
 export interface FlexDigestItem {
   title: string;
+  description?: string;
   date?: string;
+  endDate?: string;
   time: string;
   categoryName: string;
   categoryColor: string;

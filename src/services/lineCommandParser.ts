@@ -697,7 +697,9 @@ export function parseLineChatMessage(
       const cat = categories.find((c) => c.id === t.categoryId);
       return {
         title: t.title,
+        description: t.description || '',
         date: t.date,
+        endDate: t.endDate,
         time: t.time,
         categoryName: cat?.name || 'ทั่วไป',
         categoryColor: cat?.color || '#2563EB',
@@ -713,15 +715,15 @@ export function parseLineChatMessage(
     if (targetTasks.length === 0) {
       return {
         action: 'query_today',
-        replyText: `📅 วันที่ ${targetDateThai} (เทียบเวลา ณ ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ\n• ⏮️ งานที่ผ่านเวลาที่กำหนดแล้ว: 0 งาน\n• ⏭️ งานที่ยังไม่ถึงเวลาที่กำหนด: 0 งาน`,
+        replyText: `📅 วันที่ ${targetDateThai} (เวลา ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ`,
         flexSummary: {
-          badge: 'TIME-SPLIT DAILY SUMMARY',
-          title: `สรุปตารางงานแยกตามเวลา (${targetDateThai})`,
-          subtitle: `เทียบเวลา ณ ${refTimeStr} น. · ไม่มีรายการงานในตาราง`,
-          dateTime: `${targetDateThai} · ณ ${refTimeStr} น.`,
+          badge: '📋 สรุปตารางงานประจำวัน',
+          title: `ตารางงานวันที่ ${targetDateThai}`,
+          subtitle: `อัปเดตเวลา ${refTimeStr} น. · ไม่มีรายการงานในตาราง`,
+          dateTime: `เวลา ${refTimeStr} น.`,
           date: targetDate,
           time: refTimeStr,
-          categoryName: 'สรุปตารางงานแยกตามเวลา',
+          categoryName: 'สรุปตารางงานประจำวัน',
           categoryColor: '#10B981',
           priorityLabel: 'ไม่มีงานค้าง',
           digestItems: [],
@@ -737,67 +739,49 @@ export function parseLineChatMessage(
       };
     }
 
-    const passedLines =
-      passedTasks.length > 0
-        ? passedTasks.map(
-            (t, i) =>
-              `   ${i + 1}. ${t.time} น.${
-                t.date !== targetDate ? ` (${formatTaskDateRangeLabel(t)})` : ''
-              } — ${t.title} [${
-                t.status === TaskStatus.COMPLETED
-                  ? '✓ ดำเนินการเสร็จแล้ว'
-                  : '⚠️ เลยเวลาแล้วยังค้างอยู่'
-              }]`
-          )
-        : ['   • ไม่มีงานที่ผ่านเวลาที่กำหนด'];
-
-    const upcomingLines =
-      upcomingTasks.length > 0
-        ? upcomingTasks.map(
-            (t, i) =>
-              `   ${i + 1}. ${t.time} น.${
-                t.date !== targetDate ? ` (${formatTaskDateRangeLabel(t)})` : ''
-              } — ${t.title} [${
-                t.status === TaskStatus.COMPLETED
-                  ? '✓ ทำเสร็จล่วงหน้าแล้ว'
-                  : t.priority === TaskPriority.HIGH
-                  ? '⏳ รอถึงเวลา · 🔥 ด่วนมาก'
-                  : '⏳ รอถึงเวลาที่กำหนด'
-              }]`
-          )
-        : ['   • ไม่มีงานที่รอถึงเวลาอีกในวันนี้'];
+    const agendaLines = targetTasks.map((t, i) => {
+      const cat = categories.find((c) => c.id === t.categoryId);
+      const statusText =
+        t.status === TaskStatus.COMPLETED
+          ? '✓ เสร็จแล้ว'
+          : t.priority === TaskPriority.HIGH
+          ? '🔥 ด่วนมาก'
+          : '⏳ รอดำเนินการ';
+      const descLine =
+        t.description &&
+        !t.description.startsWith('เพิ่มผ่านแชท LINE') &&
+        !t.description.startsWith('เพิ่มผ่านหน้าปฏิทิน')
+          ? `\n      ↳ ${t.description}`
+          : '';
+      return `   ${i + 1}. ⏰ ${t.time} น. — ${t.title} (${cat?.name || 'ทั่วไป'} · ${statusText})${descLine}`;
+    });
 
     const headerTitle = isShowingAllBecauseTodayEmpty
-      ? `สรุปตารางงานทั้งหมดแยกตามเวลา (${targetTasks.length} งาน)`
-      : `สรุปงานวันที่ ${targetDateThai} แยกตามเวลา (${targetTasks.length} งาน)`;
+      ? `ตารางงานทั้งหมด (${targetTasks.length} งาน)`
+      : `ตารางงานวันที่ ${targetDateThai}`;
 
     const replyText = [
-      `📊 ${headerTitle}`,
-      `⏰ เทียบเวลา ณ ปัจจุบัน: ${refTimeStr} น.`,
-      `📌 รวมทั้งหมด ${targetTasks.length} งาน (รอทำ ${pendingCount} · เสร็จแล้ว ${completedCount})`,
+      `📋 ${headerTitle}`,
+      `📌 ทั้งหมด ${targetTasks.length} งาน · รอดำเนินการ ${pendingCount} · เสร็จแล้ว ${completedCount}`,
       `━━━━━━━━━━━━━━`,
-      `⏮️ 1. งานที่ผ่านเวลาที่กำหนดมาแล้ว (<= ${refTimeStr} น.) : ${passedTasks.length} งาน (เสร็จ ${passedCompletedCount} · ค้าง ${passedOverdueCount})`,
-      ...passedLines,
-      `━━━━━━━━━━━━━━`,
-      `⏭️ 2. งานที่ยังไม่ถึงเวลาที่กำหนด (> ${refTimeStr} น.) : ${upcomingTasks.length} งาน`,
-      ...upcomingLines,
+      ...agendaLines,
     ].join('\n');
 
     return {
       action: 'query_today',
       replyText,
       flexSummary: {
-        badge: 'TIME-SPLIT TASK SUMMARY',
+        badge: '📋 สรุปตารางงานประจำวัน',
         title: headerTitle,
-        subtitle: `เทียบเวลา ${refTimeStr} น. · ผ่านเวลาแล้ว ${passedTasks.length} งาน · ยังไม่ถึงเวลา ${upcomingTasks.length} งาน${
-          highCount > 0 ? ` (ด่วนสูง ${highCount})` : ''
+        subtitle: `ทั้งหมด ${targetTasks.length} งาน · รอดำเนินการ ${pendingCount} · เสร็จแล้ว ${completedCount}${
+          highCount > 0 ? ` (งานด่วน ${highCount})` : ''
         }`,
-        dateTime: `${targetDateThai} · ณ ${refTimeStr} น.`,
+        dateTime: `เวลา ${refTimeStr} น.`,
         date: targetDate,
         time: refTimeStr,
-        categoryName: 'สรุปตารางงานแยกตามเวลา',
-        categoryColor: '#4F46E5',
-        priorityLabel: `ผ่านเวลา ${passedTasks.length} · รอถึงเวลา ${upcomingTasks.length}`,
+        categoryName: 'สรุปตารางงานประจำวัน',
+        categoryColor: '#0F172A',
+        priorityLabel: `ทั้งหมด ${targetTasks.length} งาน`,
         digestItems,
         stats: {
           total: targetTasks.length,
@@ -827,10 +811,10 @@ export function parseLineChatMessage(
         action: 'query_pending',
         replyText: '🎉 ยอดเยี่ยม! ไม่มีงานค้างในระบบทั้งหมดแล้วครับ',
         flexSummary: {
-          badge: 'PENDING TASKS SUMMARY',
+          badge: '📋 สรุปงานค้างทั้งหมด',
           title: 'ไม่มีงานค้างในระบบ!',
           subtitle: `ทำงานเสร็จครบทั้ง ${completedCount} รายการเรียบร้อยแล้ว`,
-          dateTime: todayStr,
+          dateTime: formatThaiDateDisplay(todayStr),
           date: todayStr,
           categoryName: 'สรุปงานค้างทั้งหมด',
           categoryColor: '#10B981',
@@ -854,7 +838,9 @@ export function parseLineChatMessage(
       const cat = categories.find((c) => c.id === t.categoryId);
       return {
         title: t.title,
+        description: t.description || '',
         date: t.date,
+        endDate: t.endDate,
         time: t.time,
         categoryName: cat?.name || 'ทั่วไป',
         categoryColor: cat?.color || '#D97706',
@@ -1566,10 +1552,26 @@ function parseThaiCommand(rawText) {
   return { title: title, date: targetDate, time: targetTime, priority: priority };
 }
 
+function formatThaiFullDateInGas(ymdStr) {
+  var thaiDays = ['วันอาทิตย์ที่', 'วันจันทร์ที่', 'วันอังคารที่', 'วันพุธที่', 'วันพฤหัสบดีที่', 'วันศุกร์ที่', 'วันเสาร์ที่'];
+  var thaiMonths = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  var clean = String(ymdStr || '').slice(0, 10);
+  var parts = clean.split('-');
+  if (parts.length !== 3) return String(ymdStr || '');
+  var y = parseInt(parts[0], 10);
+  var m = parseInt(parts[1], 10);
+  var d = parseInt(parts[2], 10);
+  if (isNaN(y) || isNaN(m) || isNaN(d) || m < 1 || m > 12) return String(ymdStr || '');
+  var dt = new Date(y, m - 1, d);
+  return (thaiDays[dt.getDay()] || 'วันที่') + ' ' + d + ' ' + thaiMonths[m - 1] + ' ' + (y + 543);
+}
+
 function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl) {
   var now = new Date();
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
   var nowHM = Utilities.formatDate(now, 'Asia/Bangkok', 'HH:mm');
+  var cleanDateYMD = /^\\d{4}-\\d{2}-\\d{2}/.test(String(dateLabel || '')) ? String(dateLabel).slice(0, 10) : todayStr;
+  var fullThaiDate = formatThaiFullDateInGas(cleanDateYMD);
   var total = rowsList.length;
   var completed = rowsList.filter(function(r) { return String(r[7]) === 'completed'; }).length;
   var pending = total - completed;
@@ -1580,64 +1582,134 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
     return tA.localeCompare(tB);
   });
 
-  var passedRows = [];
-  var upcomingRows = [];
-  sortedRows.forEach(function(r) {
-    var rDate = String(r[3] || dateLabel || todayStr).replace(/^'/, '');
+  function renderAgendaCard(r, idx) {
+    var rDate = String(r[3] || cleanDateYMD).replace(/^'/, '');
     var rTime = String(r[4] || '09:00').replace(/^'/, '');
-    if (rDate < todayStr || (rDate === todayStr && rTime <= nowHM)) {
-      passedRows.push(r);
-    } else {
-      upcomingRows.push(r);
-    }
-  });
-
-  function renderRowBox(r, isPassedPhase) {
+    var isPassedPhase = (rDate < todayStr) || (rDate === todayStr && rTime <= nowHM);
     var isDone = String(r[7]) === 'completed';
     var isHigh = String(r[6]) === 'high';
+    var catName = String(r[5] || 'ทั่วไป');
+    var catColor = /^#[0-9A-Fa-f]{6}$/.test(String(r[8] || '')) ? String(r[8]) : (isHigh ? '#DC2626' : '#2563EB');
+
     var badgeLabel = isDone
       ? '✓ เสร็จแล้ว'
-      : (isPassedPhase ? '⚠️ เลยเวลา' : (isHigh ? '🔥 ด่วน' : '⏳ รอถึงเวลา'));
+      : (isHigh ? '🔥 ด่วนมาก' : (isPassedPhase ? '⚠️ เลยเวลา' : '⏳ รอถึงเวลา'));
     var badgeColor = isDone
-      ? '#16A34A'
-      : (isPassedPhase ? '#DC2626' : (isHigh ? '#EA580C' : '#2563EB'));
+      ? '#15803D'
+      : (isHigh ? '#B91C1C' : (isPassedPhase ? '#B45309' : '#1D4ED8'));
+    var badgeBg = isDone
+      ? '#DCFCE7'
+      : (isHigh ? '#FEE2E2' : (isPassedPhase ? '#FEF3C7' : '#DBEAFE'));
+
+    var descText = String(r[2] || '').trim();
+    var hasDesc = Boolean(descText) &&
+      descText.indexOf('เพิ่มผ่านแชท LINE') !== 0 &&
+      descText.indexOf('บันทึกผ่านแชท LINE') !== 0 &&
+      descText.indexOf('เพิ่มผ่านหน้าปฏิทิน') !== 0;
+
+    var innerContents = [
+      {
+        type: 'box',
+        layout: 'horizontal',
+        alignItems: 'center',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: isDone ? '#E2E8F0' : '#0F172A',
+            cornerRadius: '6px',
+            paddingStart: '8px',
+            paddingEnd: '8px',
+            paddingTop: '3px',
+            paddingBottom: '3px',
+            flex: 0,
+            contents: [
+              {
+                type: 'text',
+                text: '⏰ ' + rTime + ' น.',
+                weight: 'bold',
+                size: 'xs',
+                color: isDone ? '#64748B' : '#FFFFFF'
+              }
+            ]
+          },
+          {
+            type: 'text',
+            text: '• ' + catName,
+            size: 'xxs',
+            weight: 'bold',
+            color: isDone ? '#94A3B8' : catColor,
+            flex: 1,
+            wrap: false
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: badgeBg,
+            cornerRadius: '6px',
+            paddingStart: '7px',
+            paddingEnd: '7px',
+            paddingTop: '3px',
+            paddingBottom: '3px',
+            flex: 0,
+            contents: [
+              {
+                type: 'text',
+                text: badgeLabel,
+                size: 'xxs',
+                weight: 'bold',
+                color: badgeColor
+              }
+            ]
+          }
+        ]
+      },
+      {
+        type: 'text',
+        text: (idx + 1) + '. ' + String(r[1] || 'งาน'),
+        weight: 'bold',
+        size: 'md',
+        color: isDone ? '#94A3B8' : '#0F172A',
+        wrap: true,
+        margin: 'sm'
+      }
+    ];
+
+    if (hasDesc) {
+      innerContents.push({
+        type: 'text',
+        text: descText,
+        size: 'xs',
+        color: isDone ? '#94A3B8' : '#475569',
+        wrap: true,
+        margin: 'xs'
+      });
+    }
 
     return {
       type: 'box',
       layout: 'horizontal',
-      spacing: 'md',
-      margin: 'sm',
-      paddingAll: '10px',
+      margin: idx === 0 ? 'none' : 'md',
       backgroundColor: '#FFFFFF',
-      cornerRadius: '8px',
+      cornerRadius: '12px',
       borderWidth: '1px',
-      borderColor: (!isDone && isPassedPhase) ? '#FECACA' : '#E2E8F0',
+      borderColor: (!isDone && isHigh) ? '#FCA5A5' : '#E2E8F0',
       contents: [
         {
-          type: 'text',
-          text: String(r[4] || '09:00').replace(/^'/, ''),
-          weight: 'bold',
-          size: 'xs',
-          color: isDone ? '#94A3B8' : '#4F46E5',
-          flex: 2
+          type: 'box',
+          layout: 'vertical',
+          width: '6px',
+          flex: 0,
+          backgroundColor: isDone ? '#CBD5E1' : catColor,
+          contents: [{ type: 'filler' }]
         },
         {
-          type: 'text',
-          text: String(r[1] || 'งาน'),
-          weight: 'bold',
-          size: 'xs',
-          color: isDone ? '#94A3B8' : '#0F172A',
-          wrap: true,
-          flex: 5
-        },
-        {
-          type: 'text',
-          text: badgeLabel,
-          size: 'xxs',
-          weight: 'bold',
-          align: 'end',
-          color: badgeColor,
-          flex: 3
+          type: 'box',
+          layout: 'vertical',
+          flex: 1,
+          paddingAll: '12px',
+          contents: innerContents
         }
       ]
     };
@@ -1646,169 +1718,155 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
   var sectionContents = [];
   if (total === 0) {
     sectionContents.push({
-      type: 'text',
-      text: '🎉 ไม่มีรายการงานในตารางของวันนี้',
-      size: 'xs',
-      color: '#64748B',
-      align: 'center',
-      margin: 'md'
+      type: 'box',
+      layout: 'vertical',
+      paddingAll: '20px',
+      backgroundColor: '#FFFFFF',
+      cornerRadius: '12px',
+      borderWidth: '1px',
+      borderColor: '#E2E8F0',
+      contents: [
+        {
+          type: 'text',
+          text: '🎉 วันนี้ไม่มีรายการงานในตารางของคุณ',
+          size: 'sm',
+          color: '#475569',
+          align: 'center',
+          weight: 'bold'
+        }
+      ]
     });
   } else {
-    sectionContents.push({
-      type: 'text',
-      text: '⏮️ ผ่านเวลาที่กำหนดแล้ว (<= ' + nowHM + ' น.) · ' + passedRows.length + ' งาน',
-      size: 'xxs',
-      weight: 'bold',
-      color: '#B45309',
-      margin: 'md'
+    sortedRows.forEach(function(r, idx) {
+      sectionContents.push(renderAgendaCard(r, idx));
     });
-    if (passedRows.length > 0) {
-      passedRows.forEach(function(r) {
-        sectionContents.push(renderRowBox(r, true));
-      });
-    } else {
-      sectionContents.push({
-        type: 'text',
-        text: '• ไม่มีงานที่ผ่านเวลาที่กำหนด',
-        size: 'xxs',
-        color: '#94A3B8',
-        margin: 'xs'
-      });
-    }
-
-    sectionContents.push({
-      type: 'text',
-      text: '⏭️ ยังไม่ถึงเวลาที่กำหนด (> ' + nowHM + ' น.) · ' + upcomingRows.length + ' งาน',
-      size: 'xxs',
-      weight: 'bold',
-      color: '#1D4ED8',
-      margin: 'md'
-    });
-    if (upcomingRows.length > 0) {
-      upcomingRows.forEach(function(r) {
-        sectionContents.push(renderRowBox(r, false));
-      });
-    } else {
-      sectionContents.push({
-        type: 'text',
-        text: '• ไม่มีงานที่รอถึงเวลาอีกในวันนี้',
-        size: 'xxs',
-        color: '#94A3B8',
-        margin: 'xs'
-      });
-    }
   }
 
   return {
     type: 'flex',
-    altText: titleText + ' (' + total + ' งาน · ผ่านเวลา ' + passedRows.length + ' / ยังไม่ถึง ' + upcomingRows.length + ')',
+    altText: '📋 ตารางงานประจำวัน (' + fullThaiDate + ') — รวม ' + total + ' งาน',
     contents: {
       type: 'bubble',
       size: 'mega',
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#312E81',
-        paddingAll: '18px',
+        backgroundColor: '#0F172A',
+        paddingAll: '20px',
         contents: [
           {
-            type: 'text',
-            text: 'TIME-SPLIT TASK SUMMARY',
-            color: '#34D399',
-            size: 'xxs',
-            weight: 'bold'
+            type: 'box',
+            layout: 'horizontal',
+            alignItems: 'center',
+            contents: [
+              {
+                type: 'box',
+                layout: 'vertical',
+                backgroundColor: '#06C755',
+                cornerRadius: '6px',
+                paddingStart: '8px',
+                paddingEnd: '8px',
+                paddingTop: '4px',
+                paddingBottom: '4px',
+                flex: 0,
+                contents: [
+                  {
+                    type: 'text',
+                    text: '📋 สรุปตารางงานประจำวัน',
+                    color: '#FFFFFF',
+                    size: 'xxs',
+                    weight: 'bold'
+                  }
+                ]
+              },
+              {
+                type: 'text',
+                text: 'เวลา ' + nowHM + ' น.',
+                color: '#94A3B8',
+                size: 'xxs',
+                align: 'end',
+                weight: 'bold'
+              }
+            ]
           },
           {
             type: 'text',
-            text: titleText,
+            text: fullThaiDate,
             color: '#FFFFFF',
             size: 'lg',
             weight: 'bold',
-            margin: 'xs'
+            margin: 'md',
+            wrap: true
           },
           {
-            type: 'text',
-            text: 'วันที่ ' + dateLabel + ' (เทียบเวลา ' + nowHM + ' น.) · รวม ' + total + ' งาน',
-            color: '#C7D2FE',
-            size: 'xs',
-            margin: 'xs'
+            type: 'box',
+            layout: 'horizontal',
+            backgroundColor: '#1E293B',
+            cornerRadius: '10px',
+            paddingAll: '10px',
+            margin: 'md',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  { type: 'text', text: 'ทั้งหมด ' + String(total), weight: 'bold', size: 'xs', color: '#38BDF8', align: 'center' }
+                ]
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  { type: 'text', text: 'รอดำเนินการ ' + String(pending), weight: 'bold', size: 'xs', color: '#FBBF24', align: 'center' }
+                ]
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  { type: 'text', text: 'เสร็จแล้ว ' + String(completed), weight: 'bold', size: 'xs', color: '#34D399', align: 'center' }
+                ]
+              }
+            ]
           }
         ]
       },
       body: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#F8FAFC',
+        backgroundColor: '#F1F5F9',
         paddingAll: '16px',
-        contents: [
-          {
-            type: 'box',
-            layout: 'horizontal',
-            spacing: 'sm',
-            contents: [
-              {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: '#FEF3C7',
-                cornerRadius: '8px',
-                paddingAll: '8px',
-                contents: [
-                  { type: 'text', text: String(passedRows.length), weight: 'bold', size: 'lg', color: '#B45309', align: 'center' },
-                  { type: 'text', text: 'ผ่านเวลาแล้ว', size: 'xxs', color: '#92400E', align: 'center' }
-                ]
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: '#DBEAFE',
-                cornerRadius: '8px',
-                paddingAll: '8px',
-                contents: [
-                  { type: 'text', text: String(upcomingRows.length), weight: 'bold', size: 'lg', color: '#1D4ED8', align: 'center' },
-                  { type: 'text', text: 'ยังไม่ถึงเวลา', size: 'xxs', color: '#1E40AF', align: 'center' }
-                ]
-              },
-              {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: '#ECFDF5',
-                cornerRadius: '8px',
-                paddingAll: '8px',
-                contents: [
-                  { type: 'text', text: String(completed) + '/' + String(total), weight: 'bold', size: 'lg', color: '#059669', align: 'center' },
-                  { type: 'text', text: 'เสร็จแล้ว', size: 'xxs', color: '#047857', align: 'center' }
-                ]
-              }
-            ]
-          }
-        ].concat(sectionContents)
+        contents: sectionContents
       },
       footer: {
         type: 'box',
         layout: 'vertical',
         spacing: 'sm',
-        paddingAll: '12px',
+        paddingAll: '14px',
+        backgroundColor: '#FFFFFF',
+        borderWidth: '1px',
+        borderColor: '#E2E8F0',
         contents: (function() {
-          var targetCalUrl = getCalendarDeepLink(customOriginUrl, dateLabel || todayStr);
-          var backupPortalUrl = getSelfWebAppUrl() ? (getSelfWebAppUrl() + '?view=calendar&openExternalBrowser=1') : '';
-          var btns = [
+          var targetCalUrl = getCalendarDeepLink(customOriginUrl, cleanDateYMD);
+          var scheduleUrl = targetCalUrl.indexOf('section=calendar') !== -1
+            ? targetCalUrl.replace('section=calendar', 'section=schedule')
+            : targetCalUrl;
+          return [
             {
               type: 'button',
               style: 'primary',
               color: '#06C755',
               height: 'sm',
-              action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCalUrl }
-            }
-          ];
-          if (backupPortalUrl && targetCalUrl.indexOf('script.google.com') === -1) {
-            btns.push({
+              action: { type: 'uri', label: '📅 เปิดดูปฏิทินและจัดการงาน', uri: targetCalUrl }
+            },
+            {
               type: 'button',
               style: 'secondary',
               height: 'sm',
-              action: { type: 'uri', label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)', uri: backupPortalUrl }
-            });
-          }
-          return btns;
+              action: { type: 'uri', label: '📺 เปิดตารางงานนำเสนอ (รายวัน)', uri: scheduleUrl }
+            }
+          ];
         })()
       }
     }
@@ -2715,7 +2773,7 @@ function doPost(e) {
 
       if (payload.messageFormat !== 'text_custom' && Array.isArray(payload.tasksList) && payload.tasksList.length > 0) {
         var rowsForFlex = payload.tasksList.map(function(item) {
-          return ['', item.title || 'งาน', '', item.date || '', item.time || '09:00', item.categoryName || 'ทั่วไป', item.priority || 'medium', item.status || 'pending'];
+          return ['', item.title || 'งาน', item.description || '', item.date || '', item.time || '09:00', item.categoryName || 'ทั่วไป', item.priority || 'medium', item.status || 'pending', item.categoryColor || '#2563EB'];
         });
         messagesPayload = [buildSummaryFlexBubble('สรุปตารางงานประจำวัน', payload.date || '', rowsForFlex, payload.originUrl)];
       } else if (payload.messageFormat !== 'text_custom' && payload.taskTitle) {

@@ -848,6 +848,69 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const recentLineCreatedTasks = tasks.filter((t) => t.source === 'line').slice(0, 5);
   const hasSheet = Boolean(spreadsheetId.trim());
 
+  const availableTaskDates = useMemo(() => {
+    const dateSet = new Set<string>();
+    tasks.forEach((t) => {
+      if (t.date) dateSet.add(t.date);
+    });
+    return Array.from(dateSet).sort();
+  }, [tasks]);
+
+  const [showSummaryPreview, setShowSummaryPreview] = useState(true);
+  const [previewCardTab, setPreviewCardTab] = useState<'daily_summary' | 'single_task'>(
+    'daily_summary'
+  );
+  const [selectedPreviewDate, setSelectedPreviewDate] = useState<string>(() => {
+    const hasToday = tasks.some(
+      (t) => t.date <= todayStr && (t.endDate || t.date) >= todayStr
+    );
+    if (hasToday) return todayStr;
+    const upcoming = tasks
+      .map((t) => t.date)
+      .filter((d) => Boolean(d && d >= todayStr))
+      .sort()[0];
+    return upcoming || tasks[0]?.date || todayStr;
+  });
+
+  useEffect(() => {
+    const hasTasksOnSelected = tasks.some(
+      (t) =>
+        t.date <= selectedPreviewDate && (t.endDate || t.date) >= selectedPreviewDate
+    );
+    if (!hasTasksOnSelected && tasks.length > 0) {
+      const upcoming = tasks
+        .map((t) => t.date)
+        .filter((d) => Boolean(d && d >= todayStr))
+        .sort()[0];
+      setSelectedPreviewDate(upcoming || tasks[0].date);
+    }
+  }, [selectedPreviewDate, tasks, todayStr]);
+
+  const previewDigestTasks = useMemo(() => {
+    return tasks
+      .filter(
+        (t) =>
+          t.date <= selectedPreviewDate && (t.endDate || t.date) >= selectedPreviewDate
+      )
+      .sort((a, b) => String(a.time || '09:00').localeCompare(String(b.time || '09:00')));
+  }, [selectedPreviewDate, tasks]);
+
+  const formatThaiFullDateForPreview = (ymd: string): string => {
+    const thaiDays = [
+      'วันอาทิตย์ที่',
+      'วันจันทร์ที่',
+      'วันอังคารที่',
+      'วันพุธที่',
+      'วันพฤหัสบดีที่',
+      'วันศุกร์ที่',
+      'วันเสาร์ที่',
+    ];
+    const parts = (ymd || '').split('-').map(Number);
+    if (parts.length !== 3 || isNaN(parts[0])) return formatThaiDateDisplay(ymd);
+    const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+    return `${thaiDays[dt.getDay()] || 'วันที่'} ${formatThaiDateDisplay(ymd)}`;
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Executive Summary & Instant LINE Notification Dispatch Banner */}
@@ -869,13 +932,30 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <button
               type="button"
+              onClick={() => setShowSummaryPreview((prev) => !prev)}
+              className={`inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-lg border transition-colors whitespace-nowrap ${
+                showSummaryPreview
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100'
+              }`}
+            >
+              <Sparkles className="h-4 w-4 text-[#06C755]" />
+              <span>
+                {showSummaryPreview
+                  ? '👁️ ซ่อนตัวอย่างการ์ดสรุปงาน'
+                  : '👁️ ดูตัวอย่างการ์ดสรุปงาน (ไม่ต้องส่งจริง)'}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={onTestPushNotification}
               disabled={isSendingPush}
               className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-2xs transition-colors whitespace-nowrap"
             >
               <BarChart3 className="h-4 w-4" />
               <span>
-                {isSendingPush ? 'กำลังส่งสรุปงาน...' : '📊 ส่งการ์ดสรุปงานเข้า LINE ทันที'}
+                {isSendingPush ? 'กำลังส่งสรุปงาน...' : '📊 ส่งการ์ดสรุปงานเข้า LINE จริง'}
               </span>
             </button>
 
@@ -907,6 +987,215 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* LIVE NO-SEND PREVIEW PANEL FOR DAILY TASK SUMMARY CARD */}
+        {showSummaryPreview && (
+          <div className="mt-5 pt-5 border-t border-slate-200">
+            <div className="rounded-2xl bg-slate-900/5 border border-slate-200 p-4 sm:p-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-emerald-900 text-[11px] font-bold">
+                    <span>🔒 โหมดดูตัวอย่างบนหน้าเว็บเท่านั้น (ไม่ส่งข้อความเข้าแอป LINE จริง)</span>
+                  </div>
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 mt-1.5">
+                    ตัวอย่างการ์ดสรุปตารางงานประจำวัน (ดีไซน์ใหม่ Executive Agenda)
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    คลิกเลือกวันที่ด้านขวาเพื่อดูหน้าตาการ์ดสรุปงานของแต่ละวันได้ทันทีโดยไม่ต้องกดส่งจริง
+                  </p>
+                </div>
+
+                {/* Date Switcher for Preview */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {availableTaskDates.map((d) => {
+                    const count = tasks.filter(
+                      (t) => t.date <= d && (t.endDate || t.date) >= d
+                    ).length;
+                    const isSelected = selectedPreviewDate === d;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setSelectedPreviewDate(d)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                          isSelected
+                            ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {formatThaiDateDisplay(d)} ({count} งาน)
+                      </button>
+                    );
+                  })}
+                  <input
+                    type="date"
+                    value={selectedPreviewDate}
+                    onChange={(e) => {
+                      if (e.target.value) setSelectedPreviewDate(e.target.value);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono-tabular text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Exact 1:1 Simulated LINE Phone Bubble */}
+              <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
+                {/* Header */}
+                <div className="bg-[#0F172A] p-5 text-white">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
+                      📋 สรุปตารางงานประจำวัน
+                    </span>
+                    <span className="text-[11px] font-mono-tabular text-slate-400 font-bold">
+                      เวลา {lineSettings.dailyDigestTime || '08:00'} น.
+                    </span>
+                  </div>
+                  <div className="text-lg font-bold mt-3 text-white leading-snug">
+                    {formatThaiFullDateForPreview(selectedPreviewDate)}
+                  </div>
+
+                  {/* 3-Column Dark Summary Strip */}
+                  <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] p-2.5 text-center">
+                    <div>
+                      <span className="text-xs font-bold text-sky-400 font-mono-tabular">
+                        ทั้งหมด {previewDigestTasks.length}
+                      </span>
+                    </div>
+                    <div className="border-x border-slate-700">
+                      <span className="text-xs font-bold text-amber-400 font-mono-tabular">
+                        รอดำเนินการ{' '}
+                        {
+                          previewDigestTasks.filter(
+                            (t) => t.status !== TaskStatus.COMPLETED
+                          ).length
+                        }
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
+                        เสร็จแล้ว{' '}
+                        {
+                          previewDigestTasks.filter(
+                            (t) => t.status === TaskStatus.COMPLETED
+                          ).length
+                        }
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Body: Chronological Agenda Cards */}
+                <div className="p-4 bg-[#F1F5F9] space-y-3">
+                  {previewDigestTasks.length > 0 ? (
+                    previewDigestTasks.map((t, idx) => {
+                      const cat = categories.find((c) => c.id === t.categoryId);
+                      const catColor = cat?.color || '#2563EB';
+                      const isDone = t.status === TaskStatus.COMPLETED;
+                      const isHigh = t.priority === TaskPriority.HIGH;
+                      const cleanDesc = (t.description || '').trim();
+                      const showDesc =
+                        Boolean(cleanDesc) &&
+                        !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                        !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                        !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+
+                      return (
+                        <div
+                          key={`preview-card-${t.id}-${idx}`}
+                          style={{
+                            borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
+                          }}
+                          className={`bg-white border rounded-xl p-3 shadow-2xs ${
+                            !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
+                          }`}
+                        >
+                          {/* Top Row */}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
+                                  isDone
+                                    ? 'bg-slate-200 text-slate-600'
+                                    : 'bg-[#0F172A] text-white'
+                                }`}
+                              >
+                                ⏰ {t.time} น.
+                              </span>
+                              <span
+                                className="text-[11px] font-bold truncate"
+                                style={{
+                                  color: isDone ? '#94A3B8' : catColor,
+                                }}
+                              >
+                                • {cat?.name || 'ทั่วไป'}
+                              </span>
+                            </div>
+
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                isDone
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : isHigh
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}
+                            >
+                              {isDone
+                                ? '✓ เสร็จแล้ว'
+                                : isHigh
+                                ? '🔥 ด่วนมาก'
+                                : '⏳ รอถึงเวลา'}
+                            </span>
+                          </div>
+
+                          {/* Full-width Title */}
+                          <div
+                            className={`text-sm font-bold mt-2 break-words leading-snug ${
+                              isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                            }`}
+                          >
+                            {idx + 1}. {t.title}
+                          </div>
+
+                          {/* Description */}
+                          {showDesc && (
+                            <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
+                              {cleanDesc}
+                            </div>
+                          )}
+
+                          {t.assigneeName && (
+                            <div className="text-[11px] text-slate-500 mt-1">
+                              👤 ผู้รับผิดชอบ: {t.assigneeName}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="bg-white border border-slate-200 rounded-xl p-5 text-center text-xs text-slate-600 font-semibold">
+                      🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onOpenDateInCalendar(selectedPreviewDate)}
+                    className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
+                  >
+                    📅 เปิดดูปฏิทินและจัดการงาน
+                  </button>
+                  <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
+                    📺 เปิดตารางงานนำเสนอ (รายวัน)
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {richMenuClearStatus && (
           <div
@@ -1009,375 +1298,157 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                     <div className="w-full max-w-[92%]">
                       {/* CASE 1: FULL DAILY / PENDING TASK SUMMARY FLEX CARD */}
                       {flex && hasDigest ? (
-                        <div className="rounded-2xl overflow-hidden border border-indigo-200 bg-white shadow-sm">
-                          {/* Vibrant Summary Header */}
-                          <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-emerald-800 px-4 py-3.5 text-white">
+                        <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+                          {/* Executive Dark Slate Header */}
+                          <div className="bg-[#0F172A] px-5 py-4 text-white">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#06C755] text-white text-[10px] font-bold tracking-wider uppercase">
-                                {flex.badge || 'SHEETCAL DAILY SUMMARY'}
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
+                                {flex.badge && !flex.badge.includes('TIME-SPLIT')
+                                  ? flex.badge
+                                  : '📋 สรุปตารางงานประจำวัน'}
                               </span>
-                              <span className="text-[11px] font-mono-tabular text-indigo-200 font-semibold">
-                                {flex.dateTime}
+                              <span className="text-[11px] font-mono-tabular text-slate-400 font-semibold">
+                                {flex.time ? `เวลา ${flex.time} น.` : flex.dateTime}
                               </span>
                             </div>
-                            <div className="text-base font-bold mt-2">{flex.title}</div>
-                            <div className="text-xs text-emerald-200 mt-0.5">
-                              {flex.subtitle}
+                            <div className="text-base font-bold mt-2.5 text-white">
+                              {flex.date
+                                ? `ตารางงานวันที่ ${formatThaiDateDisplay(flex.date)}`
+                                : flex.title}
                             </div>
 
-                            {/* Progress Bar */}
-                            {flex.stats && (
-                              <div className="mt-3">
-                                <div className="h-1.5 w-full rounded-full bg-indigo-950/60 overflow-hidden">
-                                  <div
-                                    className="h-full bg-[#06C755] rounded-full transition-all"
-                                    style={{
-                                      width: `${
-                                        flex.stats.total > 0
-                                          ? Math.max(
-                                              8,
-                                              Math.round(
-                                                (flex.stats.completed / flex.stats.total) * 100
-                                              )
-                                            )
-                                          : 100
-                                      }%`,
-                                    }}
-                                  />
-                                </div>
+                            {/* Compact Dark Summary Strip */}
+                            <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] px-3 py-2.5 text-center">
+                              <div>
+                                <span className="text-xs font-bold text-sky-400 font-mono-tabular">
+                                  ทั้งหมด {flex.stats?.total ?? flex.digestItems?.length ?? 0}
+                                </span>
                               </div>
-                            )}
+                              <div className="border-x border-slate-700/80">
+                                <span className="text-xs font-bold text-amber-400 font-mono-tabular">
+                                  รอดำเนินการ {flex.stats?.pending ?? 0}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
+                                  เสร็จแล้ว {flex.stats?.completed ?? 0}
+                                </span>
+                              </div>
+                            </div>
                           </div>
 
-                          {/* 3 Colorful KPI Boxes */}
-                          <div className="p-4 bg-slate-50/70 space-y-3">
-                            <div className="grid grid-cols-3 gap-2">
-                              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 text-center">
-                                <div className="text-lg font-bold text-indigo-700 font-mono-tabular">
-                                  {flex.stats?.total ?? flex.digestItems?.length ?? 0}
-                                </div>
-                                <div className="text-[11px] font-semibold text-indigo-800">
-                                  งานทั้งหมด
-                                </div>
-                              </div>
-                              <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
-                                <div className="text-lg font-bold text-amber-600 font-mono-tabular">
-                                  {flex.stats?.pending ?? 0}
-                                </div>
-                                <div className="text-[11px] font-semibold text-amber-800">
-                                  รอดำเนินการ
-                                </div>
-                              </div>
-                              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-center">
-                                <div className="text-lg font-bold text-emerald-600 font-mono-tabular">
-                                  {flex.stats?.completed ?? 0}
-                                </div>
-                                <div className="text-[11px] font-semibold text-emerald-800">
-                                  เสร็จแล้ว
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Time-Split Summary Banner (Passed Time vs Upcoming Time) */}
-                            {flex.timeSplitStats && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                                <div className="rounded-xl bg-amber-50/90 border border-amber-200 px-3 py-2 flex items-center justify-between">
-                                  <div>
-                                    <div className="text-[11px] font-bold text-amber-900">
-                                      ⏮️ ผ่านเวลาที่กำหนดแล้ว (&le; {flex.timeSplitStats.referenceTime} น.)
-                                    </div>
-                                    <div className="text-[10px] text-amber-800 mt-0.5">
-                                      เสร็จแล้ว {flex.timeSplitStats.passedCompletedCount} · ค้าง/เลยเวลา{' '}
-                                      {flex.timeSplitStats.passedOverdueCount}
-                                    </div>
-                                  </div>
-                                  <span className="text-base font-bold text-amber-700 font-mono-tabular">
-                                    {flex.timeSplitStats.passedCount} งาน
-                                  </span>
-                                </div>
-
-                                <div className="rounded-xl bg-blue-50/90 border border-blue-200 px-3 py-2 flex items-center justify-between">
-                                  <div>
-                                    <div className="text-[11px] font-bold text-blue-900">
-                                      ⏭️ ยังไม่ถึงเวลาที่กำหนด (&gt; {flex.timeSplitStats.referenceTime} น.)
-                                    </div>
-                                    <div className="text-[10px] text-blue-800 mt-0.5">
-                                      งานที่รอดำเนินการตามเวลาถัดไป
-                                    </div>
-                                  </div>
-                                  <span className="text-base font-bold text-blue-700 font-mono-tabular">
-                                    {flex.timeSplitStats.upcomingCount} งาน
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Task Timeline List (Grouped into Passed vs Upcoming when timePhase is available) */}
+                          {/* Chronological Executive Agenda Cards */}
+                          <div className="p-4 bg-[#F1F5F9] space-y-2.5">
                             {flex.digestItems && flex.digestItems.length > 0 ? (
-                              flex.digestItems.some((i) => i.timePhase) ? (
-                                <div className="space-y-3 pt-1">
-                                  {/* Group 1: Passed Time */}
-                                  <div className="space-y-1.5">
-                                    <div className="flex items-center justify-between text-[11px] font-bold text-amber-900 bg-amber-100/70 border border-amber-200 rounded-lg px-2.5 py-1">
-                                      <span>
-                                        ⏮️ 1. งานที่ผ่านเวลาที่กำหนดมาแล้ว
-                                        {flex.timeSplitStats
-                                          ? ` (<= ${flex.timeSplitStats.referenceTime} น.)`
-                                          : ''}
-                                      </span>
-                                      <span>
-                                        {
-                                          flex.digestItems.filter((i) => i.timePhase === 'passed')
-                                            .length
-                                        }{' '}
-                                        รายการ
-                                      </span>
-                                    </div>
-                                    {flex.digestItems.filter((i) => i.timePhase === 'passed')
-                                      .length > 0 ? (
-                                      flex.digestItems
-                                        .filter((i) => i.timePhase === 'passed')
-                                        .map((item, idx) => {
-                                          const isDone = item.status === 'completed';
-                                          return (
-                                            <div
-                                              key={`passed-${item.title}-${idx}`}
-                                              style={{
-                                                borderLeft: `4px solid ${
-                                                  isDone
-                                                    ? '#10B981'
-                                                    : item.categoryColor || '#DC2626'
-                                                }`,
-                                              }}
-                                              className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
-                                            >
-                                              <div className="min-w-0">
-                                                <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
-                                                  <span className="font-bold text-slate-700">
-                                                    {item.time} น.
-                                                  </span>
-                                                  {item.date && item.date !== todayStr && (
-                                                    <span className="text-slate-500">
-                                                      ({formatThaiDateDisplay(item.date)})
-                                                    </span>
-                                                  )}
-                                                  <span
-                                                    className="font-semibold"
-                                                    style={{
-                                                      color: item.categoryColor || '#2563EB',
-                                                    }}
-                                                  >
-                                                    · {item.categoryName}
-                                                  </span>
-                                                </div>
-                                                <div
-                                                  className={`text-xs font-semibold mt-0.5 break-words ${
-                                                    isDone
-                                                      ? 'line-through text-slate-400'
-                                                      : 'text-slate-900'
-                                                  }`}
-                                                >
-                                                  {item.title}
-                                                </div>
-                                              </div>
+                              [...flex.digestItems]
+                                .sort((a, b) =>
+                                  String(a.time || '09:00').localeCompare(String(b.time || '09:00'))
+                                )
+                                .map((item, idx) => {
+                                  const isDone = item.status === 'completed';
+                                  const isHigh = item.priority === 'high';
+                                  const isPassed = item.timePhase === 'passed';
+                                  const catColor = item.categoryColor || '#2563EB';
+                                  const cleanDesc = (item.description || '').trim();
+                                  const showDesc =
+                                    Boolean(cleanDesc) &&
+                                    !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                                    !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                                    !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
 
-                                              <span
-                                                className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                                  isDone
-                                                    ? 'bg-emerald-100 text-emerald-800'
-                                                    : 'bg-rose-100 text-rose-700'
-                                                }`}
-                                              >
-                                                {isDone
-                                                  ? '✓ ดำเนินการเสร็จแล้ว'
-                                                  : '⚠️ เลยเวลา (ยังค้าง)'}
-                                              </span>
-                                            </div>
-                                          );
-                                        })
-                                    ) : (
-                                      <div className="bg-white border border-slate-200 rounded-lg p-2 text-center text-xs text-slate-500">
-                                        ไม่มีงานที่ผ่านเวลาที่กำหนด
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Group 2: Upcoming Time */}
-                                  <div className="space-y-1.5">
-                                    <div className="flex items-center justify-between text-[11px] font-bold text-blue-900 bg-blue-100/70 border border-blue-200 rounded-lg px-2.5 py-1">
-                                      <span>
-                                        ⏭️ 2. งานที่ยังไม่ถึงเวลาที่กำหนด
-                                        {flex.timeSplitStats
-                                          ? ` (> ${flex.timeSplitStats.referenceTime} น.)`
-                                          : ''}
-                                      </span>
-                                      <span>
-                                        {
-                                          flex.digestItems.filter((i) => i.timePhase === 'upcoming')
-                                            .length
-                                        }{' '}
-                                        รายการ
-                                      </span>
-                                    </div>
-                                    {flex.digestItems.filter((i) => i.timePhase === 'upcoming')
-                                      .length > 0 ? (
-                                      flex.digestItems
-                                        .filter((i) => i.timePhase === 'upcoming')
-                                        .map((item, idx) => {
-                                          const isDone = item.status === 'completed';
-                                          const isHigh = item.priority === 'high';
-                                          return (
-                                            <div
-                                              key={`upcoming-${item.title}-${idx}`}
-                                              style={{
-                                                borderLeft: `4px solid ${
-                                                  isDone
-                                                    ? '#10B981'
-                                                    : item.categoryColor || '#2563EB'
-                                                }`,
-                                              }}
-                                              className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
-                                            >
-                                              <div className="min-w-0">
-                                                <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
-                                                  <span className="font-bold text-indigo-700">
-                                                    {item.time} น.
-                                                  </span>
-                                                  {item.date && item.date !== todayStr && (
-                                                    <span className="text-slate-500">
-                                                      ({formatThaiDateDisplay(item.date)})
-                                                    </span>
-                                                  )}
-                                                  <span
-                                                    className="font-semibold"
-                                                    style={{
-                                                      color: item.categoryColor || '#2563EB',
-                                                    }}
-                                                  >
-                                                    · {item.categoryName}
-                                                  </span>
-                                                </div>
-                                                <div
-                                                  className={`text-xs font-semibold mt-0.5 break-words ${
-                                                    isDone
-                                                      ? 'line-through text-slate-400'
-                                                      : 'text-slate-900'
-                                                  }`}
-                                                >
-                                                  {item.title}
-                                                </div>
-                                              </div>
-
-                                              <span
-                                                className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                                  isDone
-                                                    ? 'bg-emerald-100 text-emerald-800'
-                                                    : isHigh
-                                                    ? 'bg-rose-100 text-rose-700'
-                                                    : 'bg-blue-100 text-blue-800'
-                                                }`}
-                                              >
-                                                {isDone
-                                                  ? '✓ เสร็จล่วงหน้า'
-                                                  : isHigh
-                                                  ? '🔥 ด่วน · รอถึงเวลา'
-                                                  : '⏳ รอถึงเวลา'}
-                                              </span>
-                                            </div>
-                                          );
-                                        })
-                                    ) : (
-                                      <div className="bg-white border border-slate-200 rounded-lg p-2 text-center text-xs text-slate-500">
-                                        ไม่มีงานที่รอถึงเวลาอีกในวันนี้
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider pt-1">
-                                    รายการงานในตาราง ({flex.digestItems?.length || 0} รายการ)
-                                  </div>
-                                  {flex.digestItems.map((item, idx) => {
-                                    const isDone = item.status === 'completed';
-                                    const isHigh = item.priority === 'high';
-                                    return (
-                                      <div
-                                        key={`${item.title}-${idx}`}
-                                        style={{
-                                          borderLeft: `4px solid ${
-                                            isDone ? '#10B981' : item.categoryColor || '#2563EB'
-                                          }`,
-                                        }}
-                                        className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-start justify-between gap-2.5 shadow-2xs"
-                                      >
-                                        <div className="min-w-0">
-                                          <div className="flex items-center gap-1.5 text-[11px] font-mono-tabular">
-                                            <span className="font-bold text-indigo-700">
-                                              {item.time} น.
-                                            </span>
-                                            {item.date && item.date !== todayStr && (
-                                              <span className="text-slate-500">
-                                                ({formatThaiDateDisplay(item.date)})
-                                              </span>
-                                            )}
-                                            <span
-                                              className="font-semibold"
-                                              style={{ color: item.categoryColor || '#2563EB' }}
-                                            >
-                                              · {item.categoryName}
-                                            </span>
-                                          </div>
-                                          <div
-                                            className={`text-xs font-semibold mt-0.5 break-words ${
+                                  return (
+                                    <div
+                                      key={`agenda-${item.title}-${idx}`}
+                                      style={{
+                                        borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
+                                      }}
+                                      className={`bg-white border rounded-xl p-3 shadow-2xs ${
+                                        !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
+                                      }`}
+                                    >
+                                      {/* Row 1: Time Badge + Category + Status Pill */}
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span
+                                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
                                               isDone
-                                                ? 'line-through text-slate-400'
-                                                : 'text-slate-900'
+                                                ? 'bg-slate-200 text-slate-600'
+                                                : 'bg-[#0F172A] text-white'
                                             }`}
                                           >
-                                            {item.title}
-                                          </div>
+                                            ⏰ {item.time} น.
+                                          </span>
+                                          <span
+                                            className="text-[11px] font-bold truncate"
+                                            style={{
+                                              color: isDone ? '#94A3B8' : catColor,
+                                            }}
+                                          >
+                                            • {item.categoryName || 'ทั่วไป'}
+                                          </span>
                                         </div>
 
                                         <span
-                                          className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
                                             isDone
                                               ? 'bg-emerald-100 text-emerald-800'
                                               : isHigh
                                               ? 'bg-rose-100 text-rose-700'
-                                              : 'bg-amber-100 text-amber-800'
+                                              : isPassed
+                                              ? 'bg-amber-100 text-amber-800'
+                                              : 'bg-blue-100 text-blue-800'
                                           }`}
                                         >
                                           {isDone
                                             ? '✓ เสร็จแล้ว'
                                             : isHigh
                                             ? '🔥 ด่วนมาก'
-                                            : '⏳ รอทำ'}
+                                            : isPassed
+                                            ? '⚠️ เลยเวลา'
+                                            : '⏳ รอถึงเวลา'}
                                         </span>
                                       </div>
-                                    );
-                                  })}
-                                </div>
-                              )
+
+                                      {/* Row 2: Full-width Task Title */}
+                                      <div
+                                        className={`text-sm font-bold mt-2 break-words leading-snug ${
+                                          isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                        }`}
+                                      >
+                                        {idx + 1}. {item.title}
+                                      </div>
+
+                                      {/* Row 3: Task Description (if present) */}
+                                      {showDesc && (
+                                        <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
+                                          {cleanDesc}
+                                        </div>
+                                      )}
+
+                                      {item.assigneeName && (
+                                        <div className="text-[11px] text-slate-500 mt-1">
+                                          👤 ผู้รับผิดชอบ: {item.assigneeName}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })
                             ) : (
-                              <div className="bg-white border border-slate-200 rounded-lg p-3 text-center text-xs text-slate-600 font-medium">
-                                🎉 ไม่มีรายการงานค้างในตาราง
+                              <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-600 font-semibold">
+                                🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
                               </div>
                             )}
                           </div>
 
                           {/* Card Footer Action */}
-                          <div className="px-4 py-2.5 bg-white border-t border-slate-100 flex items-center justify-between">
-                            <span className="text-[11px] text-slate-500">
-                              ซิงค์อัตโนมัติกับปฏิทินทีม & Google Sheets
-                            </span>
+                          <div className="p-3 bg-white border-t border-slate-200 flex flex-col gap-1.5">
                             <button
                               type="button"
                               onClick={() => onOpenDateInCalendar(flex.date || todayStr)}
-                              className="inline-flex items-center gap-1 px-3 py-1 rounded-md bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+                              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#06C755] text-white text-xs font-bold hover:bg-[#05b34c] transition-colors"
                             >
-                              <CalendarIcon className="h-3 w-3" />
-                              <span>เปิดดูปฏิทิน</span>
+                              <CalendarIcon className="h-3.5 w-3.5" />
+                              <span>📅 เปิดดูปฏิทินและจัดการงาน</span>
                             </button>
                           </div>
                         </div>

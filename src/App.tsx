@@ -18,6 +18,7 @@ import {
   Search,
   Send,
   Trash2,
+  Tv,
   Unlock,
   Users,
 } from 'lucide-react';
@@ -76,9 +77,11 @@ import { LineCenterView } from './components/LineCenterView';
 import { CategoryManagerView } from './components/CategoryManagerView';
 import { SheetsDatabaseView } from './components/SheetsDatabaseView';
 import { TeamCollaborationView } from './components/TeamCollaborationView';
+import { ScheduleBoardView } from './components/ScheduleBoardView';
 
 type ActiveSection =
   | 'dashboard'
+  | 'schedule'
   | 'calendar'
   | 'team'
   | 'line'
@@ -106,6 +109,7 @@ export default function App() {
       const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
       if (
         sec === 'calendar' ||
+        sec === 'schedule' ||
         sec === 'dashboard' ||
         sec === 'team' ||
         sec === 'line' ||
@@ -3103,6 +3107,27 @@ export default function App() {
             Dashboard สรุปงาน
           </a>
           <a
+            href="#schedule"
+            onClick={(e) => {
+              e.preventDefault();
+              setAdminPasscodeError('');
+              setActiveSection('schedule');
+            }}
+            className={`py-1 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+              activeSection === 'schedule'
+                ? 'text-indigo-600 underline underline-offset-8 decoration-2 decoration-indigo-600 font-semibold'
+                : 'hover:text-indigo-600'
+            }`}
+          >
+            {isAdminUnlocked ? (
+              <Unlock className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+            ) : (
+              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+            )}
+            <Tv className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+            <span>ตารางงานนำเสนอ (รายวัน)</span>
+          </a>
+          <a
             href="#calendar"
             onClick={(e) => {
               e.preventDefault();
@@ -3207,6 +3232,25 @@ export default function App() {
         >
           <LayoutDashboard className="h-3.5 w-3.5" />
           <span>สรุปงาน</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setAdminPasscodeError('');
+            setActiveSection('schedule');
+          }}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+            activeSection === 'schedule'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-600 bg-slate-100'
+          }`}
+        >
+          {isAdminUnlocked ? (
+            <Tv className="h-3.5 w-3.5" />
+          ) : (
+            <Lock className="h-3.5 w-3.5" />
+          )}
+          <span>ตารางงานนำเสนอ</span>
         </button>
         <button
           type="button"
@@ -4076,7 +4120,8 @@ export default function App() {
           />
         )}
 
-        {(activeSection === 'team' ||
+        {(activeSection === 'schedule' ||
+          activeSection === 'team' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           !isAdminUnlocked && (
@@ -4096,13 +4141,15 @@ export default function App() {
                   <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
                     คุณกำลังเข้าสู่หัวข้อ{' '}
                     <strong className="text-indigo-700">
-                      {activeSection === 'team'
+                      {activeSection === 'schedule'
+                        ? 'ตารางงานนำเสนอ (รายวัน)'
+                        : activeSection === 'team'
                         ? 'ทีมที่ใช้ปฏิทินร่วมกัน'
                         : activeSection === 'line'
                         ? 'แจ้งเตือน & สั่งงาน LINE'
                         : 'ฐานข้อมูล Google Sheets'}
                     </strong>{' '}
-                    กรุณากรอกรหัสผ่านเพื่อเข้าจัดการตั้งค่าระบบ
+                    กรุณากรอกรหัสผ่านเพื่อเข้าเปิดดูตารางนำเสนอหรือจัดการตั้งค่าระบบ
                   </p>
                 </div>
               </div>
@@ -4159,7 +4206,8 @@ export default function App() {
             </div>
           )}
 
-        {(activeSection === 'team' ||
+        {(activeSection === 'schedule' ||
+          activeSection === 'team' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           isAdminUnlocked && (
@@ -4167,7 +4215,7 @@ export default function App() {
               <div className="inline-flex items-center gap-2 font-semibold">
                 <Unlock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
                 <span>
-                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
+                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถเปิดดูตารางงานนำเสนอ, ตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
                 </span>
               </div>
               <button
@@ -4185,6 +4233,24 @@ export default function App() {
               </button>
             </div>
           )}
+
+        {activeSection === 'schedule' && isAdminUnlocked && (
+          <ScheduleBoardView
+            tasks={tasks}
+            categories={categories}
+            onAddTaskForDate={(date) => {
+              setEditingTask(null);
+              setModalInitialDate(date);
+              setIsTaskModalOpen(true);
+            }}
+            onEditTask={(task) => {
+              setEditingTask(task);
+              setIsTaskModalOpen(true);
+            }}
+            onToggleStatus={handleToggleTaskStatus}
+            onOpenCalendarDate={handleOpenDateInCalendar}
+          />
+        )}
 
         {activeSection === 'team' && isAdminUnlocked && (
           <TeamCollaborationView
@@ -4311,7 +4377,7 @@ export default function App() {
       {/* Thumb-Friendly Mobile Bottom Navigation Bar (< 768px) */}
       <nav
         aria-label="เมนูหลักบนมือถือ"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 grid grid-cols-5 gap-1 shadow-lg"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 grid grid-cols-6 gap-1 shadow-lg"
       >
         <button
           type="button"
@@ -4324,6 +4390,18 @@ export default function App() {
         >
           <LayoutDashboard className="h-4 w-4 mb-0.5" />
           <span>สรุปงาน</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('schedule')}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+            activeSection === 'schedule'
+              ? 'text-indigo-600 bg-indigo-50/80'
+              : 'text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Tv className="h-4 w-4 mb-0.5" />
+          <span>ตารางแสดงผล</span>
         </button>
         <button
           type="button"
