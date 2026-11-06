@@ -79,9 +79,11 @@ export interface LineMessageLog {
     subtitle: string;
     dateTime: string;
     date?: string;
+    endDate?: string;
     time?: string;
     categoryName: string;
     categoryColor: string;
+    priority?: TaskPriority | 'low' | 'medium' | 'high';
     priorityLabel: string;
     remindLabel?: string;
     description?: string;

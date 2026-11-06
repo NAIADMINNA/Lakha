@@ -37,6 +37,7 @@ import {
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
   generateGoogleAppsScriptCode,
+  getPriorityHeaderTheme,
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
@@ -867,6 +868,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const [previewCardTab, setPreviewCardTab] = useState<'daily_summary' | 'single_task'>(
     'daily_summary'
   );
+  const [selectedSingleTaskId, setSelectedSingleTaskId] = useState<string>(() => {
+    return tasks[0]?.id || '';
+  });
+  const [previewPriorityOverride, setPreviewPriorityOverride] = useState<
+    'auto' | 'high' | 'medium' | 'low'
+  >('auto');
   const [selectedPreviewDate, setSelectedPreviewDate] = useState<string>(() => {
     const hasToday = consolidatedPreviewTasks.some(
       (t) => t.date <= todayStr && (t.endDate || t.date) >= todayStr
@@ -989,220 +996,514 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                     <span>🔒 โหมดดูตัวอย่างบนหน้าเว็บเท่านั้น (ไม่ส่งข้อความเข้าแอป LINE จริง)</span>
                   </div>
                   <h3 className="text-sm sm:text-base font-bold text-slate-900 mt-1.5">
-                    ตัวอย่างการ์ดสรุปตารางงานประจำวัน (ดีไซน์ใหม่ Executive Agenda)
+                    {previewCardTab === 'daily_summary'
+                      ? 'ตัวอย่างการ์ดสรุปตารางงานประจำวัน (Executive Agenda)'
+                      : 'ตัวอย่างการ์ดแจ้งเตือนแต่ละงาน (หัวตารางเน้นสีตามความสำคัญของงาน)'}
                   </h3>
                   <p className="text-xs text-slate-600">
-                    คลิกเลือกวันที่ด้านขวาเพื่อดูหน้าตาการ์ดสรุปงานของแต่ละวันได้ทันทีโดยไม่ต้องกดส่งจริง
+                    {previewCardTab === 'daily_summary'
+                      ? 'คลิกเลือกวันที่ด้านขวาเพื่อดูหน้าตาการ์ดสรุปงานของแต่ละวันได้ทันทีโดยไม่ต้องกดส่งจริง'
+                      : 'หัวการ์ดเปลี่ยนสีอัตโนมัติตามระดับความสำคัญ: ด่วนมาก (#B91C1C แดงเข้ม) · ปานกลาง (#D97706 ส้มทอง) · ทั่วไป (#0F766E เขียวอมฟ้า)'}
                   </p>
                 </div>
 
-                {/* Date Switcher for Preview */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {availableTaskDates.map((d) => {
-                    const tasksOnDate = consolidatedPreviewTasks.filter(
-                      (t) => t.date <= d && (t.endDate || t.date) >= d
-                    );
-                    const count = tasksOnDate.length;
-                    const maxEndOnDate = tasksOnDate.reduce(
-                      (acc, t) => ((t.endDate || t.date) > acc ? t.endDate || t.date : acc),
-                      d
-                    );
-                    const isSelected =
-                      selectedPreviewDate >= d && selectedPreviewDate <= maxEndOnDate;
-                    const pillDateLabel =
-                      maxEndOnDate > d
-                        ? formatTaskDateRangeLabel({ date: d, endDate: maxEndOnDate }, 'short')
-                        : formatThaiDateDisplay(d);
-                    return (
-                      <button
-                        key={d}
-                        type="button"
-                        onClick={() => setSelectedPreviewDate(d)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                          isSelected
-                            ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-2xs'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {pillDateLabel} ({count} งาน)
-                      </button>
-                    );
-                  })}
-                  <input
-                    type="date"
-                    value={selectedPreviewDate}
-                    onChange={(e) => {
-                      if (e.target.value) setSelectedPreviewDate(e.target.value);
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono-tabular text-slate-800"
-                  />
+                {/* Card Type Switcher: Daily Summary vs Single Task Reminder */}
+                <div className="inline-flex items-center rounded-xl bg-white p-1 border border-slate-300 shadow-2xs shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewCardTab('daily_summary')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      previewCardTab === 'daily_summary'
+                        ? 'bg-[#0F172A] text-white shadow-2xs'
+                        : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    📋 การ์ดสรุปงานประจำวัน
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewCardTab('single_task')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      previewCardTab === 'single_task'
+                        ? 'bg-[#B91C1C] text-white shadow-2xs'
+                        : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    🔔 การ์ดแจ้งเตือนแต่ละงาน (สีตามความสำคัญ)
+                  </button>
                 </div>
               </div>
 
-              {/* Exact 1:1 Simulated LINE Phone Bubble */}
-              <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
-                {/* Header */}
-                <div className="bg-[#0F172A] p-5 text-white">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
-                      📋 สรุปตารางงานประจำวัน
-                    </span>
-                    <span className="text-[11px] font-mono-tabular text-slate-400 font-bold">
-                      เวลา {lineSettings.dailyDigestTime || '08:00'} น.
-                    </span>
-                  </div>
-                  <div className="text-lg font-bold mt-3 text-white leading-snug">
-                    {formatSummaryCardHeaderDate(selectedPreviewDate, previewDigestTasks)}
-                  </div>
-
-                  {/* 3-Column Dark Summary Strip */}
-                  <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] p-2.5 text-center">
-                    <div>
-                      <span className="text-xs font-bold text-sky-400 font-mono-tabular">
-                        ทั้งหมด {previewDigestTasks.length}
-                      </span>
-                    </div>
-                    <div className="border-x border-slate-700">
-                      <span className="text-xs font-bold text-amber-400 font-mono-tabular">
-                        รอดำเนินการ{' '}
-                        {
-                          previewDigestTasks.filter(
-                            (t) => t.status !== TaskStatus.COMPLETED
-                          ).length
-                        }
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
-                        เสร็จแล้ว{' '}
-                        {
-                          previewDigestTasks.filter(
-                            (t) => t.status === TaskStatus.COMPLETED
-                          ).length
-                        }
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Body: Chronological Agenda Cards */}
-                <div className="p-4 bg-[#F1F5F9] space-y-3">
-                  {previewDigestTasks.length > 0 ? (
-                    previewDigestTasks.map((t, idx) => {
-                      const cat = categories.find((c) => c.id === t.categoryId);
-                      const catColor = cat?.color || '#2563EB';
-                      const isDone = t.status === TaskStatus.COMPLETED;
-                      const isHigh = t.priority === TaskPriority.HIGH;
-                      const cleanDesc = (t.description || '').trim();
-                      const showDesc =
-                        Boolean(cleanDesc) &&
-                        !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
-                        !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
-                        !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
-
+              {previewCardTab === 'daily_summary' ? (
+                <>
+                  {/* Date Switcher for Daily Summary Preview */}
+                  <div className="flex flex-wrap items-center gap-1.5 mb-4">
+                    <span className="text-xs font-bold text-slate-700 mr-1">เลือกวันที่:</span>
+                    {availableTaskDates.map((d) => {
+                      const tasksOnDate = consolidatedPreviewTasks.filter(
+                        (t) => t.date <= d && (t.endDate || t.date) >= d
+                      );
+                      const count = tasksOnDate.length;
+                      const maxEndOnDate = tasksOnDate.reduce(
+                        (acc, t) => ((t.endDate || t.date) > acc ? t.endDate || t.date : acc),
+                        d
+                      );
+                      const isSelected =
+                        selectedPreviewDate >= d && selectedPreviewDate <= maxEndOnDate;
+                      const pillDateLabel =
+                        maxEndOnDate > d
+                          ? formatTaskDateRangeLabel({ date: d, endDate: maxEndOnDate }, 'short')
+                          : formatThaiDateDisplay(d);
                       return (
-                        <div
-                          key={`preview-card-${t.id}-${idx}`}
-                          style={{
-                            borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
-                          }}
-                          className={`bg-white border rounded-xl p-3 shadow-2xs ${
-                            !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setSelectedPreviewDate(d)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                            isSelected
+                              ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-2xs'
+                              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                           }`}
                         >
-                          {/* Top Row */}
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span
-                                className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
-                                  isDone
-                                    ? 'bg-slate-200 text-slate-600'
-                                    : 'bg-[#0F172A] text-white'
-                                }`}
-                              >
-                                ⏰ {t.time} น.
-                              </span>
-                              <span
-                                className="text-[11px] font-bold truncate"
-                                style={{
-                                  color: isDone ? '#94A3B8' : catColor,
-                                }}
-                              >
-                                • {cat?.name || 'ทั่วไป'}
-                              </span>
-                            </div>
+                          {pillDateLabel} ({count} งาน)
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="date"
+                      value={selectedPreviewDate}
+                      onChange={(e) => {
+                        if (e.target.value) setSelectedPreviewDate(e.target.value);
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono-tabular text-slate-800"
+                    />
+                  </div>
 
-                            <span
-                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                isDone
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : isHigh
-                                  ? 'bg-rose-100 text-rose-700'
-                                  : 'bg-blue-100 text-blue-800'
+                  {/* Exact 1:1 Simulated LINE Phone Bubble (Daily Summary) */}
+                  <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
+                    {/* Header */}
+                    <div className="bg-[#0F172A] p-5 text-white">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
+                          📋 สรุปตารางงานประจำวัน
+                        </span>
+                        <span className="text-[11px] font-mono-tabular text-slate-400 font-bold">
+                          เวลา {lineSettings.dailyDigestTime || '08:00'} น.
+                        </span>
+                      </div>
+                      <div className="text-lg font-bold mt-3 text-white leading-snug">
+                        {formatSummaryCardHeaderDate(selectedPreviewDate, previewDigestTasks)}
+                      </div>
+
+                      {/* 3-Column Dark Summary Strip */}
+                      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] p-2.5 text-center">
+                        <div>
+                          <span className="text-xs font-bold text-sky-400 font-mono-tabular">
+                            ทั้งหมด {previewDigestTasks.length}
+                          </span>
+                        </div>
+                        <div className="border-x border-slate-700">
+                          <span className="text-xs font-bold text-amber-400 font-mono-tabular">
+                            รอดำเนินการ{' '}
+                            {
+                              previewDigestTasks.filter(
+                                (t) => t.status !== TaskStatus.COMPLETED
+                              ).length
+                            }
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
+                            เสร็จแล้ว{' '}
+                            {
+                              previewDigestTasks.filter(
+                                (t) => t.status === TaskStatus.COMPLETED
+                              ).length
+                            }
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Body: Chronological Agenda Cards */}
+                    <div className="p-4 bg-[#F1F5F9] space-y-3">
+                      {previewDigestTasks.length > 0 ? (
+                        previewDigestTasks.map((t, idx) => {
+                          const cat = categories.find((c) => c.id === t.categoryId);
+                          const catColor = cat?.color || '#2563EB';
+                          const isDone = t.status === TaskStatus.COMPLETED;
+                          const isHigh = t.priority === TaskPriority.HIGH;
+                          const cleanDesc = (t.description || '').trim();
+                          const showDesc =
+                            Boolean(cleanDesc) &&
+                            !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                            !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                            !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+
+                          return (
+                            <div
+                              key={`preview-card-${t.id}-${idx}`}
+                              style={{
+                                borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
+                              }}
+                              className={`bg-white border rounded-xl p-3 shadow-2xs ${
+                                !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
                               }`}
                             >
-                              {isDone
-                                ? '✓ เสร็จแล้ว'
-                                : isHigh
-                                ? '🔥 ด่วนมาก'
-                                : '⏳ รอถึงเวลา'}
+                              {/* Top Row */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
+                                      isDone
+                                        ? 'bg-slate-200 text-slate-600'
+                                        : 'bg-[#0F172A] text-white'
+                                    }`}
+                                  >
+                                    ⏰ {t.time} น.
+                                  </span>
+                                  <span
+                                    className="text-[11px] font-bold truncate"
+                                    style={{
+                                      color: isDone ? '#94A3B8' : catColor,
+                                    }}
+                                  >
+                                    • {cat?.name || 'ทั่วไป'}
+                                  </span>
+                                </div>
+
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                    isDone
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : isHigh
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'bg-blue-100 text-blue-800'
+                                  }`}
+                                >
+                                  {isDone
+                                    ? '✓ เสร็จแล้ว'
+                                    : isHigh
+                                    ? '🔥 ด่วนมาก'
+                                    : '⏳ รอถึงเวลา'}
+                                </span>
+                              </div>
+
+                              {/* Full-width Title */}
+                              <div
+                                className={`text-sm font-bold mt-2 break-words leading-snug ${
+                                  isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                }`}
+                              >
+                                {idx + 1}. {t.title}
+                              </div>
+
+                              {/* Multi-day Continuous Range Badge */}
+                              {t.endDate && t.endDate > t.date && (
+                                <div className="mt-1.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                                    🗓️ ต่อเนื่อง: {formatTaskDateRangeLabel(t, 'short')}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Description */}
+                              {showDesc && (
+                                <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
+                                  {cleanDesc}
+                                </div>
+                              )}
+
+                              {t.assigneeName && (
+                                <div className="text-[11px] text-slate-500 mt-1">
+                                  👤 ผู้รับผิดชอบ: {t.assigneeName}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="bg-white border border-slate-200 rounded-xl p-5 text-center text-xs text-slate-600 font-semibold">
+                          🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => onOpenDateInCalendar(selectedPreviewDate)}
+                        className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
+                      >
+                        📅 เปิดดูปฏิทินและจัดการงาน
+                      </button>
+                      <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
+                        📺 เปิดตารางงานนำเสนอ (รายวัน)
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                (() => {
+                  const activeTask =
+                    consolidatedPreviewTasks.find((t) => t.id === selectedSingleTaskId) ||
+                    consolidatedPreviewTasks[0] ||
+                    samplePreviewTask;
+                  const activeCat = categories.find((c) => c.id === activeTask.categoryId);
+                  const effectivePrio =
+                    previewPriorityOverride === 'auto'
+                      ? activeTask.priority
+                      : previewPriorityOverride;
+                  const prioTheme = getPriorityHeaderTheme(effectivePrio, activeCat?.name);
+                  const shortDateRange = formatTaskDateRangeLabel(activeTask, 'short');
+                  const longDateHeader = formatSummaryCardHeaderDate(activeTask.date, [
+                    activeTask,
+                  ]);
+                  const cleanSingleDesc = (activeTask.description || '').trim();
+                  const showSingleDesc =
+                    Boolean(cleanSingleDesc) &&
+                    cleanSingleDesc !== activeTask.title.trim() &&
+                    !cleanSingleDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                    !cleanSingleDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                    !cleanSingleDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+                  const sameDayCount = consolidatedPreviewTasks.filter(
+                    (t) =>
+                      t.date <= activeTask.date &&
+                      (t.endDate || t.date) >= activeTask.date
+                  );
+                  const sameDayDone = sameDayCount.filter(
+                    (t) => t.status === TaskStatus.COMPLETED
+                  ).length;
+                  const sameDayPending = sameDayCount.length - sameDayDone;
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Task Selector + Priority Color Theme Switcher */}
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-bold text-slate-700 mr-1">
+                            เลือกงานเพื่อดูตัวอย่างการ์ด:
+                          </span>
+                          {consolidatedPreviewTasks.map((t) => {
+                            const isSel = t.id === activeTask.id;
+                            const tTheme = getPriorityHeaderTheme(t.priority);
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSingleTaskId(t.id);
+                                  setPreviewPriorityOverride('auto');
+                                }}
+                                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                                  isSel
+                                    ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                    : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                                }`}
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: tTheme.headerBg }}
+                                />
+                                <span className="truncate max-w-[180px]">{t.title}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <span className="text-[11px] font-bold text-slate-500">
+                            ทดสอบสีหัวการ์ดตามความสำคัญ:
+                          </span>
+                          {(
+                            [
+                              { id: 'auto', label: 'ตามงานจริง', color: '#334155' },
+                              { id: 'high', label: '🔥 ด่วนมาก (แดง)', color: '#B91C1C' },
+                              { id: 'medium', label: '⚡ ปานกลาง (ส้มทอง)', color: '#D97706' },
+                              { id: 'low', label: '📌 ทั่วไป (เขียวคราม)', color: '#0F766E' },
+                            ] as const
+                          ).map((pOpt) => {
+                            const isAct = previewPriorityOverride === pOpt.id;
+                            return (
+                              <button
+                                key={pOpt.id}
+                                type="button"
+                                onClick={() => setPreviewPriorityOverride(pOpt.id)}
+                                style={
+                                  isAct ? { backgroundColor: pOpt.color, borderColor: pOpt.color } : undefined
+                                }
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${
+                                  isAct
+                                    ? 'text-white shadow-2xs'
+                                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                                }`}
+                              >
+                                {pOpt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Exact 1:1 Simulated LINE Single-Task Notification Bubble */}
+                      <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
+                        {/* Priority-Colored Header ("หัวตารางเน้นสีตามความสำคัญของงาน") */}
+                        <div
+                          style={{ backgroundColor: prioTheme.headerBg }}
+                          className="p-5 text-white transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              style={{
+                                backgroundColor: prioTheme.badgeBg,
+                                color: prioTheme.badgeText,
+                              }}
+                              className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold shadow-2xs"
+                            >
+                              {prioTheme.badgeLabel}
+                            </span>
+                            <span
+                              style={{ backgroundColor: prioTheme.headerStripBg }}
+                              className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] text-white font-bold"
+                            >
+                              🗂️ {activeCat?.name || 'ทั่วไป'}
                             </span>
                           </div>
 
-                          {/* Full-width Title */}
-                          <div
-                            className={`text-sm font-bold mt-2 break-words leading-snug ${
-                              isDone ? 'line-through text-slate-400' : 'text-slate-900'
-                            }`}
-                          >
-                            {idx + 1}. {t.title}
+                          <div className="text-lg font-bold mt-3 text-white leading-snug break-words">
+                            {activeTask.title}
                           </div>
 
-                          {/* Multi-day Continuous Range Badge */}
-                          {t.endDate && t.endDate > t.date && (
-                            <div className="mt-1.5">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
-                                🗓️ ต่อเนื่อง: {formatTaskDateRangeLabel(t, 'short')}
+                          {/* High-Contrast Date & Time Spotlight Banner inside Header */}
+                          <div className="mt-3 rounded-xl bg-white px-3 py-2 shadow-xs flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold shrink-0">
+                              ⏰ {activeTask.time} น.
+                            </span>
+                            <span
+                              style={{ color: prioTheme.badgeText }}
+                              className="text-xs font-bold leading-snug"
+                            >
+                              🗓️ {shortDateRange}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Body: Structured Executive Card with 6px Left Priority Stripe */}
+                        <div className="p-4 bg-[#F1F5F9] space-y-3">
+                          <div
+                            style={{ borderLeft: `6px solid ${prioTheme.headerBg}` }}
+                            className={`bg-white border rounded-xl p-3.5 shadow-2xs space-y-2.5 text-xs ${
+                              prioTheme.priorityKey === 'high'
+                                ? 'border-rose-300'
+                                : 'border-slate-200'
+                            }`}
+                          >
+                            {/* Prominent Date & Time Hero Box at Top of Body */}
+                            <div
+                              style={{
+                                backgroundColor: prioTheme.badgeBg,
+                                borderColor: prioTheme.borderAccent,
+                              }}
+                              className="rounded-xl border p-3 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  style={{ backgroundColor: prioTheme.headerBg }}
+                                  className="inline-flex items-center px-2.5 py-1 rounded-md text-white font-mono-tabular font-bold text-sm shadow-2xs"
+                                >
+                                  ⏰ เวลา {activeTask.time} น.
+                                </span>
+                                <span
+                                  style={{ color: prioTheme.badgeText }}
+                                  className="text-[11px] font-bold"
+                                >
+                                  กำหนดการนัดหมาย
+                                </span>
+                              </div>
+                              <div className="text-sm font-bold text-slate-900 leading-snug pt-0.5">
+                                🗓️ {longDateHeader}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-12 gap-2 items-baseline pt-0.5">
+                              <span className="col-span-4 text-slate-500 font-medium">
+                                🗂️ หมวดหมู่
+                              </span>
+                              <span
+                                style={{
+                                  color: activeCat?.color || prioTheme.headerBg,
+                                }}
+                                className="col-span-8 font-bold"
+                              >
+                                {activeCat?.name || 'ทั่วไป'}
                               </span>
                             </div>
-                          )}
-
-                          {/* Description */}
-                          {showDesc && (
-                            <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
-                              {cleanDesc}
+                            <div className="grid grid-cols-12 gap-2 items-baseline">
+                              <span className="col-span-4 text-slate-500 font-medium">
+                                ⚡ ความสำคัญ
+                              </span>
+                              <span
+                                style={{ color: prioTheme.badgeText }}
+                                className="col-span-8 font-bold"
+                              >
+                                {prioTheme.shortLabel}
+                              </span>
                             </div>
-                          )}
 
-                          {t.assigneeName && (
-                            <div className="text-[11px] text-slate-500 mt-1">
-                              👤 ผู้รับผิดชอบ: {t.assigneeName}
+                            {showSingleDesc && (
+                              <>
+                                <div className="border-t border-slate-200 my-2" />
+                                <div className="rounded-lg bg-slate-50 border border-slate-200/80 p-2.5">
+                                  <div className="text-[11px] font-bold text-slate-600">
+                                    📝 รายละเอียดงาน
+                                  </div>
+                                  <div className="text-xs text-slate-800 mt-1 leading-relaxed break-words">
+                                    {cleanSingleDesc}
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* 3-Column Dark Daily Overview Strip */}
+                          <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#0F172A] p-2.5 text-center">
+                            <div>
+                              <span className="text-[11px] font-bold text-sky-400 font-mono-tabular">
+                                ทั้งหมด {Math.max(1, sameDayCount.length)}
+                              </span>
                             </div>
-                          )}
+                            <div className="border-x border-slate-700">
+                              <span className="text-[11px] font-bold text-amber-400 font-mono-tabular">
+                                รอทำ {sameDayCount.length === 0 ? 1 : sameDayPending}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-[11px] font-bold text-emerald-400 font-mono-tabular">
+                                เสร็จแล้ว {sameDayDone}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                      );
-                    })
-                  ) : (
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 text-center text-xs text-slate-600 font-semibold">
-                      🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
-                    </div>
-                  )}
-                </div>
 
-                {/* Footer */}
-                <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => onOpenDateInCalendar(selectedPreviewDate)}
-                    className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
-                  >
-                    📅 เปิดดูปฏิทินและจัดการงาน
-                  </button>
-                  <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
-                    📺 เปิดตารางงานนำเสนอ (รายวัน)
-                  </div>
-                </div>
-              </div>
+                        {/* Footer */}
+                        <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => onOpenDateInCalendar(activeTask.date)}
+                            className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
+                          >
+                            📅 เปิดดูปฏิทินของทีม
+                          </button>
+                          <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
+                            📊 เปิดตาราง Google Sheets
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
             </div>
           </div>
         )}
@@ -1480,92 +1781,176 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                           </div>
                         </div>
                       ) : flex ? (
-                        /* CASE 2: COLORFUL SINGLE TASK NOTIFICATION / SAVED TASK CARD WITH EMBEDDED TASK SUMMARY */
-                        <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
-                          <div
-                            style={{
-                              backgroundColor: flex.categoryColor || '#2563EB',
-                            }}
-                            className="px-4 py-3 text-white"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-black/25 text-white text-[10px] font-bold tracking-wider uppercase">
-                                {flex.badge}
-                              </span>
-                              <span className="text-xs font-mono-tabular font-bold">
-                                {flex.dateTime}
-                              </span>
-                            </div>
-                            <div className="text-sm font-bold mt-1.5 break-words">
-                              {flex.title}
-                            </div>
-                          </div>
+                        /* CASE 2: COLORFUL SINGLE TASK NOTIFICATION / SAVED TASK CARD WITH PRIORITY-COLORED HEADER */
+                        (() => {
+                          const pTheme = getPriorityHeaderTheme(
+                            flex.priority,
+                            `${flex.priorityLabel || ''} ${flex.badge || ''} ${flex.categoryName || ''}`
+                          );
+                          const cleanDesc = (flex.description || flex.subtitle || '').trim();
+                          const showCleanDesc =
+                            Boolean(cleanDesc) &&
+                            cleanDesc !== flex.title.trim() &&
+                            !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                            !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                            !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+                          const displayDate = flex.date
+                            ? formatSummaryCardHeaderDate(flex.date, [
+                                {
+                                  date: flex.date,
+                                  endDate: flex.endDate,
+                                  title: flex.title,
+                                  description: flex.description,
+                                },
+                              ])
+                            : flex.dateTime;
 
-                          <div className="p-3.5 space-y-2.5 bg-white">
-                            {/* Structured Details */}
-                            <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 space-y-1 text-xs">
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-500">🗂️ หมวดหมู่:</span>
-                                <span
-                                  className="font-bold"
-                                  style={{ color: flex.categoryColor || '#2563EB' }}
-                                >
-                                  {flex.categoryName}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-slate-500">⚡ ความสำคัญ / เวลา:</span>
-                                <span className="font-semibold text-slate-900">
-                                  {flex.priorityLabel}
-                                </span>
-                              </div>
-                              {flex.remindLabel && (
-                                <div className="flex items-center justify-between">
-                                  <span className="text-slate-500">🔔 แจ้งเตือนล่วงหน้า:</span>
-                                  <span className="font-semibold text-emerald-700">
-                                    {flex.remindLabel}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-
-                            {flex.subtitle && (
-                              <div className="text-xs text-slate-600 whitespace-pre-wrap leading-relaxed">
-                                {flex.subtitle}
-                              </div>
-                            )}
-
-                            {/* Embedded Summary Box Inside Every Notification */}
-                            <div className="rounded-lg bg-indigo-50/80 border border-indigo-200 px-3 py-2 flex items-center justify-between gap-2">
-                              <div>
-                                <div className="text-[10px] font-bold text-indigo-700 uppercase">
-                                  📊 สรุปภาพรวมตารางงาน
-                                </div>
-                                <div className="text-xs font-semibold text-indigo-950 mt-0.5">
-                                  ทั้งหมด {flex.stats?.total ?? summaryMetrics.total} งาน · รอทำ{' '}
-                                  <span className="text-amber-700">
-                                    {flex.stats?.pending ?? summaryMetrics.pendingCount}
-                                  </span>{' '}
-                                  · เสร็จแล้ว{' '}
-                                  <span className="text-emerald-700">
-                                    {flex.stats?.completed ?? summaryMetrics.completedCount}
-                                  </span>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onOpenDateInCalendar(
-                                    flex.date || flex.dateTime.slice(0, 10) || todayStr
-                                  )
-                                }
-                                className="px-2.5 py-1 rounded-md bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+                          return (
+                            <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+                              {/* Priority-Colored Header ("หัวตารางเน้นสีตามความสำคัญของงาน") */}
+                              <div
+                                style={{ backgroundColor: pTheme.headerBg }}
+                                className="px-4 py-3.5 text-white"
                               >
-                                ดูในปฏิทิน
-                              </button>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    style={{
+                                      backgroundColor: pTheme.badgeBg,
+                                      color: pTheme.badgeText,
+                                    }}
+                                    className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold"
+                                  >
+                                    {pTheme.badgeLabel}
+                                  </span>
+                                  <span
+                                    style={{ backgroundColor: pTheme.headerStripBg }}
+                                    className="px-2 py-0.5 rounded-md text-[10px] font-bold text-white"
+                                  >
+                                    🗂️ {flex.categoryName}
+                                  </span>
+                                </div>
+                                <div className="text-sm font-bold mt-2 break-words leading-snug">
+                                  {flex.title}
+                                </div>
+                                {/* High-Contrast Date & Time Spotlight Banner */}
+                                <div className="mt-2.5 rounded-xl bg-white px-2.5 py-1.5 shadow-2xs flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold">
+                                    ⏰ {flex.time || flex.dateTime}
+                                  </span>
+                                  <span
+                                    style={{ color: pTheme.badgeText }}
+                                    className="text-xs font-bold"
+                                  >
+                                    🗓️ {displayDate}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="p-3.5 space-y-2.5 bg-[#F1F5F9]">
+                                {/* Structured Details with Left Priority Accent Stripe */}
+                                <div
+                                  style={{ borderLeft: `6px solid ${pTheme.headerBg}` }}
+                                  className="rounded-xl bg-white border border-slate-200 p-3 space-y-2 text-xs shadow-2xs"
+                                >
+                                  <div
+                                    style={{
+                                      backgroundColor: pTheme.badgeBg,
+                                      borderColor: pTheme.borderAccent,
+                                    }}
+                                    className="rounded-lg border p-2.5 space-y-1"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span
+                                        style={{ backgroundColor: pTheme.headerBg }}
+                                        className="inline-flex items-center px-2 py-0.5 rounded-md text-white font-mono-tabular font-bold text-xs"
+                                      >
+                                        ⏰ เวลา {flex.time || flex.dateTime}
+                                      </span>
+                                      <span
+                                        style={{ color: pTheme.badgeText }}
+                                        className="text-[10px] font-bold"
+                                      >
+                                        กำหนดการนัดหมาย
+                                      </span>
+                                    </div>
+                                    <div className="font-bold text-slate-900 text-xs pt-0.5">
+                                      🗓️ {displayDate}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="text-slate-500 shrink-0">🗂️ หมวดหมู่:</span>
+                                    <span
+                                      className="font-bold text-right"
+                                      style={{ color: flex.categoryColor || pTheme.headerBg }}
+                                    >
+                                      {flex.categoryName}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="text-slate-500 shrink-0">⚡ ความสำคัญ:</span>
+                                    <span
+                                      className="font-bold text-right"
+                                      style={{ color: pTheme.badgeText }}
+                                    >
+                                      {pTheme.shortLabel}
+                                    </span>
+                                  </div>
+                                  {flex.remindLabel && (
+                                    <div className="flex items-baseline justify-between gap-2">
+                                      <span className="text-slate-500 shrink-0">
+                                        🔔 แจ้งเตือนล่วงหน้า:
+                                      </span>
+                                      <span className="font-semibold text-emerald-700 text-right">
+                                        {flex.remindLabel}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {showCleanDesc && (
+                                    <>
+                                      <div className="border-t border-slate-200 my-1.5" />
+                                      <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                        <span className="font-bold text-slate-900 block mb-0.5">
+                                          📝 รายละเอียดงาน:
+                                        </span>
+                                        {cleanDesc}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+
+                                {/* Dark Overview Strip + Calendar Action */}
+                                <div className="rounded-xl bg-[#0F172A] px-3 py-2 flex items-center justify-between gap-2 text-white">
+                                  <div className="text-[11px] font-bold font-mono-tabular">
+                                    <span className="text-sky-400">
+                                      ทั้งหมด {flex.stats?.total ?? summaryMetrics.total}
+                                    </span>{' '}
+                                    ·{' '}
+                                    <span className="text-amber-400">
+                                      รอทำ {flex.stats?.pending ?? summaryMetrics.pendingCount}
+                                    </span>{' '}
+                                    ·{' '}
+                                    <span className="text-emerald-400">
+                                      เสร็จแล้ว{' '}
+                                      {flex.stats?.completed ?? summaryMetrics.completedCount}
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onOpenDateInCalendar(
+                                        flex.date || flex.dateTime.slice(0, 10) || todayStr
+                                      )
+                                    }
+                                    className="px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold hover:bg-[#05b34c] transition-colors whitespace-nowrap shrink-0"
+                                  >
+                                    📅 ดูในปฏิทิน
+                                  </button>
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
+                          );
+                        })()
                       ) : (
                         /* Plain Text Fallback */
                         <div className="rounded-2xl rounded-tl-xs px-4 py-3 text-xs leading-relaxed bg-white border border-slate-200 text-slate-800 shadow-2xs whitespace-pre-wrap">
@@ -2019,112 +2404,166 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         </p>
                       </div>
 
-                      <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-white">
-                        <div
-                          style={{
-                            backgroundColor: sampleCategory?.color || '#2563EB',
-                          }}
-                          className="px-4 py-3 text-white"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="px-2 py-0.5 rounded bg-black/25 text-[10px] font-bold uppercase">
-                              🔥 HIGH PRIORITY REMINDER
-                            </span>
-                            <span className="text-xs font-mono-tabular font-bold">
-                              {samplePreviewTask.time} น.
-                            </span>
-                          </div>
-                          <div
-                            className={`mt-1.5 ${
-                              lineSettings.cardFontSize === 'sm'
-                                ? 'text-xs'
-                                : lineSettings.cardFontSize === 'lg'
-                                ? 'text-base'
-                                : 'text-sm'
-                            } ${
-                              lineSettings.cardTitleWeight === 'regular'
-                                ? 'font-normal'
-                                : 'font-bold'
-                            } ${
-                              lineSettings.cardLineSpacing === 'tight'
-                                ? 'leading-tight'
-                                : lineSettings.cardLineSpacing === 'normal'
-                                ? 'leading-snug'
-                                : 'leading-relaxed'
-                            }`}
-                          >
-                            {samplePreviewTask.title}
-                          </div>
-                        </div>
-                        <div
-                          className={`p-3.5 space-y-2.5 ${
-                            lineSettings.cardFontSize === 'sm'
-                              ? 'text-[11px]'
-                              : lineSettings.cardFontSize === 'lg'
-                              ? 'text-sm'
-                              : 'text-xs'
-                          }`}
-                        >
-                          <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 space-y-1">
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">🗓️ วันที่:</span>
-                              <span
-                                className={`${
-                                  lineSettings.cardTitleWeight === 'regular'
-                                    ? 'font-normal'
-                                    : 'font-bold'
-                                } text-slate-900`}
-                              >
-                                {formatTaskDateRangeLabel(samplePreviewTask)} เวลา{' '}
-                                {samplePreviewTask.time} น.
-                              </span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">🗂️ หมวดหมู่:</span>
-                              <span
-                                className={
-                                  lineSettings.cardTitleWeight === 'regular'
-                                    ? 'font-normal'
-                                    : 'font-bold'
-                                }
-                                style={{ color: sampleCategory?.color || '#2563EB' }}
-                              >
-                                {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-2.5">
-                            <div className="text-[10px] font-bold text-indigo-700 uppercase">
-                              📊 สรุปภาพรวมตารางงานประจำวัน
-                            </div>
+                      {(() => {
+                        const samplePrioTheme = getPriorityHeaderTheme(
+                          samplePreviewTask.priority,
+                          sampleCategory?.name
+                        );
+                        return (
+                          <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-white">
                             <div
-                              className={`${
-                                lineSettings.cardTitleWeight === 'regular'
-                                  ? 'font-normal'
-                                  : 'font-bold'
-                              } text-indigo-950 mt-0.5`}
+                              style={{
+                                backgroundColor: samplePrioTheme.headerBg,
+                              }}
+                              className="px-4 py-3.5 text-white"
                             >
-                              ทั้งหมด {Math.max(1, summaryMetrics.total)} งาน · รอทำ{' '}
-                              <span className="text-amber-700">
-                                {summaryMetrics.total === 0 ? 1 : summaryMetrics.pendingCount} งาน
-                              </span>{' '}
-                              · เสร็จแล้ว{' '}
-                              <span className="text-emerald-700">
-                                {summaryMetrics.completedCount} งาน
-                              </span>
-                            </div>
-                          </div>
-
-                          {lineSettings.includeOpenAppButton !== false && (
-                            <div className="pt-1">
-                              <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
-                                เปิดดูปฏิทินของทีม
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  style={{
+                                    backgroundColor: samplePrioTheme.badgeBg,
+                                    color: samplePrioTheme.badgeText,
+                                  }}
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold"
+                                >
+                                  {samplePrioTheme.badgeLabel}
+                                </span>
+                                <span
+                                  style={{ backgroundColor: samplePrioTheme.headerStripBg }}
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold"
+                                >
+                                  🗂️ {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
+                                </span>
+                              </div>
+                              <div
+                                className={`mt-2 ${
+                                  lineSettings.cardFontSize === 'sm'
+                                    ? 'text-xs'
+                                    : lineSettings.cardFontSize === 'lg'
+                                    ? 'text-base'
+                                    : 'text-sm'
+                                } ${
+                                  lineSettings.cardTitleWeight === 'regular'
+                                    ? 'font-normal'
+                                    : 'font-bold'
+                                } ${
+                                  lineSettings.cardLineSpacing === 'tight'
+                                    ? 'leading-tight'
+                                    : lineSettings.cardLineSpacing === 'normal'
+                                    ? 'leading-snug'
+                                    : 'leading-relaxed'
+                                }`}
+                              >
+                                {samplePreviewTask.title}
+                              </div>
+                              <div className="mt-2.5 rounded-xl bg-white px-2.5 py-1.5 shadow-2xs flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold">
+                                  ⏰ {samplePreviewTask.time} น.
+                                </span>
+                                <span
+                                  style={{ color: samplePrioTheme.badgeText }}
+                                  className="text-xs font-bold"
+                                >
+                                  🗓️ {formatTaskDateRangeLabel(samplePreviewTask)}
+                                </span>
                               </div>
                             </div>
-                          )}
-                        </div>
-                      </div>
+                            <div
+                              className={`p-3.5 space-y-2.5 bg-[#F1F5F9] ${
+                                lineSettings.cardFontSize === 'sm'
+                                  ? 'text-[11px]'
+                                  : lineSettings.cardFontSize === 'lg'
+                                  ? 'text-sm'
+                                  : 'text-xs'
+                              }`}
+                            >
+                              <div
+                                style={{ borderLeft: `6px solid ${samplePrioTheme.headerBg}` }}
+                                className="rounded-xl bg-white border border-slate-200 p-3 space-y-2 shadow-2xs"
+                              >
+                                <div
+                                  style={{
+                                    backgroundColor: samplePrioTheme.badgeBg,
+                                    borderColor: samplePrioTheme.borderAccent,
+                                  }}
+                                  className="rounded-lg border p-2.5 space-y-1"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span
+                                      style={{ backgroundColor: samplePrioTheme.headerBg }}
+                                      className="inline-flex items-center px-2 py-0.5 rounded-md text-white font-mono-tabular font-bold text-xs"
+                                    >
+                                      ⏰ เวลา {samplePreviewTask.time} น.
+                                    </span>
+                                    <span
+                                      style={{ color: samplePrioTheme.badgeText }}
+                                      className="text-[10px] font-bold"
+                                    >
+                                      กำหนดการนัดหมาย
+                                    </span>
+                                  </div>
+                                  <div className="font-bold text-slate-900 text-xs pt-0.5">
+                                    🗓️ {formatTaskDateRangeLabel(samplePreviewTask)}
+                                  </div>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">🗂️ หมวดหมู่:</span>
+                                  <span
+                                    className={
+                                      lineSettings.cardTitleWeight === 'regular'
+                                        ? 'font-normal'
+                                        : 'font-bold'
+                                    }
+                                    style={{
+                                      color: sampleCategory?.color || samplePrioTheme.headerBg,
+                                    }}
+                                  >
+                                    {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">⚡ ความสำคัญ:</span>
+                                  <span
+                                    className={
+                                      lineSettings.cardTitleWeight === 'regular'
+                                        ? 'font-normal'
+                                        : 'font-bold'
+                                    }
+                                    style={{ color: samplePrioTheme.badgeText }}
+                                  >
+                                    {samplePrioTheme.shortLabel}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#0F172A] p-2.5 text-center">
+                                <div>
+                                  <span className="text-[11px] font-bold text-sky-400 font-mono-tabular">
+                                    ทั้งหมด {Math.max(1, summaryMetrics.total)}
+                                  </span>
+                                </div>
+                                <div className="border-x border-slate-700">
+                                  <span className="text-[11px] font-bold text-amber-400 font-mono-tabular">
+                                    รอทำ {summaryMetrics.total === 0 ? 1 : summaryMetrics.pendingCount}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[11px] font-bold text-emerald-400 font-mono-tabular">
+                                    เสร็จแล้ว {summaryMetrics.completedCount}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {lineSettings.includeOpenAppButton !== false && (
+                                <div className="pt-1">
+                                  <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
+                                    📅 เปิดดูปฏิทินของทีม
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

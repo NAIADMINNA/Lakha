@@ -8,6 +8,7 @@ import {
   extractThaiTime,
   formatSummaryCardHeaderDate,
   formatTaskDateRangeLabel,
+  getPriorityHeaderTheme,
   inferTaskEndDate,
 } from './src/services/lineCommandParser';
 
@@ -564,6 +565,7 @@ function buildSingleTaskReminderFlexMessage(params: {
   taskTitle: string;
   description?: string;
   date: string;
+  endDate?: string;
   time: string;
   categoryName: string;
   categoryColor?: string;
@@ -583,10 +585,35 @@ function buildSingleTaskReminderFlexMessage(params: {
     completed: number;
   };
 }) {
-  const readableDate = formatThaiDateReadable(params.date);
-  const isHigh = params.priority === 'high';
+  const inferredEnd = inferTaskEndDate({
+    date: params.date,
+    endDate: params.endDate,
+    title: params.taskTitle,
+    description: params.description || '',
+  });
+  const readableDate =
+    inferredEnd && inferredEnd > params.date
+      ? formatTaskDateRangeLabel({ date: params.date, endDate: inferredEnd }, 'short')
+      : formatThaiDateReadable(params.date);
+  const fullHeaderDate = formatSummaryCardHeaderDate(params.date, [
+    {
+      date: params.date,
+      endDate: inferredEnd,
+      title: params.taskTitle,
+      description: params.description,
+    },
+  ]);
+
+  const prioTheme = getPriorityHeaderTheme(params.priority, params.categoryName);
   const isCompact = params.messageFormat === 'compact_flex';
-  const showDesc = params.includeDescription !== false && Boolean(params.description);
+  const rawDesc = String(params.description || '').trim();
+  const showDesc =
+    params.includeDescription !== false &&
+    Boolean(rawDesc) &&
+    rawDesc !== String(params.taskTitle || '').trim() &&
+    !rawDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+    !rawDesc.startsWith('บันทึกผ่านแชท LINE') &&
+    !rawDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
   const showCalBtn = params.includeGoogleCalendarButton !== false;
   const showAppBtn = params.includeOpenAppButton !== false;
 
@@ -603,14 +630,20 @@ function buildSingleTaskReminderFlexMessage(params: {
       ? '4px'
       : '6px';
 
-  const headerBg =
-    /^#[0-9A-Fa-f]{6}$/.test(params.categoryColor || '') ? params.categoryColor! : '#4F46E5';
+  const catColorHex =
+    /^#[0-9A-Fa-f]{6}$/.test(params.categoryColor || '')
+      ? params.categoryColor!
+      : prioTheme.headerBg;
   const googleCalUrl = buildGoogleCalUrl(
     params.taskTitle,
     params.date,
     params.time,
     params.description || ''
   );
+
+  const scheduleBoardUrl = params.appUrl.includes('section=calendar')
+    ? params.appUrl.replace('section=calendar', 'section=schedule')
+    : params.appUrl;
 
   const footerButtons: Record<string, unknown>[] = [];
   if (showAppBtn) {
@@ -621,7 +654,7 @@ function buildSingleTaskReminderFlexMessage(params: {
       height: 'sm',
       action: {
         type: 'uri',
-        label: 'เปิดดูปฏิทินและจัดการงาน',
+        label: '📅 เปิดดูปฏิทินของทีม',
         uri: params.appUrl,
       },
     });
@@ -633,8 +666,8 @@ function buildSingleTaskReminderFlexMessage(params: {
       height: 'sm',
       action: {
         type: 'uri',
-        label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)',
-        uri: 'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec?view=calendar&openExternalBrowser=1',
+        label: '📺 เปิดตารางงานนำเสนอ (รายวัน)',
+        uri: scheduleBoardUrl,
       },
     });
   } else if (showCalBtn && footerButtons.length < 2) {
@@ -650,26 +683,52 @@ function buildSingleTaskReminderFlexMessage(params: {
     });
   }
 
-  const metadataRows: Record<string, unknown>[] = [
+  const detailCardContents: Record<string, unknown>[] = [
+    // Prominent Date & Time Highlight Box inside Body
     {
       type: 'box',
-      layout: 'baseline',
-      spacing: 'sm',
+      layout: 'vertical',
+      backgroundColor: prioTheme.badgeBg,
+      cornerRadius: '10px',
+      paddingAll: '12px',
+      borderWidth: '1px',
+      borderColor: prioTheme.borderAccent,
       contents: [
         {
-          type: 'text',
-          text: '🗓️ วันที่',
-          color: '#64748B',
-          size: bodySize,
-          flex: 2,
+          type: 'box',
+          layout: 'horizontal',
+          alignItems: 'center',
+          contents: [
+            {
+              type: 'box',
+              layout: 'vertical',
+              backgroundColor: prioTheme.headerBg,
+              cornerRadius: '6px',
+              paddingStart: '10px',
+              paddingEnd: '10px',
+              paddingTop: '4px',
+              paddingBottom: '4px',
+              flex: 0,
+              contents: [
+                {
+                  type: 'text',
+                  text: `⏰ เวลา ${params.time} น.`,
+                  color: '#FFFFFF',
+                  size: 'md',
+                  weight: 'bold',
+                },
+              ],
+            },
+          ],
         },
         {
           type: 'text',
-          text: readableDate,
+          text: `🗓️ ${fullHeaderDate}`,
           color: '#0F172A',
-          size: bodySize,
-          weight: textWeight,
-          flex: 5,
+          size: 'sm',
+          weight: 'bold',
+          margin: 'sm',
+          wrap: true,
         },
       ],
     },
@@ -677,50 +736,170 @@ function buildSingleTaskReminderFlexMessage(params: {
       type: 'box',
       layout: 'baseline',
       spacing: 'sm',
-      contents: [
-        {
-          type: 'text',
-          text: '⏰ เวลา',
-          color: '#64748B',
-          size: bodySize,
-          flex: 2,
-        },
-        {
-          type: 'text',
-          text: `${params.time} น.`,
-          color: '#059669',
-          size: timeValueSize,
-          weight: textWeight,
-          flex: 5,
-        },
-      ],
-    },
-    {
-      type: 'box',
-      layout: 'baseline',
-      spacing: 'sm',
+      margin: 'md',
       contents: [
         {
           type: 'text',
           text: '🗂️ หมวดหมู่',
           color: '#64748B',
           size: bodySize,
-          flex: 2,
+          flex: 3,
         },
         {
           type: 'text',
           text: params.categoryName || 'ทั่วไป',
-          color: headerBg,
+          color: catColorHex,
           size: bodySize,
           weight: textWeight,
-          flex: 5,
+          flex: 7,
+          wrap: true,
+        },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'baseline',
+      spacing: 'sm',
+      margin: 'sm',
+      contents: [
+        {
+          type: 'text',
+          text: '⚡ ความสำคัญ',
+          color: '#64748B',
+          size: bodySize,
+          flex: 3,
+        },
+        {
+          type: 'text',
+          text: prioTheme.shortLabel,
+          color: prioTheme.badgeText,
+          size: bodySize,
+          weight: textWeight,
+          flex: 7,
           wrap: true,
         },
       ],
     },
   ];
 
+  if (showDesc) {
+    detailCardContents.push({
+      type: 'separator',
+      margin: 'md',
+      color: '#E2E8F0',
+    });
+    detailCardContents.push({
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#F8FAFC',
+      cornerRadius: '8px',
+      paddingAll: '10px',
+      margin: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: '📝 รายละเอียดงาน',
+          size: 'xxs',
+          weight: 'bold',
+          color: '#475569',
+        },
+        {
+          type: 'text',
+          text: rawDesc,
+          size: bodySize,
+          lineSpacing: lineSpacingPx,
+          color: '#1E293B',
+          margin: 'xs',
+          wrap: true,
+        },
+      ],
+    });
+  }
+
   const summaryStats = params.stats;
+
+  const bodyContents: Record<string, unknown>[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      backgroundColor: '#FFFFFF',
+      cornerRadius: '12px',
+      borderWidth: '1px',
+      borderColor: prioTheme.priorityKey === 'high' ? '#FCA5A5' : '#E2E8F0',
+      contents: [
+        {
+          type: 'box',
+          layout: 'vertical',
+          width: '6px',
+          flex: 0,
+          backgroundColor: prioTheme.headerBg,
+          contents: [{ type: 'filler' }],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          flex: 1,
+          paddingAll: '14px',
+          contents: detailCardContents,
+        },
+      ],
+    },
+  ];
+
+  if (summaryStats) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'horizontal',
+      backgroundColor: '#0F172A',
+      cornerRadius: '10px',
+      paddingAll: '10px',
+      margin: 'md',
+      contents: [
+        {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'text',
+              text: `ทั้งหมด ${summaryStats.total}`,
+              size: 'xxs',
+              weight: 'bold',
+              color: '#38BDF8',
+              align: 'center',
+            },
+          ],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'text',
+              text: `รอทำ ${summaryStats.pending}`,
+              size: 'xxs',
+              weight: 'bold',
+              color: '#FBBF24',
+              align: 'center',
+            },
+          ],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'text',
+              text: `เสร็จแล้ว ${summaryStats.completed}`,
+              size: 'xxs',
+              weight: 'bold',
+              color: '#34D399',
+              align: 'center',
+            },
+          ],
+        },
+      ],
+    });
+  }
 
   return {
     type: 'flex',
@@ -731,8 +910,8 @@ function buildSingleTaskReminderFlexMessage(params: {
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: headerBg,
-        paddingAll: isCompact ? '14px' : '20px',
+        backgroundColor: prioTheme.headerBg,
+        paddingAll: isCompact ? '14px' : '18px',
         contents: [
           {
             type: 'box',
@@ -742,17 +921,18 @@ function buildSingleTaskReminderFlexMessage(params: {
               {
                 type: 'box',
                 layout: 'vertical',
-                backgroundColor: isHigh ? '#DC2626' : '#06C755',
+                backgroundColor: prioTheme.badgeBg,
                 cornerRadius: '6px',
-                paddingAll: '4px',
                 paddingStart: '8px',
                 paddingEnd: '8px',
+                paddingTop: '4px',
+                paddingBottom: '4px',
                 flex: 0,
                 contents: [
                   {
                     type: 'text',
-                    text: isHigh ? '🔥 HIGH PRIORITY' : '⏰ TASK REMINDER',
-                    color: '#FFFFFF',
+                    text: prioTheme.badgeLabel,
+                    color: prioTheme.badgeText,
                     size: 'xxs',
                     weight: 'bold',
                   },
@@ -760,11 +940,12 @@ function buildSingleTaskReminderFlexMessage(params: {
               },
               {
                 type: 'text',
-                text: `${params.time} น.`,
+                text: `🗂️ ${params.categoryName || 'ทั่วไป'}`,
                 color: '#FFFFFF',
-                size: 'sm',
+                size: 'xs',
                 weight: 'bold',
                 align: 'end',
+                wrap: false,
               },
             ],
           },
@@ -778,70 +959,62 @@ function buildSingleTaskReminderFlexMessage(params: {
             wrap: true,
             margin: 'md',
           },
+          // High-Contrast Date & Time Spotlight Banner inside Header
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#FFFFFF',
+            cornerRadius: '10px',
+            paddingAll: '10px',
+            margin: 'md',
+            contents: [
+              {
+                type: 'box',
+                layout: 'horizontal',
+                alignItems: 'center',
+                spacing: 'sm',
+                contents: [
+                  {
+                    type: 'box',
+                    layout: 'vertical',
+                    backgroundColor: '#0F172A',
+                    cornerRadius: '6px',
+                    paddingStart: '10px',
+                    paddingEnd: '10px',
+                    paddingTop: '4px',
+                    paddingBottom: '4px',
+                    flex: 0,
+                    contents: [
+                      {
+                        type: 'text',
+                        text: `⏰ ${params.time} น.`,
+                        color: '#FFFFFF',
+                        size: 'sm',
+                        weight: 'bold',
+                      },
+                    ],
+                  },
+                  {
+                    type: 'text',
+                    text: `🗓️ ${readableDate}`,
+                    color: prioTheme.badgeText,
+                    size: 'sm',
+                    weight: 'bold',
+                    flex: 1,
+                    wrap: true,
+                  },
+                ],
+              },
+            ],
+          },
         ],
       },
       body: {
         type: 'box',
         layout: 'vertical',
-        paddingAll: isCompact ? '14px' : '20px',
-        spacing: 'md',
-        contents: [
-          {
-            type: 'box',
-            layout: 'vertical',
-            backgroundColor: '#F8FAFC',
-            cornerRadius: '10px',
-            paddingAll: '12px',
-            spacing: 'sm',
-            borderWidth: '1px',
-            borderColor: '#E2E8F0',
-            contents: metadataRows,
-          },
-          ...(showDesc
-            ? [
-                {
-                  type: 'text',
-                  text: params.description,
-                  size: bodySize,
-                  lineSpacing: lineSpacingPx,
-                  color: '#475569',
-                  wrap: true,
-                },
-              ]
-            : []),
-          ...(summaryStats
-            ? [
-                {
-                  type: 'box',
-                  layout: 'vertical',
-                  backgroundColor: '#EEF2FF',
-                  cornerRadius: '10px',
-                  paddingAll: '10px',
-                  borderWidth: '1px',
-                  borderColor: '#C7D2FE',
-                  contents: [
-                    {
-                      type: 'text',
-                      text: `📊 สรุปภาพรวมตารางงาน (${readableDate})`,
-                      size: 'xxs',
-                      weight: 'bold',
-                      color: '#4338CA',
-                    },
-                    {
-                      type: 'text',
-                      text: `ทั้งหมด ${summaryStats.total} งาน · รอทำ ${summaryStats.pending} งาน · เสร็จแล้ว ${summaryStats.completed} งาน`,
-                      size: bodySize,
-                      weight: textWeight,
-                      lineSpacing: lineSpacingPx,
-                      color: '#1E1B4B',
-                      margin: 'xs',
-                      wrap: true,
-                    },
-                  ],
-                },
-              ]
-            : []),
-        ],
+        paddingAll: isCompact ? '14px' : '16px',
+        backgroundColor: '#F1F5F9',
+        contents: bodyContents,
       },
       ...(footerButtons.length > 0
         ? {
@@ -849,7 +1022,10 @@ function buildSingleTaskReminderFlexMessage(params: {
               type: 'box',
               layout: 'vertical',
               spacing: 'sm',
-              paddingAll: isCompact ? '12px' : '16px',
+              paddingAll: isCompact ? '12px' : '14px',
+              backgroundColor: '#FFFFFF',
+              borderWidth: '1px',
+              borderColor: '#E2E8F0',
               contents: footerButtons,
             },
           }
