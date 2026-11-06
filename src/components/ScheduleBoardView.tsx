@@ -13,7 +13,6 @@ import {
   Printer,
   Search,
   Sparkles,
-  Tv,
 } from 'lucide-react';
 import { Category, Task, TaskPriority, TaskStatus } from '../types';
 import {
@@ -409,48 +408,44 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       >
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-indigo-600">
-              <Tv className="h-4 w-4 shrink-0" />
-              <span>ตารางสรุปงานรายวันและกำหนดการ (โหมดสื่อแสดงผล / นำเสนอในที่ประชุม)</span>
-            </div>
             <h1
               className={`font-bold tracking-tight ${
                 isLargeText ? 'text-2xl sm:text-3xl' : 'text-xl sm:text-2xl'
               } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
             >
-              ตารางสรุปภารกิจและกำหนดการปฏิบัติงาน
+              กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
             </h1>
-            <p
-              className={`text-xs sm:text-sm ${
-                isDarkDisplay ? 'text-slate-300' : 'text-slate-600'
-              }`}
-            >
-              แสดงรายการงานในแต่ละวันพร้อมเวลา สถานที่/รายละเอียด และสถานะความคืบหน้าแบบเรียลไทม์
-            </p>
           </div>
 
           {/* Right Live Thailand Digital Clock & Quick Presentation Controls */}
           <div className="flex flex-wrap items-center gap-4">
             <div
-              className={`rounded-xl border px-4 py-3 text-right ${
+              className={`rounded-2xl border px-5 py-3.5 sm:px-6 sm:py-4 text-right transition-colors ${
                 isDarkDisplay
-                  ? 'bg-slate-950 border-slate-800'
-                  : 'bg-slate-50 border-slate-200/90'
+                  ? 'bg-white border-slate-200 text-slate-900 shadow-md'
+                  : 'bg-gradient-to-br from-indigo-50/90 via-white to-emerald-50/70 border-indigo-200/90 text-slate-900 shadow-xs'
               }`}
             >
               <div
-                className={`text-xs font-semibold ${
-                  isDarkDisplay ? 'text-emerald-400' : 'text-indigo-700'
-                }`}
+                className={`font-bold tracking-tight ${
+                  isLargeText
+                    ? 'text-base sm:text-lg md:text-xl'
+                    : 'text-sm sm:text-base md:text-lg'
+                } text-indigo-700`}
               >
-                {formatFullThaiDayHeader(todayStr)}
+                🗓️ {formatFullThaiDayHeader(todayStr)}
               </div>
-              <div className="mt-0.5 flex items-baseline justify-end gap-2">
-                <span className="text-xs text-slate-500">เวลาปัจจุบัน</span>
+              <div className="mt-1.5 flex items-baseline justify-end gap-2.5">
+                <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-600">
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span>เวลาปัจจุบัน</span>
+                </span>
                 <span
-                  className={`font-mono-tabular font-bold tracking-tight ${
-                    isLargeText ? 'text-2xl sm:text-3xl' : 'text-xl sm:text-2xl'
-                  } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
+                  className={`font-mono-tabular font-black tracking-tight text-slate-900 ${
+                    isLargeText
+                      ? 'text-3xl sm:text-4xl md:text-5xl'
+                      : 'text-2xl sm:text-3xl md:text-4xl'
+                  }`}
                 >
                   {nowSec} น.
                 </span>
@@ -812,7 +807,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 <tr
                   className={`border-b text-xs font-bold ${
                     isDarkDisplay
-                      ? 'bg-slate-950 border-slate-800 text-slate-300'
+                      ? 'bg-white border-slate-200 text-slate-900'
                       : 'bg-slate-50 border-slate-200 text-slate-700'
                   }`}
                 >
@@ -1006,12 +1001,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 {/* Day Header Bar */}
                 <div
                   className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 ${
-                    isTodayGroup
-                      ? isDarkDisplay
-                        ? 'bg-indigo-950/60 border-slate-800'
-                        : 'bg-indigo-50/70 border-indigo-200/80'
-                      : isDarkDisplay
-                      ? 'bg-slate-950/60 border-slate-800'
+                    isDarkDisplay
+                      ? 'bg-white border-slate-200 text-slate-900'
+                      : isTodayGroup
+                      ? 'bg-indigo-50/70 border-indigo-200/80'
                       : 'bg-slate-50/80 border-slate-200/80'
                   }`}
                 >
@@ -1022,9 +1015,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       }`}
                     />
                     <h2
-                      className={`font-bold ${
+                      className={`font-bold text-slate-900 ${
                         isLargeText ? 'text-xl sm:text-2xl' : 'text-base sm:text-lg'
-                      } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
+                      }`}
                     >
                       {!expandMultiDay
                         ? formatSummaryCardHeaderDate(
@@ -1047,7 +1040,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-4 text-xs">
-                    <div className="font-mono-tabular font-semibold text-slate-500">
+                    <div className="font-mono-tabular font-semibold text-slate-600">
                       รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
                     </div>
                     <button
@@ -1106,17 +1099,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             >
                               <Clock className="h-4 w-4 text-indigo-500 shrink-0" />
                               <span>{timeRangeLabel || task.time} น.</span>
-                            </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">
-                              {isDone
-                                ? 'ดำเนินการเสร็จแล้ว'
-                                : !expandMultiDay && totalSpanDays > 1
-                                ? `ต่อเนื่อง ${totalSpanDays} วัน`
-                                : isCurrentDayPassed
-                                ? 'ถึงกำหนดเวลาแล้ว'
-                                : displayDate === todayStr
-                                ? 'กำหนดการวันนี้'
-                                : formatThaiDateDisplay(displayDate, 'short')}
                             </div>
                           </div>
 

@@ -1406,11 +1406,21 @@ async function startServer() {
       .filter((t): t is Record<string, unknown> => Boolean(t && typeof t === 'object'))
       .map((t, idx) => {
         const rawSource = String(t.source || 'web').split(GAS_META_DELIM)[0] || 'web';
+        const dateStr =
+          typeof t.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.date)
+            ? t.date
+            : undefined;
+        const timeStr =
+          typeof t.time === 'string' && /^\d{2}:\d{2}$/.test(t.time)
+            ? t.time
+            : undefined;
         const endDate =
           typeof t.endDate === 'string' && t.endDate > String(t.date || '')
             ? t.endDate
             : undefined;
         const metaObj: Record<string, unknown> = {};
+        if (dateStr) metaObj.d = dateStr;
+        if (timeStr) metaObj.t = timeStr;
         if (endDate) metaObj.e = endDate;
         if (idx === 0) {
           if (cleanCats) metaObj.c = cleanCats;
@@ -1446,10 +1456,18 @@ async function startServer() {
         if (metaJson) {
           try {
             const parsedMeta = JSON.parse(metaJson) as {
+              d?: string;
+              t?: string;
               e?: string;
               c?: unknown[];
               m?: unknown[];
             };
+            if (typeof parsedMeta.d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.d)) {
+              rec.date = parsedMeta.d;
+            }
+            if (typeof parsedMeta.t === 'string' && /^\d{2}:\d{2}$/.test(parsedMeta.t)) {
+              rec.time = parsedMeta.t;
+            }
             if (typeof parsedMeta.e === 'string' && parsedMeta.e && !rec.endDate) {
               rec.endDate = parsedMeta.e;
             }

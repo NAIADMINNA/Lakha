@@ -68,7 +68,34 @@ const TEAM_MEMBERS_HEADERS = [
   'Status',
 ];
 
-function taskToRow(t: Task): string[] {
+const GAS_META_DELIM = '#SCMETA#';
+
+function taskToRow(
+  t: Task,
+  idx = 0,
+  categories: Category[] = [],
+  teamMembers: TeamMember[] = []
+): string[] {
+  const baseSource = String(t.source || 'web').split(GAS_META_DELIM)[0] || 'web';
+  const metaObj: Record<string, unknown> = {};
+  if (t.date && /^\d{4}-\d{2}-\d{2}$/.test(t.date)) {
+    metaObj.d = t.date;
+  }
+  if (t.time && /^\d{2}:\d{2}$/.test(t.time)) {
+    metaObj.t = t.time;
+  }
+  if (t.endDate && t.endDate > t.date) {
+    metaObj.e = t.endDate;
+  }
+  if (idx === 0) {
+    if (categories.length > 0) metaObj.c = categories;
+    if (teamMembers.length > 0) metaObj.m = teamMembers;
+  }
+  const encodedSource =
+    Object.keys(metaObj).length > 0
+      ? `${baseSource}${GAS_META_DELIM}${JSON.stringify(metaObj)}`
+      : baseSource;
+
   return [
     t.id,
     t.title,
@@ -80,7 +107,7 @@ function taskToRow(t: Task): string[] {
     t.status,
     String(t.remindMinutesBefore),
     t.lineNotified ? 'TRUE' : 'FALSE',
-    t.source,
+    encodedSource,
     t.updatedAt,
     t.assigneeId || '',
     t.assigneeName || '',
@@ -170,13 +197,40 @@ function rowToTask(row: string[]): Task | null {
       ? TaskStatus.IN_PROGRESS
       : TaskStatus.PENDING;
 
-  const sourceRaw = (row[10] || 'sheets').toLowerCase();
+  const rawSourceCell = String(row[10] || 'sheets');
+  const [baseSourceStr, metaJson] = rawSourceCell.split(GAS_META_DELIM);
+  const sourceRaw = (baseSourceStr || 'sheets').toLowerCase();
   const source: 'web' | 'line' | 'sheets' =
     sourceRaw === 'line' ? 'line' : sourceRaw === 'web' ? 'web' : 'sheets';
 
-  const startDate = normalizeSheetDateYMD(row[3]);
+  let metaDate: string | undefined;
+  let metaTime: string | undefined;
+  let metaEndDate: string | undefined;
+  if (metaJson) {
+    try {
+      const parsedMeta = JSON.parse(metaJson) as {
+        d?: string;
+        t?: string;
+        e?: string;
+      };
+      if (parsedMeta.d && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.d)) {
+        metaDate = parsedMeta.d;
+      }
+      if (parsedMeta.t && /^\d{2}:\d{2}$/.test(parsedMeta.t)) {
+        metaTime = parsedMeta.t;
+      }
+      if (parsedMeta.e && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.e)) {
+        metaEndDate = parsedMeta.e;
+      }
+    } catch {
+      // Ignore malformed metadata
+    }
+  }
+
+  const startDate = metaDate || normalizeSheetDateYMD(row[3]);
   const rawEndDate = row[14] ? String(row[14]).trim() : '';
-  const normalizedEndDate = rawEndDate ? normalizeSheetDateYMD(rawEndDate) : undefined;
+  const normalizedEndDate =
+    metaEndDate || (rawEndDate ? normalizeSheetDateYMD(rawEndDate) : undefined);
 
   return {
     id: String(row[0]).trim(),
@@ -187,7 +241,7 @@ function rowToTask(row: string[]): Task | null {
       normalizedEndDate && normalizedEndDate > startDate
         ? normalizedEndDate
         : undefined,
-    time: normalizeSheetTimeHM(row[4]),
+    time: metaTime || normalizeSheetTimeHM(row[4]),
     categoryId: String(row[5] || 'cat-work').trim(),
     priority,
     status,
@@ -405,6 +459,7 @@ export async function createDatabaseSpreadsheet(
     body: JSON.stringify({
       properties: {
         title,
+        timeZone: 'Asia/Bangkok',
       },
       sheets: [
         {
@@ -489,7 +544,10 @@ export async function writeDatabaseToSheet(
     }),
   });
 
-  const taskRows = [TASKS_HEADERS, ...tasks.map(taskToRow)];
+  const taskRows = [
+    TASKS_HEADERS,
+    ...tasks.map((t, idx) => taskToRow(t, idx, categories, teamMembers)),
+  ];
   const categoryRows = [CATEGORIES_HEADERS, ...categories.map(categoryToRow)];
   const logRows = [LINE_LOGS_HEADERS, ...logs.slice(0, 200).map(logToRow)];
   const memberRows = [TEAM_MEMBERS_HEADERS, ...teamMembers.map(teamMemberToRow)];
@@ -501,7 +559,7 @@ export async function writeDatabaseToSheet(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      valueInputOption: 'USER_ENTERED',
+      valueInputOption: 'RAW',
       data: [
         {
           range: 'Tasks!A1',

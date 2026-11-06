@@ -703,6 +703,12 @@ export default function App() {
           | 'line'
           | 'sheets';
         const metaObj: Record<string, unknown> = {};
+        if (t.date && /^\d{4}-\d{2}-\d{2}$/.test(t.date)) {
+          metaObj.d = t.date;
+        }
+        if (t.time && /^\d{2}:\d{2}$/.test(t.time)) {
+          metaObj.t = t.time;
+        }
         if (t.endDate && t.endDate > t.date) {
           metaObj.e = t.endDate;
         }
@@ -749,10 +755,24 @@ export default function App() {
           if (metaJson) {
             try {
               const parsedMeta = JSON.parse(metaJson) as {
+                d?: string;
+                t?: string;
                 e?: string;
                 c?: Category[];
                 m?: TeamMember[];
               };
+              if (
+                typeof parsedMeta.d === 'string' &&
+                /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.d)
+              ) {
+                copy.date = parsedMeta.d;
+              }
+              if (
+                typeof parsedMeta.t === 'string' &&
+                /^\d{2}:\d{2}$/.test(parsedMeta.t)
+              ) {
+                copy.time = parsedMeta.t;
+              }
               if (typeof parsedMeta.e === 'string' && parsedMeta.e && !copy.endDate) {
                 copy.endDate = parsedMeta.e;
               }
@@ -2447,7 +2467,7 @@ export default function App() {
     return () => clearInterval(gasTimer);
   }, [pullLatestTeamCalendar]);
 
-  // When Admin signs in with Google OAuth, automatically clean up any stale deleted rows in Google Sheets so deleted tasks never resurrect
+  // When Admin signs in with Google OAuth, automatically clean up any stale deleted rows in Google Sheets after initial pull completes
   const hasCleanedConnectedSheetRef = useRef<boolean>(false);
   useEffect(() => {
     if (!sheetMeta?.spreadsheetId || !accessToken) {
@@ -2457,11 +2477,12 @@ export default function App() {
     if (hasCleanedConnectedSheetRef.current) return;
     hasCleanedConnectedSheetRef.current = true;
 
-    (async () => {
+    const timer = setTimeout(async () => {
       try {
         const token = await getAccessToken();
         if (!token || !sheetMeta?.spreadsheetId) return;
         const cleanTasks = tasksRef.current.filter((t) => !isTaskPurgedOrDeleted(t));
+        if (cleanTasks.length === 0) return;
         await writeDatabaseToSheet(
           token,
           sheetMeta.spreadsheetId,
@@ -2473,7 +2494,8 @@ export default function App() {
       } catch {
         // Silent background cleanup
       }
-    })();
+    }, 3000);
+    return () => clearTimeout(timer);
   }, [accessToken, isTaskPurgedOrDeleted, lineLogs, sheetMeta?.spreadsheetId]);
 
   // Save (Create or Edit) Task

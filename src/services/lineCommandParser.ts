@@ -2171,14 +2171,20 @@ function formatCellDateYMD(val) {
   return s;
 }
 
-function formatCellTimeHM(val) {
+function formatCellTimeHM(val, sheetTz) {
   if (!val) return '09:00';
   if (Object.prototype.toString.call(val) === '[object Date]' && !isNaN(val.getTime())) {
-    return Utilities.formatDate(val, 'Asia/Bangkok', 'HH:mm');
+    var tz = (val.getFullYear && val.getFullYear() < 1905 && sheetTz) ? sheetTz : 'Asia/Bangkok';
+    return Utilities.formatDate(val, tz, 'HH:mm');
   }
   var s = String(val).replace(/^'/, '').trim();
-  var m = s.match(/^(\\d{1,2})[:.](\\d{2})/);
-  if (m) return ('0' + m[1]).slice(-2) + ':' + m[2];
+  var m = s.match(/(\\d{1,2})[:.](\\d{2})/);
+  if (m) {
+    var hh = parseInt(m[1], 10);
+    if (/pm/i.test(s) && hh < 12) hh += 12;
+    if (/am/i.test(s) && hh === 12) hh = 0;
+    return ('0' + hh).slice(-2) + ':' + m[2];
+  }
   return '09:00';
 }
 
@@ -2253,27 +2259,45 @@ function readSheetTasksForWeb() {
   try {
     var ss = openSafeSpreadsheet();
     if (ss) {
+      var sheetTz = ss.getSpreadsheetTimeZone ? ss.getSpreadsheetTimeZone() : 'Asia/Bangkok';
       var taskSheet = ss.getSheetByName('Tasks');
       if (taskSheet) {
         hasTasksSheet = true;
         if (taskSheet.getLastRow() > 1) {
-          var rows = taskSheet.getDataRange().getValues().slice(1);
+          var range = taskSheet.getDataRange();
+          var rows = range.getValues().slice(1);
+          var dispRows = range.getDisplayValues().slice(1);
           sheetTasks = rows.map(function(r, idx) {
-            var startD = formatCellDateYMD(r[3]);
-            var endD = r[14] ? formatCellDateYMD(r[14]) : '';
+            var dr = dispRows[idx] || [];
+            var rawSourceStr = String(r[10] || 'sheets');
+            var metaDate = '';
+            var metaTime = '';
+            var metaEnd = '';
+            if (rawSourceStr.indexOf('#SCMETA#') !== -1) {
+              try {
+                var metaJson = rawSourceStr.split('#SCMETA#')[1];
+                var parsedM = JSON.parse(metaJson);
+                if (parsedM && parsedM.d) metaDate = String(parsedM.d);
+                if (parsedM && parsedM.t) metaTime = String(parsedM.t);
+                if (parsedM && parsedM.e) metaEnd = String(parsedM.e);
+              } catch (e) {}
+            }
+            var startD = metaDate || formatCellDateYMD(dr[3] || r[3]);
+            var endD = metaEnd || ((dr[14] || r[14]) ? formatCellDateYMD(dr[14] || r[14]) : '');
+            var timeHM = metaTime || formatCellTimeHM(dr[4] || r[4], sheetTz);
             return {
               id: String(r[0] || ('sheet-task-' + idx)),
               title: String(r[1] || 'งาน'),
               description: String(r[2] || ''),
               date: startD,
               endDate: (endD && endD > startD) ? endD : undefined,
-              time: formatCellTimeHM(r[4]),
+              time: timeHM,
               categoryId: String(r[5] || 'cat-work'),
               priority: String(r[6] || 'medium'),
               status: String(r[7] || 'pending'),
               remindMinutesBefore: Number(r[8] || 1),
               lineNotified: String(r[9]).toUpperCase() === 'TRUE',
-              source: String(r[10] || 'sheets'),
+              source: rawSourceStr,
               updatedAt: String(r[11] || new Date().toISOString())
             };
           }).filter(function(t) { return Boolean(t.title && t.date); });
