@@ -3,7 +3,13 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { extractThaiDate, extractThaiTime } from './src/services/lineCommandParser';
+import {
+  extractThaiDate,
+  extractThaiTime,
+  formatSummaryCardHeaderDate,
+  formatTaskDateRangeLabel,
+  inferTaskEndDate,
+} from './src/services/lineCommandParser';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
@@ -18,6 +24,7 @@ interface IncomingLineWebhookItem {
 interface DigestTaskItem {
   title: string;
   date: string;
+  endDate?: string;
   time: string;
   categoryName: string;
   categoryColor: string;
@@ -165,12 +172,11 @@ function buildDailyDigestFlexMessage(
   const cleanDateYMD = /^\d{4}-\d{2}-\d{2}/.test(String(dateStr || ''))
     ? String(dateStr).slice(0, 10)
     : todayYMD;
-  const fullThaiDate = formatThaiFullDateWithDay(cleanDateYMD);
-  const readableDate = formatThaiDateReadable(cleanDateYMD);
-
   const sortedTasks = [...tasksList].sort((a, b) =>
     String(a.time || '09:00').localeCompare(String(b.time || '09:00'))
   );
+  const fullThaiDate = formatSummaryCardHeaderDate(cleanDateYMD, sortedTasks);
+  const readableDate = formatThaiDateReadable(cleanDateYMD);
 
   const totalCount = sortedTasks.length;
   const completedCount = sortedTasks.filter((t) => t.status === 'completed').length;
@@ -296,6 +302,30 @@ function buildDailyDigestFlexMessage(
         margin: 'sm',
       },
     ];
+
+    const itemStart = String(t.date || cleanDateYMD).slice(0, 10);
+    const itemEnd =
+      inferTaskEndDate({
+        date: itemStart,
+        endDate: t.endDate ? String(t.endDate).slice(0, 10) : undefined,
+        title: t.title || '',
+        description: t.description || '',
+      }) || itemStart;
+
+    if (itemEnd > itemStart) {
+      cardContents.push({
+        type: 'text',
+        text: `🗓️ ต่อเนื่อง: ${formatTaskDateRangeLabel(
+          { date: itemStart, endDate: itemEnd },
+          'short'
+        )}`,
+        size: 'xxs',
+        weight: 'bold',
+        color: '#4338CA',
+        wrap: true,
+        margin: 'xs',
+      });
+    }
 
     if (hasMeaningfulDesc) {
       cardContents.push({
@@ -3153,6 +3183,7 @@ async function startServer() {
                 return {
                   title: String(t.title || 'รายการงาน'),
                   date: tDate,
+                  endDate: t.endDate ? String(t.endDate) : undefined,
                   time: tTime,
                   categoryName: catInfo?.name || 'งานตารางทีม',
                   categoryColor: catInfo?.color || '#2563EB',

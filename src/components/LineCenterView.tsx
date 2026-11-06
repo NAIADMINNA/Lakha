@@ -29,9 +29,11 @@ import {
 } from '../types';
 import {
   REMINDER_TIMING_OPTIONS,
+  consolidateContinuousTasks,
   doesTaskTriggerNotification,
   formatLocalDateYMD,
   formatRemindMinutesLabel,
+  formatSummaryCardHeaderDate,
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
   generateGoogleAppsScriptCode,
@@ -848,68 +850,57 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const recentLineCreatedTasks = tasks.filter((t) => t.source === 'line').slice(0, 5);
   const hasSheet = Boolean(spreadsheetId.trim());
 
+  const consolidatedPreviewTasks = useMemo(
+    () => consolidateContinuousTasks(tasks),
+    [tasks]
+  );
+
   const availableTaskDates = useMemo(() => {
     const dateSet = new Set<string>();
-    tasks.forEach((t) => {
+    consolidatedPreviewTasks.forEach((t) => {
       if (t.date) dateSet.add(t.date);
     });
     return Array.from(dateSet).sort();
-  }, [tasks]);
+  }, [consolidatedPreviewTasks]);
 
   const [showSummaryPreview, setShowSummaryPreview] = useState(true);
   const [previewCardTab, setPreviewCardTab] = useState<'daily_summary' | 'single_task'>(
     'daily_summary'
   );
   const [selectedPreviewDate, setSelectedPreviewDate] = useState<string>(() => {
-    const hasToday = tasks.some(
+    const hasToday = consolidatedPreviewTasks.some(
       (t) => t.date <= todayStr && (t.endDate || t.date) >= todayStr
     );
     if (hasToday) return todayStr;
-    const upcoming = tasks
+    const upcoming = consolidatedPreviewTasks
       .map((t) => t.date)
       .filter((d) => Boolean(d && d >= todayStr))
       .sort()[0];
-    return upcoming || tasks[0]?.date || todayStr;
+    return upcoming || consolidatedPreviewTasks[0]?.date || todayStr;
   });
 
   useEffect(() => {
-    const hasTasksOnSelected = tasks.some(
+    const hasTasksOnSelected = consolidatedPreviewTasks.some(
       (t) =>
         t.date <= selectedPreviewDate && (t.endDate || t.date) >= selectedPreviewDate
     );
-    if (!hasTasksOnSelected && tasks.length > 0) {
-      const upcoming = tasks
+    if (!hasTasksOnSelected && consolidatedPreviewTasks.length > 0) {
+      const upcoming = consolidatedPreviewTasks
         .map((t) => t.date)
         .filter((d) => Boolean(d && d >= todayStr))
         .sort()[0];
-      setSelectedPreviewDate(upcoming || tasks[0].date);
+      setSelectedPreviewDate(upcoming || consolidatedPreviewTasks[0].date);
     }
-  }, [selectedPreviewDate, tasks, todayStr]);
+  }, [consolidatedPreviewTasks, selectedPreviewDate, todayStr]);
 
   const previewDigestTasks = useMemo(() => {
-    return tasks
+    return consolidatedPreviewTasks
       .filter(
         (t) =>
           t.date <= selectedPreviewDate && (t.endDate || t.date) >= selectedPreviewDate
       )
       .sort((a, b) => String(a.time || '09:00').localeCompare(String(b.time || '09:00')));
-  }, [selectedPreviewDate, tasks]);
-
-  const formatThaiFullDateForPreview = (ymd: string): string => {
-    const thaiDays = [
-      'วันอาทิตย์ที่',
-      'วันจันทร์ที่',
-      'วันอังคารที่',
-      'วันพุธที่',
-      'วันพฤหัสบดีที่',
-      'วันศุกร์ที่',
-      'วันเสาร์ที่',
-    ];
-    const parts = (ymd || '').split('-').map(Number);
-    if (parts.length !== 3 || isNaN(parts[0])) return formatThaiDateDisplay(ymd);
-    const dt = new Date(parts[0], parts[1] - 1, parts[2]);
-    return `${thaiDays[dt.getDay()] || 'วันที่'} ${formatThaiDateDisplay(ymd)}`;
-  };
+  }, [consolidatedPreviewTasks, selectedPreviewDate]);
 
   return (
     <div className="space-y-6">
@@ -1008,10 +999,20 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 {/* Date Switcher for Preview */}
                 <div className="flex flex-wrap items-center gap-1.5">
                   {availableTaskDates.map((d) => {
-                    const count = tasks.filter(
+                    const tasksOnDate = consolidatedPreviewTasks.filter(
                       (t) => t.date <= d && (t.endDate || t.date) >= d
-                    ).length;
-                    const isSelected = selectedPreviewDate === d;
+                    );
+                    const count = tasksOnDate.length;
+                    const maxEndOnDate = tasksOnDate.reduce(
+                      (acc, t) => ((t.endDate || t.date) > acc ? t.endDate || t.date : acc),
+                      d
+                    );
+                    const isSelected =
+                      selectedPreviewDate >= d && selectedPreviewDate <= maxEndOnDate;
+                    const pillDateLabel =
+                      maxEndOnDate > d
+                        ? formatTaskDateRangeLabel({ date: d, endDate: maxEndOnDate }, 'short')
+                        : formatThaiDateDisplay(d);
                     return (
                       <button
                         key={d}
@@ -1023,7 +1024,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                             : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                         }`}
                       >
-                        {formatThaiDateDisplay(d)} ({count} งาน)
+                        {pillDateLabel} ({count} งาน)
                       </button>
                     );
                   })}
@@ -1051,7 +1052,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                     </span>
                   </div>
                   <div className="text-lg font-bold mt-3 text-white leading-snug">
-                    {formatThaiFullDateForPreview(selectedPreviewDate)}
+                    {formatSummaryCardHeaderDate(selectedPreviewDate, previewDigestTasks)}
                   </div>
 
                   {/* 3-Column Dark Summary Strip */}
@@ -1156,6 +1157,15 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                           >
                             {idx + 1}. {t.title}
                           </div>
+
+                          {/* Multi-day Continuous Range Badge */}
+                          {t.endDate && t.endDate > t.date && (
+                            <div className="mt-1.5">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                                🗓️ ต่อเนื่อง: {formatTaskDateRangeLabel(t, 'short')}
+                              </span>
+                            </div>
+                          )}
 
                           {/* Description */}
                           {showDesc && (
@@ -1312,9 +1322,13 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               </span>
                             </div>
                             <div className="text-base font-bold mt-2.5 text-white">
-                              {flex.date
-                                ? `ตารางงานวันที่ ${formatThaiDateDisplay(flex.date)}`
-                                : flex.title}
+                              {flex.title &&
+                              (flex.title.includes('ทั้งหมด') || flex.title.includes('งานค้าง'))
+                                ? flex.title
+                                : formatSummaryCardHeaderDate(
+                                    flex.date || todayStr,
+                                    flex.digestItems || []
+                                  )}
                             </div>
 
                             {/* Compact Dark Summary Strip */}
@@ -1417,6 +1431,19 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                       >
                                         {idx + 1}. {item.title}
                                       </div>
+
+                                      {/* Multi-day Continuous Range Badge */}
+                                      {item.endDate && item.date && item.endDate > item.date && (
+                                        <div className="mt-1.5">
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                                            🗓️ ต่อเนื่อง:{' '}
+                                            {formatTaskDateRangeLabel(
+                                              { date: item.date, endDate: item.endDate },
+                                              'short'
+                                            )}
+                                          </span>
+                                        </div>
+                                      )}
 
                                       {/* Row 3: Task Description (if present) */}
                                       {showDesc && (

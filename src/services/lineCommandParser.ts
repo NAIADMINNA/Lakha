@@ -295,10 +295,33 @@ export function formatTaskDateRangeLabel(
 ): string {
   if (task.endDate && task.endDate > task.date) {
     const days = getTaskDurationDays(task.date, task.endDate);
-    return `${formatThaiDateDisplay(task.date, style)} ถึง ${formatThaiDateDisplay(
-      task.endDate,
-      style
-    )} (${days} วัน)`;
+    const startMatch = String(task.date || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    const endMatch = String(task.endDate || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (startMatch && endMatch) {
+      const sY = parseInt(startMatch[1], 10);
+      const sM = parseInt(startMatch[2], 10);
+      const sD = parseInt(startMatch[3], 10);
+      const eY = parseInt(endMatch[1], 10);
+      const eM = parseInt(endMatch[2], 10);
+      const eD = parseInt(endMatch[3], 10);
+      if (sY === eY && sM === eM && sM >= 1 && sM <= 12) {
+        const beYear = sY >= 2400 ? sY : sY + 543;
+        const monthLabel =
+          style === 'long' ? THAI_MONTH_LONG[sM - 1] : THAI_MONTH_SHORT[sM - 1];
+        return style === 'long'
+          ? `${sD} - ${eD} ${monthLabel} ${beYear} (รวม ${days} วัน)`
+          : `${sD} - ${eD} ${monthLabel} ${beYear} (${days} วัน)`;
+      }
+    }
+    return style === 'long'
+      ? `${formatThaiDateDisplay(task.date, 'long')} - ${formatThaiDateDisplay(
+          task.endDate,
+          'long'
+        )} (รวม ${days} วัน)`
+      : `${formatThaiDateDisplay(task.date, 'short')} - ${formatThaiDateDisplay(
+          task.endDate,
+          'short'
+        )} (${days} วัน)`;
   }
   return formatThaiDateDisplay(task.date, style);
 }
@@ -309,6 +332,147 @@ function addDaysToYMD(ymd: string, daysToAdd: number): string {
   const dt = new Date(y, m - 1, d);
   dt.setDate(dt.getDate() + daysToAdd);
   return formatPlainDateObjYMD(dt);
+}
+
+export function inferTaskEndDate(
+  task: Pick<Task, 'date' | 'endDate' | 'title' | 'description'>
+): string | undefined {
+  if (task.endDate && task.endDate > task.date) {
+    return task.endDate;
+  }
+  const combinedText = `${task.title || ''} ${task.description || ''}`;
+  const durationMatch = combinedText.match(
+    /(?:(?<!อีก\s*)(?:เป็นเวลา|ระยะเวลา|จำนวน|รวม|ตลอด)\s*(\d{1,2})\s*วัน|(?<!อีก\s*)(?<!วันที่\s*)(\d{1,2})\s*วัน(?:\s*เต็ม)?)/i
+  );
+  if (durationMatch && !/อีก\s*\d+\s*วัน/.test(durationMatch[0])) {
+    const parsedDays = parseInt(durationMatch[1] || durationMatch[2], 10);
+    if (parsedDays >= 2 && parsedDays <= 60 && /^\d{4}-\d{2}-\d{2}$/.test(task.date)) {
+      return addDaysToYMD(task.date, parsedDays - 1);
+    }
+  }
+  const rangeMatch = combinedText.match(
+    /(?:ระหว่าง\s*)?(?:วันที่\s*)?(\d{1,2})\s*(?:-|–|—|ถึง)\s*(?:วันที่\s*)?(\d{1,2})/
+  );
+  if (rangeMatch && /^\d{4}-\d{2}-\d{2}$/.test(task.date)) {
+    const d1 = parseInt(rangeMatch[1], 10);
+    const d2 = parseInt(rangeMatch[2], 10);
+    const startDay = parseInt(task.date.slice(8, 10), 10);
+    if (d1 === startDay && d2 > d1 && d2 - d1 <= 60) {
+      return addDaysToYMD(task.date, d2 - d1);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Consolidates continuous multi-day tasks (both single tasks with endDate > date and
+ * consecutive/overlapping tasks with identical title & category) into 1 unified task entry.
+ */
+export function consolidateContinuousTasks(tasks: Task[]): Task[] {
+  const normalized = tasks.map((t) => {
+    const inferredEnd = inferTaskEndDate(t);
+    return inferredEnd && (!t.endDate || inferredEnd > t.endDate)
+      ? { ...t, endDate: inferredEnd }
+      : t;
+  });
+
+  const sorted = [...normalized].sort((a, b) =>
+    `${a.date} ${a.time || ''}`.localeCompare(`${b.date} ${b.time || ''}`)
+  );
+
+  const consolidated: Task[] = [];
+  for (const task of sorted) {
+    const normTitle = String(task.title || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+    const existing = consolidated.find((prev) => {
+      const prevTitle = String(prev.title || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+      if (!normTitle || prevTitle !== normTitle || prev.categoryId !== task.categoryId) {
+        return false;
+      }
+      const prevEnd = prev.endDate && prev.endDate > prev.date ? prev.endDate : prev.date;
+      const nextDayAfterPrev = addDaysToYMD(prevEnd, 1);
+      return task.date >= prev.date && task.date <= nextDayAfterPrev;
+    });
+
+    if (existing) {
+      const prevEnd =
+        existing.endDate && existing.endDate > existing.date ? existing.endDate : existing.date;
+      const currEnd = task.endDate && task.endDate > task.date ? task.endDate : task.date;
+      if (currEnd > prevEnd) {
+        existing.endDate = currEnd;
+      }
+    } else {
+      consolidated.push({ ...task });
+    }
+  }
+
+  return consolidated;
+}
+
+/**
+ * Formats the Header Date of a Summary Card ("หัวการ์ดสรุปงาน"):
+ * - If the card's task(s) span a continuous multi-day range (e.g. 9 - 12 Nov), summarizes into a single range:
+ *   "วันที่ 9 - 12 พฤศจิกายน 2569 (รวม 4 วัน)"
+ * - Otherwise formats as full Thai weekday + date:
+ *   "วันศุกร์ที่ 6 พฤศจิกายน 2569"
+ */
+export function formatSummaryCardHeaderDate(
+  targetDate: string,
+  tasksOnCard?: Array<{
+    date?: string;
+    endDate?: string;
+    title?: string;
+    description?: string;
+  }>
+): string {
+  const thaiDays = [
+    'วันอาทิตย์ที่',
+    'วันจันทร์ที่',
+    'วันอังคารที่',
+    'วันพุธที่',
+    'วันพฤหัสบดีที่',
+    'วันศุกร์ที่',
+    'วันเสาร์ที่',
+  ];
+
+  const list = Array.isArray(tasksOnCard) ? tasksOnCard : [];
+  if (list.length > 0) {
+    let minStart = '';
+    let maxEnd = '';
+    let hasMultiDayTask = false;
+
+    for (const item of list) {
+      const s = String(item.date || targetDate || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) continue;
+      const inferredEnd = inferTaskEndDate({
+        date: s,
+        endDate: item.endDate ? String(item.endDate).slice(0, 10) : undefined,
+        title: item.title || '',
+        description: item.description || '',
+      });
+      const e = inferredEnd && inferredEnd > s ? inferredEnd : s;
+      if (e > s) hasMultiDayTask = true;
+      if (!minStart || s < minStart) minStart = s;
+      if (!maxEnd || e > maxEnd) maxEnd = e;
+    }
+
+    if (hasMultiDayTask && minStart && maxEnd && maxEnd > minStart) {
+      return `วันที่ ${formatTaskDateRangeLabel({ date: minStart, endDate: maxEnd }, 'long')}`;
+    }
+  }
+
+  const cleanYmd = String(targetDate || '').slice(0, 10);
+  const parts = cleanYmd.split('-').map(Number);
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+    return `${thaiDays[dt.getDay()] || 'วันที่'} ${formatThaiDateDisplay(cleanYmd, 'long')}`;
+  }
+  return formatThaiDateDisplay(cleanYmd, 'long');
 }
 
 export function extractThaiDate(input: string): {
@@ -657,14 +821,15 @@ export function parseLineChatMessage(
     const refTimeStr = hasCustomTimeInCommand ? extractThaiTime(text).timeStr : nowTimeHM;
     const targetDate = parsedDate || todayStr;
 
-    const dateMatchingTasks = existingTasks
+    const consolidatedTasks = consolidateContinuousTasks(existingTasks);
+    const dateMatchingTasks = consolidatedTasks
       .filter((t) => isTaskActiveOnDate(t, targetDate))
       .sort((a, b) => a.time.localeCompare(b.time));
 
     const isAllSummaryCommand = lower === 'สรุปงานทั้งหมด';
 
     const targetTasks = isAllSummaryCommand
-      ? [...existingTasks].sort((a, b) =>
+      ? [...consolidatedTasks].sort((a, b) =>
           `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
         )
       : dateMatchingTasks;
@@ -718,7 +883,7 @@ export function parseLineChatMessage(
         replyText: `📅 วันที่ ${targetDateThai} (เวลา ${refTimeStr} น.) ไม่มีรายการงานในตารางครับ`,
         flexSummary: {
           badge: '📋 สรุปตารางงานประจำวัน',
-          title: `ตารางงานวันที่ ${targetDateThai}`,
+          title: formatSummaryCardHeaderDate(targetDate, []),
           subtitle: `อัปเดตเวลา ${refTimeStr} น. · ไม่มีรายการงานในตาราง`,
           dateTime: `เวลา ${refTimeStr} น.`,
           date: targetDate,
@@ -747,18 +912,20 @@ export function parseLineChatMessage(
           : t.priority === TaskPriority.HIGH
           ? '🔥 ด่วนมาก'
           : '⏳ รอดำเนินการ';
+      const rangeSuffix =
+        t.endDate && t.endDate > t.date ? ` [🗓️ ${formatTaskDateRangeLabel(t, 'short')}]` : '';
       const descLine =
         t.description &&
         !t.description.startsWith('เพิ่มผ่านแชท LINE') &&
         !t.description.startsWith('เพิ่มผ่านหน้าปฏิทิน')
           ? `\n      ↳ ${t.description}`
           : '';
-      return `   ${i + 1}. ⏰ ${t.time} น. — ${t.title} (${cat?.name || 'ทั่วไป'} · ${statusText})${descLine}`;
+      return `   ${i + 1}. ⏰ ${t.time} น. — ${t.title}${rangeSuffix} (${cat?.name || 'ทั่วไป'} · ${statusText})${descLine}`;
     });
 
     const headerTitle = isShowingAllBecauseTodayEmpty
       ? `ตารางงานทั้งหมด (${targetTasks.length} งาน)`
-      : `ตารางงานวันที่ ${targetDateThai}`;
+      : formatSummaryCardHeaderDate(targetDate, targetTasks);
 
     const replyText = [
       `📋 ${headerTitle}`,
@@ -1566,12 +1733,65 @@ function formatThaiFullDateInGas(ymdStr) {
   return (thaiDays[dt.getDay()] || 'วันที่') + ' ' + d + ' ' + thaiMonths[m - 1] + ' ' + (y + 543);
 }
 
+function formatThaiRangeHeaderInGas(startYmd, endYmd) {
+  var thaiMonths = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  var sParts = String(startYmd || '').slice(0, 10).split('-');
+  var eParts = String(endYmd || '').slice(0, 10).split('-');
+  if (sParts.length !== 3 || eParts.length !== 3) return formatThaiFullDateInGas(startYmd);
+  var sY = parseInt(sParts[0], 10), sM = parseInt(sParts[1], 10), sD = parseInt(sParts[2], 10);
+  var eY = parseInt(eParts[0], 10), eM = parseInt(eParts[1], 10), eD = parseInt(eParts[2], 10);
+  var dtS = new Date(sY, sM - 1, sD);
+  var dtE = new Date(eY, eM - 1, eD);
+  var spanDays = Math.max(1, Math.round((dtE.getTime() - dtS.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+  if (sY === eY && sM === eM && sM >= 1 && sM <= 12) {
+    return 'วันที่ ' + sD + ' - ' + eD + ' ' + thaiMonths[sM - 1] + ' ' + (sY + 543) + ' (รวม ' + spanDays + ' วัน)';
+  }
+  return 'วันที่ ' + sD + ' ' + thaiMonths[sM - 1] + ' ' + (sY + 543) + ' - ' + eD + ' ' + thaiMonths[eM - 1] + ' ' + (eY + 543) + ' (รวม ' + spanDays + ' วัน)';
+}
+
 function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl) {
   var now = new Date();
   var todayStr = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
   var nowHM = Utilities.formatDate(now, 'Asia/Bangkok', 'HH:mm');
   var cleanDateYMD = /^\\d{4}-\\d{2}-\\d{2}/.test(String(dateLabel || '')) ? String(dateLabel).slice(0, 10) : todayStr;
   var fullThaiDate = formatThaiFullDateInGas(cleanDateYMD);
+  if (rowsList && rowsList.length > 0) {
+    var minS = '';
+    var maxE = '';
+    var hasMulti = false;
+    for (var ri = 0; ri < rowsList.length; ri++) {
+      var rowItem = rowsList[ri];
+      var rS = String(rowItem[3] || cleanDateYMD).replace(/^'/, '').slice(0, 10);
+      var rE = rS;
+      var combinedRowText = String(rowItem[1] || '') + ' ' + String(rowItem[2] || '');
+      var durM = combinedRowText.match(/(?:เป็นเวลา|ระยะเวลา|จำนวน|รวม|ตลอด)?\\s*(\\d{1,2})\\s*วัน/);
+      if (durM) {
+        var dCount = parseInt(durM[1], 10);
+        if (dCount >= 2 && dCount <= 60) {
+          var sp = rS.split('-');
+          if (sp.length === 3) {
+            var dtEnd = new Date(parseInt(sp[0], 10), parseInt(sp[1], 10) - 1, parseInt(sp[2], 10) + dCount - 1);
+            rE = Utilities.formatDate(dtEnd, 'Asia/Bangkok', 'yyyy-MM-dd');
+          }
+        }
+      }
+      var rngM = combinedRowText.match(/(?:ระหว่าง\\s*)?(?:วันที่\\s*)?(\\d{1,2})\\s*(?:-|–|—|ถึง)\\s*(?:วันที่\\s*)?(\\d{1,2})/);
+      if (rngM && rE === rS) {
+        var d1 = parseInt(rngM[1], 10), d2 = parseInt(rngM[2], 10);
+        var sp2 = rS.split('-');
+        if (sp2.length === 3 && parseInt(sp2[2], 10) === d1 && d2 > d1 && (d2 - d1) <= 60) {
+          var dtEnd2 = new Date(parseInt(sp2[0], 10), parseInt(sp2[1], 10) - 1, parseInt(sp2[2], 10) + (d2 - d1));
+          rE = Utilities.formatDate(dtEnd2, 'Asia/Bangkok', 'yyyy-MM-dd');
+        }
+      }
+      if (rE > rS) hasMulti = true;
+      if (!minS || rS < minS) minS = rS;
+      if (!maxE || rE > maxE) maxE = rE;
+    }
+    if (hasMulti && minS && maxE && maxE > minS) {
+      fullThaiDate = formatThaiRangeHeaderInGas(minS, maxE);
+    }
+  }
   var total = rowsList.length;
   var completed = rowsList.filter(function(r) { return String(r[7]) === 'completed'; }).length;
   var pending = total - completed;

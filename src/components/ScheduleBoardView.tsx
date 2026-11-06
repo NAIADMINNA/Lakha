@@ -19,9 +19,11 @@ import { Category, Task, TaskPriority, TaskStatus } from '../types';
 import {
   formatLocalDateYMD,
   formatLocalTimeHM,
+  formatSummaryCardHeaderDate,
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
   getTaskDurationDays,
+  inferTaskEndDate,
   isTaskActiveOnDate,
 } from '../services/lineCommandParser';
 
@@ -187,7 +189,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
   // Build grouped schedule entries by date (consolidating continuous tasks into a single entry by default)
   const scheduleByDate = useMemo(() => {
-    const filtered = tasks.filter((t) => {
+    const normalizedTasks = tasks.map((t) => {
+      const inferred = inferTaskEndDate(t);
+      return inferred && (!t.endDate || inferred > t.endDate)
+        ? { ...t, endDate: inferred }
+        : t;
+    });
+    const filtered = normalizedTasks.filter((t) => {
       if (!showCompleted && t.status === TaskStatus.COMPLETED) return false;
       if (selectedCategoryId !== 'all' && t.categoryId !== selectedCategoryId) return false;
       if (searchQuery.trim()) {
@@ -1018,13 +1026,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         isLargeText ? 'text-xl sm:text-2xl' : 'text-base sm:text-lg'
                       } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
                     >
-                      {!expandMultiDay &&
-                      group.items.length === 1 &&
-                      group.items[0].totalSpanDays > 1
-                        ? `วันที่ ${formatTaskDateRangeLabel(
-                            group.items[0].task,
-                            'long'
-                          )} (ต่อเนื่อง ${group.items[0].totalSpanDays} วัน)`
+                      {!expandMultiDay
+                        ? formatSummaryCardHeaderDate(
+                            group.date,
+                            group.items.map((i) => i.task)
+                          )
                         : formatFullThaiDayHeader(group.date)}
                     </h2>
                     <span
