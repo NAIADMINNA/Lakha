@@ -1258,6 +1258,37 @@ async function startServer() {
           }
         }
       }
+
+      const dateStr = String(rec.date || '').trim();
+      if (!rec.endDate && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const combinedText = `${String(rec.title || '')} ${String(rec.description || '')}`;
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const durMatch = combinedText.match(/(\d{1,2})\s*วัน/);
+        if (durMatch) {
+          const days = parseInt(durMatch[1], 10);
+          if (days >= 2 && days <= 60) {
+            const dt = new Date(y, m - 1, d + (days - 1));
+            const ey = dt.getFullYear();
+            const em = String(dt.getMonth() + 1).padStart(2, '0');
+            const ed = String(dt.getDate()).padStart(2, '0');
+            rec.endDate = `${ey}-${em}-${ed}`;
+          }
+        } else {
+          const rangeMatch = combinedText.match(/(?:วันที่\s*)?(\d{1,2})\s*[-–—ถึง]\s*(\d{1,2})/);
+          if (rangeMatch) {
+            const startDay = parseInt(rangeMatch[1], 10);
+            const endDay = parseInt(rangeMatch[2], 10);
+            if (startDay === d && endDay > startDay && endDay <= 31) {
+              const dt = new Date(y, m - 1, endDay);
+              const ey = dt.getFullYear();
+              const em = String(dt.getMonth() + 1).padStart(2, '0');
+              const ed = String(dt.getDate()).padStart(2, '0');
+              rec.endDate = `${ey}-${em}-${ed}`;
+            }
+          }
+        }
+      }
+
       cleaned.push(rec);
     }
 
@@ -1308,6 +1339,11 @@ async function startServer() {
             ...rec,
             endDate: rec.endDate ?? existingItem.endDate,
           });
+        } else if (!existingItem.endDate && rec.endDate) {
+          byId.set(id, {
+            ...existingItem,
+            endDate: rec.endDate,
+          });
         }
       }
     }
@@ -1346,9 +1382,9 @@ async function startServer() {
             categories?: unknown[];
             teamMembers?: unknown[];
           };
-          if (Array.isArray(gasData.tasks) && state) {
+          if (Array.isArray(gasData.tasks)) {
             const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
-            const currentTasks = Array.isArray(state.tasks) ? state.tasks : [];
+            const currentTasks = Array.isArray(state?.tasks) ? state.tasks : [];
             const gasTaskIds = new Set<string>();
             for (const gt of decodedGas.tasks) {
               const gid = String(gt.id || '').trim();
@@ -1375,18 +1411,21 @@ async function startServer() {
                 : decodedGas.teamMembers;
 
             const nextCats =
-              remoteCats && (!Array.isArray(state.categories) || state.categories.length === 0)
+              remoteCats && (!Array.isArray(state?.categories) || state.categories.length === 0)
                 ? remoteCats
-                : state.categories;
+                : state?.categories || [];
             const nextMembers =
-              remoteMembers && (!Array.isArray(state.teamMembers) || state.teamMembers.length === 0)
+              remoteMembers && (!Array.isArray(state?.teamMembers) || state.teamMembers.length === 0)
                 ? remoteMembers
-                : state.teamMembers;
+                : state?.teamMembers || [];
 
-            if (merged.length !== currentTasks.length) {
+            if (!state || JSON.stringify(merged) !== JSON.stringify(currentTasks)) {
               state = {
-                ...state,
+                workspaceId: state?.workspaceId || workspaceId,
                 updatedAt: new Date().toISOString(),
+                updatedBy: state?.updatedBy || 'Google Apps Script Sync',
+                spreadsheetId: state?.spreadsheetId,
+                spreadsheetUrl: state?.spreadsheetUrl,
                 tasks: merged,
                 categories: nextCats,
                 teamMembers: nextMembers,

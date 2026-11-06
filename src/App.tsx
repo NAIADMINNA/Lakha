@@ -250,17 +250,31 @@ export default function App() {
               return true;
             })
             .map((t) => {
-              if (!t.endDate && t.description) {
-                const durMatch = t.description.match(/(\d{1,2})\s*วัน/);
+              if (!t.endDate && /^\d{4}-\d{2}-\d{2}$/.test(t.date || '')) {
+                const combinedText = `${t.title || ''} ${t.description || ''}`;
+                const [y, m, d] = t.date.split('-').map(Number);
+                const durMatch = combinedText.match(/(\d{1,2})\s*วัน/);
                 if (durMatch) {
                   const days = parseInt(durMatch[1], 10);
                   if (days >= 2 && days <= 60) {
-                    const [y, m, d] = t.date.split('-').map(Number);
                     const dt = new Date(y, m - 1, d + (days - 1));
                     const ey = dt.getFullYear();
                     const em = String(dt.getMonth() + 1).padStart(2, '0');
                     const ed = String(dt.getDate()).padStart(2, '0');
                     return { ...t, endDate: `${ey}-${em}-${ed}` };
+                  }
+                } else {
+                  const rangeMatch = combinedText.match(/(?:วันที่\s*)?(\d{1,2})\s*[-–—ถึง]\s*(\d{1,2})/);
+                  if (rangeMatch) {
+                    const startDay = parseInt(rangeMatch[1], 10);
+                    const endDay = parseInt(rangeMatch[2], 10);
+                    if (startDay === d && endDay > startDay && endDay <= 31) {
+                      const dt = new Date(y, m - 1, endDay);
+                      const ey = dt.getFullYear();
+                      const em = String(dt.getMonth() + 1).padStart(2, '0');
+                      const ed = String(dt.getDate()).padStart(2, '0');
+                      return { ...t, endDate: `${ey}-${em}-${ed}` };
+                    }
                   }
                 }
               }
@@ -761,6 +775,36 @@ export default function App() {
             }
           }
         }
+
+        if (!copy.endDate && /^\d{4}-\d{2}-\d{2}$/.test(copy.date || '')) {
+          const combinedText = `${copy.title || ''} ${copy.description || ''}`;
+          const [y, m, d] = copy.date.split('-').map(Number);
+          const durMatch = combinedText.match(/(\d{1,2})\s*วัน/);
+          if (durMatch) {
+            const days = parseInt(durMatch[1], 10);
+            if (days >= 2 && days <= 60) {
+              const dt = new Date(y, m - 1, d + (days - 1));
+              const ey = dt.getFullYear();
+              const em = String(dt.getMonth() + 1).padStart(2, '0');
+              const ed = String(dt.getDate()).padStart(2, '0');
+              copy.endDate = `${ey}-${em}-${ed}`;
+            }
+          } else {
+            const rangeMatch = combinedText.match(/(?:วันที่\s*)?(\d{1,2})\s*[-–—ถึง]\s*(\d{1,2})/);
+            if (rangeMatch) {
+              const startDay = parseInt(rangeMatch[1], 10);
+              const endDay = parseInt(rangeMatch[2], 10);
+              if (startDay === d && endDay > startDay && endDay <= 31) {
+                const dt = new Date(y, m - 1, endDay);
+                const ey = dt.getFullYear();
+                const em = String(dt.getMonth() + 1).padStart(2, '0');
+                const ed = String(dt.getDate()).padStart(2, '0');
+                copy.endDate = `${ey}-${em}-${ed}`;
+              }
+            }
+          }
+        }
+
         cleaned.push(copy);
       }
 
