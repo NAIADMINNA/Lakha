@@ -3181,7 +3181,6 @@ export default function App() {
             href="#schedule"
             onClick={(e) => {
               e.preventDefault();
-              setAdminPasscodeError('');
               setActiveSection('schedule');
             }}
             className={`py-1 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
@@ -3190,11 +3189,6 @@ export default function App() {
                 : 'hover:text-indigo-600'
             }`}
           >
-            {isAdminUnlocked ? (
-              <Unlock className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-            ) : (
-              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-            )}
             <Tv className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
             <span>ตารางงานนำเสนอ (รายวัน)</span>
           </a>
@@ -3306,21 +3300,14 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setAdminPasscodeError('');
-            setActiveSection('schedule');
-          }}
+          onClick={() => setActiveSection('schedule')}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
             activeSection === 'schedule'
               ? 'bg-indigo-600 text-white'
               : 'text-slate-600 bg-slate-100'
           }`}
         >
-          {isAdminUnlocked ? (
-            <Tv className="h-3.5 w-3.5" />
-          ) : (
-            <Lock className="h-3.5 w-3.5" />
-          )}
+          <Tv className="h-3.5 w-3.5" />
           <span>ตารางงานนำเสนอ</span>
         </button>
         <button
@@ -4191,8 +4178,25 @@ export default function App() {
           />
         )}
 
-        {(activeSection === 'schedule' ||
-          activeSection === 'team' ||
+        {activeSection === 'schedule' && (
+          <ScheduleBoardView
+            tasks={tasks}
+            categories={categories}
+            onAddTaskForDate={(date) => {
+              setEditingTask(null);
+              setModalInitialDate(date);
+              setIsTaskModalOpen(true);
+            }}
+            onEditTask={(task) => {
+              setEditingTask(task);
+              setIsTaskModalOpen(true);
+            }}
+            onToggleStatus={handleToggleTaskStatus}
+            onOpenCalendarDate={handleOpenDateInCalendar}
+          />
+        )}
+
+        {(activeSection === 'team' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           !isAdminUnlocked && (
@@ -4212,15 +4216,13 @@ export default function App() {
                   <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
                     คุณกำลังเข้าสู่หัวข้อ{' '}
                     <strong className="text-indigo-700">
-                      {activeSection === 'schedule'
-                        ? 'ตารางงานนำเสนอ (รายวัน)'
-                        : activeSection === 'team'
+                      {activeSection === 'team'
                         ? 'ทีมที่ใช้ปฏิทินร่วมกัน'
                         : activeSection === 'line'
                         ? 'แจ้งเตือน & สั่งงาน LINE'
                         : 'ฐานข้อมูล Google Sheets'}
                     </strong>{' '}
-                    กรุณากรอกรหัสผ่านเพื่อเข้าเปิดดูตารางนำเสนอหรือจัดการตั้งค่าระบบ
+                    กรุณากรอกรหัสผ่านเพื่อเข้าจัดการตั้งค่าระบบ
                   </p>
                 </div>
               </div>
@@ -4277,8 +4279,7 @@ export default function App() {
             </div>
           )}
 
-        {(activeSection === 'schedule' ||
-          activeSection === 'team' ||
+        {(activeSection === 'team' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           isAdminUnlocked && (
@@ -4286,7 +4287,7 @@ export default function App() {
               <div className="inline-flex items-center gap-2 font-semibold">
                 <Unlock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
                 <span>
-                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถเปิดดูตารางงานนำเสนอ, ตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
+                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
                 </span>
               </div>
               <button
@@ -4304,24 +4305,6 @@ export default function App() {
               </button>
             </div>
           )}
-
-        {activeSection === 'schedule' && isAdminUnlocked && (
-          <ScheduleBoardView
-            tasks={tasks}
-            categories={categories}
-            onAddTaskForDate={(date) => {
-              setEditingTask(null);
-              setModalInitialDate(date);
-              setIsTaskModalOpen(true);
-            }}
-            onEditTask={(task) => {
-              setEditingTask(task);
-              setIsTaskModalOpen(true);
-            }}
-            onToggleStatus={handleToggleTaskStatus}
-            onOpenCalendarDate={handleOpenDateInCalendar}
-          />
-        )}
 
         {activeSection === 'team' && isAdminUnlocked && (
           <TeamCollaborationView

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar as CalendarIcon,
   CheckCircle2,
@@ -386,9 +386,53 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
   }, [tasks, todayStr, nowHM]);
 
+  const bannerRef = useRef<HTMLDivElement | null>(null);
+  const [bannerHeight, setBannerHeight] = useState<number>(196);
+  const [headerHeight, setHeaderHeight] = useState<number>(61);
+
+  useEffect(() => {
+    const updateMeasurements = () => {
+      if (bannerRef.current) {
+        setBannerHeight(bannerRef.current.offsetHeight);
+      }
+      const appHeader = document.querySelector('header');
+      if (appHeader instanceof HTMLElement) {
+        setHeaderHeight(appHeader.offsetHeight);
+      }
+    };
+
+    updateMeasurements();
+
+    const observer =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            updateMeasurements();
+          })
+        : null;
+
+    if (observer && bannerRef.current) {
+      observer.observe(bannerRef.current);
+    }
+    const appHeader = document.querySelector('header');
+    if (observer && appHeader instanceof HTMLElement) {
+      observer.observe(appHeader);
+    }
+
+    window.addEventListener('resize', updateMeasurements);
+    return () => {
+      if (observer) observer.disconnect();
+      window.removeEventListener('resize', updateMeasurements);
+    };
+  }, [isLargeText, isDarkDisplay, isPresentationMode, todayTasksSummary]);
+
+  const stickyTopBanner = isPresentationMode ? 12 : headerHeight + 8;
+  const stickyGap = 16;
+  const stickyTopToolbar = stickyTopBanner + bannerHeight + stickyGap;
+  const stickyMaskColor = isDarkDisplay ? '#020617' : '#F8FAFC';
+
   return (
     <div
-      className={`space-y-6 transition-colors ${
+      className={`space-y-4 transition-colors ${
         isPresentationMode
           ? isDarkDisplay
             ? 'fixed inset-0 z-50 overflow-y-auto bg-slate-950 text-slate-100 p-6 sm:p-10'
@@ -400,167 +444,214 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     >
       {/* Top Executive Presentation Banner & Live Clock */}
       <div
-        className={`rounded-2xl border p-6 transition-colors ${
+        ref={bannerRef}
+        style={{
+          top: `${stickyTopBanner}px`,
+          boxShadow: `0 -20px 0 12px ${stickyMaskColor}, 0 12px 0 12px ${stickyMaskColor}`,
+        }}
+        className={`sticky z-20 rounded-2xl border p-6 transition-colors ${
           isDarkDisplay
             ? 'bg-slate-900 border-slate-800 text-white'
-            : 'bg-white border-slate-200 text-slate-900 shadow-2xs'
+            : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-1.5">
             <h1
-              className={`font-bold tracking-tight ${
-                isLargeText ? 'text-2xl sm:text-3xl' : 'text-xl sm:text-2xl'
+              className={`font-extrabold tracking-tight leading-tight ${
+                isLargeText
+                  ? 'text-4xl sm:text-5xl md:text-[52px]'
+                  : 'text-3xl sm:text-4xl md:text-[42px]'
               } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
             >
               กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
             </h1>
           </div>
 
-          {/* Right Live Thailand Digital Clock & Quick Presentation Controls */}
-          <div className="flex flex-wrap items-center gap-4">
+          {/* Right Live Thailand Digital Clock */}
+          <div className="flex items-center shrink-0">
             <div
-              className={`rounded-2xl border px-5 py-3.5 sm:px-6 sm:py-4 text-right transition-colors ${
+              className={`min-w-[280px] sm:min-w-[350px] rounded-2xl border-2 px-6 py-3.5 sm:px-8 sm:py-4 text-right transition-colors ${
                 isDarkDisplay
                   ? 'bg-white border-slate-200 text-slate-900 shadow-md'
-                  : 'bg-gradient-to-br from-indigo-50/90 via-white to-emerald-50/70 border-indigo-200/90 text-slate-900 shadow-xs'
+                  : 'bg-gradient-to-br from-indigo-50/95 via-white to-emerald-50/80 border-indigo-200 text-slate-900 shadow-sm'
               }`}
             >
               <div
-                className={`font-bold tracking-tight ${
+                className={`font-bold tracking-tight pb-1.5 border-b border-indigo-100/90 ${
                   isLargeText
-                    ? 'text-base sm:text-lg md:text-xl'
-                    : 'text-sm sm:text-base md:text-lg'
-                } text-indigo-700`}
+                    ? 'text-lg sm:text-xl md:text-2xl'
+                    : 'text-base sm:text-lg md:text-xl'
+                } text-indigo-800`}
               >
-                🗓️ {formatFullThaiDayHeader(todayStr)}
+                {formatFullThaiDayHeader(todayStr)}
               </div>
-              <div className="mt-1.5 flex items-baseline justify-end gap-2.5">
-                <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-slate-600">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <span>เวลาปัจจุบัน</span>
-                </span>
+              <div className="mt-2 flex items-baseline justify-end gap-2">
                 <span
-                  className={`font-mono-tabular font-black tracking-tight text-slate-900 ${
+                  className={`font-sans tabular-nums font-extrabold tracking-widest text-indigo-950 leading-none ${
                     isLargeText
-                      ? 'text-3xl sm:text-4xl md:text-5xl'
-                      : 'text-2xl sm:text-3xl md:text-4xl'
+                      ? 'text-4xl sm:text-5xl md:text-[52px]'
+                      : 'text-3xl sm:text-4xl md:text-[42px]'
                   }`}
                 >
-                  {nowSec} น.
+                  {nowSec}
+                </span>
+                <span
+                  className={`font-bold text-indigo-700 ${
+                    isLargeText
+                      ? 'text-xl sm:text-2xl'
+                      : 'text-lg sm:text-xl'
+                  }`}
+                >
+                  น.
                 </span>
               </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsLargeText((prev) => !prev)}
-                className={`px-3 py-2 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                  isLargeText
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : isDarkDisplay
-                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                }`}
-              >
-                {isLargeText ? 'ตัวอักษรใหญ่ (TV)' : 'ขยายตัวอักษรใหญ่'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsDarkDisplay((prev) => !prev)}
-                className={`px-3 py-2 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                  isDarkDisplay
-                    ? 'bg-amber-400 text-slate-950 border-amber-400'
-                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                }`}
-              >
-                {isDarkDisplay ? 'โหมดสว่าง' : 'โหมดจอมืด (Dark TV)'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                  isDarkDisplay
-                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                }`}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                <span>พิมพ์ตารางงาน</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleTogglePresentationFullscreen}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold transition-colors whitespace-nowrap shrink-0 shadow-2xs"
-              >
-                {isPresentationMode ? (
-                  <>
-                    <Minimize2 className="h-3.5 w-3.5" />
-                    <span>ออกจากโหมดเต็มจอ</span>
-                  </>
-                ) : (
-                  <>
-                    <Maximize2 className="h-3.5 w-3.5" />
-                    <span>เปิดโหมดเต็มจอ (นำเสนอ)</span>
-                  </>
-                )}
-              </button>
             </div>
           </div>
         </div>
 
-        {/* Today's Highlight Strip */}
+        {/* Today's Highlight Strip + Compact Presentation Action Buttons */}
         <div
-          className={`mt-5 pt-4 border-t flex flex-wrap items-center justify-between gap-4 text-xs ${
+          className={`mt-5 pt-3.5 border-t flex flex-wrap items-center justify-between gap-3 text-xs ${
             isDarkDisplay ? 'border-slate-800 text-slate-300' : 'border-slate-200 text-slate-600'
           }`}
         >
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-semibold">
-              สรุปงานวันนี้ ({formatThaiDateDisplay(todayStr, 'long')}):
-            </span>
-            <span className="font-mono-tabular font-bold text-indigo-600">
-              ทั้งหมด {todayTasksSummary.total} งาน
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono-tabular font-semibold text-amber-600">
-              รอดำเนินการ {todayTasksSummary.pending} งาน
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono-tabular font-semibold text-emerald-600">
-              เสร็จสิ้นแล้ว {todayTasksSummary.completed} งาน
-            </span>
-          </div>
-
-          {todayTasksSummary.nextUpcoming ? (
-            <div className="flex items-center gap-2 font-medium">
-              <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-              <span>
-                ภารกิจถัดไปวันนี้:{' '}
-                <strong className={isDarkDisplay ? 'text-white' : 'text-slate-900'}>
-                  เวลา {todayTasksSummary.nextUpcoming.time} น. —{' '}
-                  {todayTasksSummary.nextUpcoming.title}
-                </strong>
+          <div
+            className={`flex flex-wrap items-center gap-x-3.5 gap-y-2 ${
+              isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span
+                className={`font-bold ${
+                  isDarkDisplay ? 'text-white' : 'text-slate-900'
+                }`}
+              >
+                สรุปงานวันนี้ ({formatThaiDateDisplay(todayStr, 'long')}):
+              </span>
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
+                  isDarkDisplay
+                    ? 'bg-indigo-950/90 border-indigo-500/60 text-indigo-300'
+                    : 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                }`}
+              >
+                ทั้งหมด {todayTasksSummary.total} งาน
+              </span>
+              <span aria-hidden="true" className="text-slate-400 font-bold">
+                ·
+              </span>
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
+                  isDarkDisplay
+                    ? 'bg-amber-950/90 border-amber-500/60 text-amber-300'
+                    : 'bg-amber-50 border-amber-200 text-amber-700'
+                }`}
+              >
+                รอดำเนินการ {todayTasksSummary.pending} งาน
+              </span>
+              <span aria-hidden="true" className="text-slate-400 font-bold">
+                ·
+              </span>
+              <span
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
+                  isDarkDisplay
+                    ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-300'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                }`}
+              >
+                เสร็จสิ้นแล้ว {todayTasksSummary.completed} งาน
               </span>
             </div>
-          ) : (
-            <div className="text-slate-500">
-              แสดงผลตารางงานรวม {scheduleByDate.length} วัน ({totalDisplayedTasksCount} ภารกิจ)
-            </div>
-          )}
+
+            {todayTasksSummary.nextUpcoming && (
+              <div className="flex items-center gap-1.5 font-medium">
+                <span aria-hidden="true" className="text-slate-300">
+                  |
+                </span>
+                <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+                <span>
+                  ภารกิจถัดไป:{' '}
+                  <strong className={isDarkDisplay ? 'text-white' : 'text-slate-900'}>
+                    {todayTasksSummary.nextUpcoming.time} น. —{' '}
+                    {todayTasksSummary.nextUpcoming.title}
+                  </strong>
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsLargeText((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                isLargeText
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : isDarkDisplay
+                  ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                  : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              {isLargeText ? 'ตัวอักษรใหญ่ (TV)' : 'ขยายตัวอักษรใหญ่'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsDarkDisplay((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                isDarkDisplay
+                  ? 'bg-amber-400 text-slate-950 border-amber-400'
+                  : 'bg-slate-800 text-white border-slate-800 hover:bg-slate-700'
+              }`}
+            >
+              {isDarkDisplay ? 'โหมดสว่าง' : 'โหมดจอมืด (Dark TV)'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                isDarkDisplay
+                  ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                  : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              <Printer className="h-3 w-3" />
+              <span>พิมพ์ตารางงาน</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTogglePresentationFullscreen}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 shadow-2xs"
+            >
+              {isPresentationMode ? (
+                <>
+                  <Minimize2 className="h-3 w-3" />
+                  <span>ออกจากโหมดเต็มจอ</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="h-3 w-3" />
+                  <span>เปิดโหมดเต็มจอ (นำเสนอ)</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Filter & View Mode Toolbar */}
       <div
-        className={`rounded-2xl border p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 ${
+        style={{
+          top: `${stickyTopToolbar}px`,
+          boxShadow: `0 -16px 0 12px ${stickyMaskColor}, 0 4px 0 6px ${stickyMaskColor}, 0 12px 20px -6px rgba(15, 23, 42, 0.14)`,
+        }}
+        className={`sticky z-20 rounded-2xl border p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 ${
           isDarkDisplay
-            ? 'bg-slate-900 border-slate-800'
-            : 'bg-white border-slate-200 shadow-2xs'
+            ? 'bg-slate-900 border-slate-800 text-white'
+            : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
         {/* Left: Layout & Date Range Selector */}
@@ -578,7 +669,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 layoutMode === 'grouped_by_day'
                   ? 'bg-indigo-600 text-white'
                   : isDarkDisplay
-                  ? 'text-slate-400 hover:text-white'
+                  ? 'text-slate-300 hover:text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -594,7 +685,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 layoutMode === 'single_day'
                   ? 'bg-indigo-600 text-white'
                   : isDarkDisplay
-                  ? 'text-slate-400 hover:text-white'
+                  ? 'text-slate-300 hover:text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -607,7 +698,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 layoutMode === 'master_table'
                   ? 'bg-indigo-600 text-white'
                   : isDarkDisplay
-                  ? 'text-slate-400 hover:text-white'
+                  ? 'text-slate-300 hover:text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
@@ -640,7 +731,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         ? 'bg-emerald-600 text-white font-semibold'
                         : 'bg-white text-slate-900 font-semibold shadow-2xs'
                       : isDarkDisplay
-                      ? 'text-slate-400 hover:text-white'
+                      ? 'text-slate-300 hover:text-white'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -666,11 +757,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 type="date"
                 value={focusDate}
                 onChange={(e) => setFocusDate(e.target.value || todayStr)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-mono-tabular ${
-                  isDarkDisplay
-                    ? 'border-slate-700 bg-slate-950 text-white'
-                    : 'border-slate-300 bg-white text-slate-900'
-                }`}
+                className="rounded-lg border border-slate-300 !bg-white !text-slate-900 px-3 py-1.5 text-xs font-bold font-sans tabular-nums"
               />
               <button
                 type="button"
@@ -698,38 +785,32 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         {/* Right: Search, Category Filter & Toggles */}
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative min-w-[200px] flex-1 sm:flex-initial">
-            <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="ค้นหาชื่องาน, เวลา, วันที่..."
-              className={`w-full rounded-xl border pl-8 pr-3 py-1.5 text-xs focus:outline-none ${
-                isDarkDisplay
-                  ? 'border-slate-700 bg-slate-950 text-white focus:border-indigo-500'
-                  : 'border-slate-300 bg-white text-slate-900 focus:border-indigo-600'
-              }`}
+              className="w-full rounded-xl border border-slate-300 !bg-white !text-slate-900 placeholder:text-slate-500 pl-8 pr-3 py-1.5 text-xs font-medium focus:border-indigo-600 focus:outline-none"
             />
           </div>
 
           <select
             value={selectedCategoryId}
             onChange={(e) => setSelectedCategoryId(e.target.value)}
-            className={`rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none ${
-              isDarkDisplay
-                ? 'border-slate-700 bg-slate-950 text-white'
-                : 'border-slate-300 bg-white text-slate-700'
-            }`}
+            className="rounded-xl border border-slate-300 !bg-white !text-slate-900 px-3.5 py-1.5 text-xs sm:text-sm font-bold focus:border-indigo-600 focus:outline-none cursor-pointer"
           >
-            <option value="all">ทุกหมวดหมู่งาน</option>
+            <option value="all" className="bg-white text-slate-900 font-bold">
+              ทุกหมวดหมู่งาน
+            </option>
             {categories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
+              <option key={cat.id} value={cat.id} className="bg-white text-slate-900 font-semibold">
                 {cat.name}
               </option>
             ))}
           </select>
 
-          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-semibold text-indigo-700 bg-indigo-50/80 border border-indigo-200 px-2.5 py-1.5 rounded-xl">
+          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1.5 rounded-xl">
             <input
               type="checkbox"
               checked={!expandMultiDay}
@@ -739,7 +820,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             <span>สรุปรวมงานต่อเนื่องเป็นรายการเดียว</span>
           </label>
 
-          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none">
+          <label
+            className={`inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-semibold px-2.5 py-1.5 rounded-xl border ${
+              isDarkDisplay
+                ? 'bg-slate-800 border-slate-700 text-white'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
+            }`}
+          >
             <input
               type="checkbox"
               checked={showCompleted}
@@ -1010,13 +1097,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 >
                   <div className="flex flex-wrap items-center gap-3">
                     <CalendarIcon
-                      className={`h-5 w-5 shrink-0 ${
-                        isTodayGroup ? 'text-indigo-600' : 'text-slate-500'
+                      className={`h-6 w-6 shrink-0 ${
+                        isTodayGroup ? 'text-indigo-600' : 'text-slate-600'
                       }`}
                     />
                     <h2
-                      className={`font-bold text-slate-900 ${
-                        isLargeText ? 'text-xl sm:text-2xl' : 'text-base sm:text-lg'
+                      className={`font-extrabold text-slate-900 ${
+                        isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
                       }`}
                     >
                       {!expandMultiDay
@@ -1027,28 +1114,34 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         : formatFullThaiDayHeader(group.date)}
                     </h2>
                     <span
-                      className={`text-xs font-bold ${
+                      className={`${
+                        isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
+                      } font-bold ${
                         rel.tone === 'today'
                           ? 'text-emerald-600'
                           : rel.tone === 'tomorrow'
                           ? 'text-indigo-600'
-                          : 'text-slate-500'
+                          : 'text-slate-600'
                       }`}
                     >
                       · {rel.text}
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-4 text-xs">
-                    <div className="font-mono-tabular font-semibold text-slate-600">
+                  <div
+                    className={`flex flex-wrap items-center gap-4 ${
+                      isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                    }`}
+                  >
+                    <div className="font-sans tabular-nums font-bold text-slate-700">
                       รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
                     </div>
                     <button
                       type="button"
                       onClick={() => onAddTaskForDate(group.date)}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      <Plus className="h-4 w-4" />
                       <span>เพิ่มงานวันนี้</span>
                     </button>
                   </div>
@@ -1085,10 +1178,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         {/* Left: Time Column + Task Details */}
                         <div className="flex items-start gap-5 min-w-0">
                           {/* Distinct Time Slot Column */}
-                          <div className="w-32 sm:w-36 shrink-0">
+                          <div className="w-36 sm:w-44 shrink-0">
                             <div
-                              className={`inline-flex items-center gap-1.5 font-mono-tabular font-bold ${
-                                isLargeText ? 'text-xl sm:text-2xl' : 'text-base sm:text-lg'
+                              className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
+                                isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
                               } ${
                                 isDone
                                   ? 'text-slate-400 line-through'
@@ -1097,19 +1190,19 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                   : 'text-indigo-950'
                               }`}
                             >
-                              <Clock className="h-4 w-4 text-indigo-500 shrink-0" />
+                              <Clock className="h-5 w-5 text-indigo-500 shrink-0" />
                               <span>{timeRangeLabel || task.time} น.</span>
                             </div>
                           </div>
 
                           {/* Task Content */}
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2.5">
                               <button
                                 type="button"
                                 onClick={() => onEditTask(task)}
                                 className={`font-bold text-left hover:underline break-words ${
-                                  isLargeText ? 'text-xl' : 'text-base'
+                                  isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
                                 } ${
                                   isDone
                                     ? 'line-through text-slate-400'
@@ -1121,7 +1214,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                 {task.title}
                               </button>
                               {isHigh && !isDone && (
-                                <span className="text-xs font-bold text-rose-600">
+                                <span
+                                  className={`${
+                                    isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                                  } font-bold text-rose-600`}
+                                >
                                   · ด่วนมาก
                                 </span>
                               )}
@@ -1130,20 +1227,24 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             {task.description && (
                               <p
                                 className={`leading-relaxed break-words ${
-                                  isLargeText ? 'text-base' : 'text-xs sm:text-sm'
+                                  isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
                                 } ${isDarkDisplay ? 'text-slate-300' : 'text-slate-600'}`}
                               >
                                 {task.description}
                               </p>
                             )}
 
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 pt-0.5">
+                            <div
+                              className={`flex flex-wrap items-center gap-2.5 ${
+                                isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                              } ${isDarkDisplay ? 'text-slate-300' : 'text-slate-600'} pt-1`}
+                            >
                               <span
-                                className="inline-flex items-center gap-1.5 font-semibold"
+                                className="inline-flex items-center gap-2 font-bold"
                                 style={{ color: catColor }}
                               >
                                 <span
-                                  className="h-2.5 w-2.5 rounded-xs shrink-0"
+                                  className="h-3 w-3 rounded-xs shrink-0"
                                   style={{ backgroundColor: catColor }}
                                 />
                                 <span>{cat?.name || 'ทั่วไป'}</span>
@@ -1152,7 +1253,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               {totalSpanDays > 1 && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span className="font-semibold text-indigo-600">
+                                  <span className="font-bold text-indigo-600">
                                     {!expandMultiDay
                                       ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
                                           task,
@@ -1169,7 +1270,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               {task.assigneeName && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span>ผู้รับผิดชอบ: {task.assigneeName}</span>
+                                  <span className="font-medium">
+                                    ผู้รับผิดชอบ: {task.assigneeName}
+                                  </span>
                                 </>
                               )}
                             </div>
@@ -1181,7 +1284,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                           <button
                             type="button"
                             onClick={() => onToggleStatus(task)}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
+                              isLargeText ? 'text-base' : 'text-sm'
+                            } font-bold transition-colors whitespace-nowrap shrink-0 ${
                               isDone
                                 ? isDarkDisplay
                                   ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
