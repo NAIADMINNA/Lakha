@@ -1037,8 +1037,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               }`}
                             >
                               {!expandMultiDay
-                                ? `🗓️ กำหนดการต่อเนื่อง ${formatTaskDateRangeLabel(task, 'long')} (รวม ${totalSpanDays} วัน)`
-                                : `งานต่อเนื่อง ${formatTaskDateRangeLabel(task, 'short')} (วันที่ ${dayIndexOfSpan}/${totalSpanDays})`}
+                                ? `🗓️ กำหนดการต่อเนื่อง ${formatTaskDateRangeLabel(task, 'long')}`
+                                : `งานต่อเนื่อง ${formatTaskDateRangeLabel(task, 'short').replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan}/${totalSpanDays})`}
                             </div>
                           )}
                           {task.description && (
@@ -1336,11 +1336,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                       ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
                                           task,
                                           'long'
-                                        )} (รวม ${totalSpanDays} วัน)`
+                                        )}`
                                       : `งานต่อเนื่อง ${formatTaskDateRangeLabel(
                                           task,
                                           'short'
-                                        )} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
+                                        ).replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
                                   </span>
                                 </>
                               )}
