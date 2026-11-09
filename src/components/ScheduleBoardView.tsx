@@ -110,6 +110,48 @@ function enumerateTaskDates(task: Task): string[] {
   return dates;
 }
 
+function getReadableCategoryColor(hexColor: string, isDark: boolean): string {
+  if (!isDark) return hexColor;
+  const clean = (hexColor || '#2563EB').replace('#', '').trim();
+  if (clean.length !== 6) return '#38BDF8';
+  const r = parseInt(clean.slice(0, 2), 16) / 255;
+  const g = parseInt(clean.slice(2, 4), 16) / 255;
+  const b = parseInt(clean.slice(4, 6), 16) / 255;
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return '#38BDF8';
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      case b:
+        h = (r - g) / d + 4;
+        break;
+    }
+    h *= 60;
+  }
+
+  // Shift deep blue/indigo hues (205°-265°) toward bright sky-cyan so they never blend with dark slate
+  if (h >= 205 && h <= 265) {
+    return '#38BDF8';
+  }
+
+  const targetS = Math.max(Math.round(s * 100), 85);
+  const targetL = Math.max(Math.round(l * 100), 74);
+  return `hsl(${Math.round(h)}, ${targetS}%, ${targetL}%)`;
+}
+
 export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   tasks,
   categories,
@@ -532,7 +574,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               <span
                 className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
                   isDarkDisplay
-                    ? 'bg-indigo-950/90 border-indigo-500/60 text-indigo-300'
+                    ? 'bg-sky-500/20 border-sky-400/80 text-sky-200'
                     : 'bg-indigo-50 border-indigo-200 text-indigo-700'
                 }`}
               >
@@ -544,7 +586,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               <span
                 className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
                   isDarkDisplay
-                    ? 'bg-amber-950/90 border-amber-500/60 text-amber-300'
+                    ? 'bg-amber-500/20 border-amber-400/80 text-amber-200'
                     : 'bg-amber-50 border-amber-200 text-amber-700'
                 }`}
               >
@@ -556,7 +598,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               <span
                 className={`inline-flex items-center px-2.5 py-0.5 rounded-lg border font-sans tabular-nums font-bold ${
                   isDarkDisplay
-                    ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-300'
+                    ? 'bg-emerald-500/20 border-emerald-400/80 text-emerald-200'
                     : 'bg-emerald-50 border-emerald-200 text-emerald-700'
                 }`}
               >
@@ -922,6 +964,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     } = entry;
                     const cat = categoryMap[task.categoryId];
                     const catColor = cat?.color || '#2563EB';
+                    const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
                     const isDone = task.status === TaskStatus.COMPLETED;
                     const rel = getRelativeDayLabel(displayDate, todayStr);
 
@@ -938,13 +981,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             onClick={() => onOpenCalendarDate(displayDate)}
                             className={`font-semibold hover:underline text-left ${
                               isLargeText ? 'text-base' : 'text-sm'
-                            } ${isDarkDisplay ? 'text-indigo-300' : 'text-indigo-950'}`}
+                            } ${isDarkDisplay ? 'text-sky-300' : 'text-indigo-950'}`}
                           >
                             {!expandMultiDay && totalSpanDays > 1
                               ? formatTaskDateRangeLabel(task, 'long')
                               : formatThaiDateDisplay(displayDate, 'long')}
                           </button>
-                          <div className="text-xs text-slate-500 mt-0.5">
+                          <div
+                            className={`text-xs mt-0.5 ${
+                              isDarkDisplay ? 'text-slate-300' : 'text-slate-500'
+                            }`}
+                          >
                             {!expandMultiDay && totalSpanDays > 1
                               ? `งานต่อเนื่องรวม ${totalSpanDays} วัน (${rel.text})`
                               : rel.text}
@@ -984,7 +1031,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             {task.title}
                           </button>
                           {totalSpanDays > 1 && (
-                            <div className="text-xs font-semibold text-indigo-600 mt-0.5">
+                            <div
+                              className={`text-xs font-semibold mt-0.5 ${
+                                isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
+                              }`}
+                            >
                               {!expandMultiDay
                                 ? `🗓️ กำหนดการต่อเนื่อง ${formatTaskDateRangeLabel(task, 'long')} (รวม ${totalSpanDays} วัน)`
                                 : `งานต่อเนื่อง ${formatTaskDateRangeLabel(task, 'short')} (วันที่ ${dayIndexOfSpan}/${totalSpanDays})`}
@@ -1003,12 +1054,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
                         <td className="py-3.5 px-4 align-top whitespace-nowrap">
                           <span
-                            className="inline-flex items-center gap-1.5 text-xs font-semibold"
-                            style={{ color: catColor }}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold"
+                            style={{ color: displayCatColor }}
                           >
                             <span
                               className="h-2.5 w-2.5 rounded-xs shrink-0"
-                              style={{ backgroundColor: catColor }}
+                              style={{ backgroundColor: displayCatColor }}
                             />
                             <span>{cat?.name || 'ทั่วไป'}</span>
                           </span>
@@ -1016,11 +1067,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
                         <td className="py-3.5 px-4 align-top whitespace-nowrap text-xs font-semibold">
                           {task.priority === TaskPriority.HIGH ? (
-                            <span className="text-rose-600">ด่วนมาก (สูง)</span>
+                            <span className={isDarkDisplay ? 'text-rose-400' : 'text-rose-600'}>
+                              ด่วนมาก (สูง)
+                            </span>
                           ) : task.priority === TaskPriority.MEDIUM ? (
-                            <span className="text-amber-600">ปานกลาง</span>
+                            <span className={isDarkDisplay ? 'text-amber-300' : 'text-amber-600'}>
+                              ปานกลาง
+                            </span>
                           ) : (
-                            <span className="text-slate-500">ทั่วไป</span>
+                            <span className={isDarkDisplay ? 'text-slate-300' : 'text-slate-500'}>
+                              ทั่วไป
+                            </span>
                           )}
                         </td>
 
@@ -1030,9 +1087,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             onClick={() => onToggleStatus(task)}
                             className={`inline-flex items-center gap-1.5 text-xs font-semibold ${
                               isDone
-                                ? 'text-emerald-600'
+                                ? isDarkDisplay
+                                  ? 'text-emerald-400'
+                                  : 'text-emerald-600'
                                 : displayDate === todayStr && task.time <= nowHM
-                                ? 'text-rose-600'
+                                ? isDarkDisplay
+                                  ? 'text-rose-400'
+                                  : 'text-rose-600'
+                                : isDarkDisplay
+                                ? 'text-amber-300'
                                 : 'text-amber-600'
                             }`}
                           >
@@ -1163,6 +1226,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     } = entry;
                     const cat = categoryMap[task.categoryId];
                     const catColor = cat?.color || '#2563EB';
+                    const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
                     const isDone = task.status === TaskStatus.COMPLETED;
                     const isHigh = task.priority === TaskPriority.HIGH;
                     const isCurrentDayPassed =
@@ -1190,7 +1254,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                   : 'text-indigo-950'
                               }`}
                             >
-                              <Clock className="h-5 w-5 text-indigo-500 shrink-0" />
+                              <Clock
+                                className={`h-5 w-5 shrink-0 ${
+                                  isDone
+                                    ? 'text-slate-400'
+                                    : isDarkDisplay
+                                    ? 'text-emerald-400'
+                                    : 'text-indigo-500'
+                                }`}
+                              />
                               <span>{timeRangeLabel || task.time} น.</span>
                             </div>
                           </div>
@@ -1217,7 +1289,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                 <span
                                   className={`${
                                     isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                                  } font-bold text-rose-600`}
+                                  } font-bold ${
+                                    isDarkDisplay ? 'text-rose-400' : 'text-rose-600'
+                                  }`}
                                 >
                                   · ด่วนมาก
                                 </span>
@@ -1228,7 +1302,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               <p
                                 className={`leading-relaxed break-words ${
                                   isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
-                                } ${isDarkDisplay ? 'text-slate-300' : 'text-slate-600'}`}
+                                } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
                               >
                                 {task.description}
                               </p>
@@ -1237,15 +1311,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             <div
                               className={`flex flex-wrap items-center gap-2.5 ${
                                 isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                              } ${isDarkDisplay ? 'text-slate-300' : 'text-slate-600'} pt-1`}
+                              } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'} pt-1`}
                             >
                               <span
                                 className="inline-flex items-center gap-2 font-bold"
-                                style={{ color: catColor }}
+                                style={{ color: displayCatColor }}
                               >
                                 <span
                                   className="h-3 w-3 rounded-xs shrink-0"
-                                  style={{ backgroundColor: catColor }}
+                                  style={{ backgroundColor: displayCatColor }}
                                 />
                                 <span>{cat?.name || 'ทั่วไป'}</span>
                               </span>
@@ -1253,7 +1327,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               {totalSpanDays > 1 && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span className="font-bold text-indigo-600">
+                                  <span
+                                    className={`font-bold ${
+                                      isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
+                                    }`}
+                                  >
                                     {!expandMultiDay
                                       ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
                                           task,
@@ -1270,7 +1348,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               {task.assigneeName && (
                                 <>
                                   <span aria-hidden="true">·</span>
-                                  <span className="font-medium">
+                                  <span
+                                    className={`font-medium ${
+                                      isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
+                                    }`}
+                                  >
                                     ผู้รับผิดชอบ: {task.assigneeName}
                                   </span>
                                 </>
@@ -1296,18 +1378,25 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                   ? 'bg-amber-950/60 border-amber-700 text-amber-300'
                                   : 'bg-amber-50 border-amber-200 text-amber-900'
                                 : isDarkDisplay
-                                ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                                ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
                                 : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                             }`}
                           >
                             {isDone ? (
                               <>
-                                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                <CheckCircle2
+                                  className={`h-4 w-4 ${
+                                    isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                                  }`}
+                                />
                                 <span>เสร็จสิ้นแล้ว</span>
                               </>
                             ) : (
                               <>
-                                <Circle className="h-4 w-4" style={{ color: catColor }} />
+                                <Circle
+                                  className="h-4 w-4"
+                                  style={{ color: displayCatColor }}
+                                />
                                 <span>
                                   {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
                                 </span>
