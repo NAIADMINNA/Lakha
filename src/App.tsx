@@ -79,6 +79,7 @@ import { CategoryManagerView } from './components/CategoryManagerView';
 import { SheetsDatabaseView, SheetAutoSyncConfig } from './components/SheetsDatabaseView';
 import { TeamCollaborationView } from './components/TeamCollaborationView';
 import { ScheduleBoardView } from './components/ScheduleBoardView';
+import { ROBOT_MASCOT_DATA_URI } from './assets/robotMascotDataUri';
 
 type ActiveSection =
   | 'dashboard'
@@ -103,7 +104,7 @@ const STORAGE_KEYS = {
 export default function App() {
   const todayStr = formatLocalDateYMD();
 
-  // Navigation state (supports ?section=calendar or ?view=calendar deep-links from LINE Flex Cards)
+  // Navigation state (supports ?section=calendar or ?view=calendar deep-links from LINE Flex Cards, and remembers last active tab)
   const [activeSection, setActiveSection] = useState<ActiveSection>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -122,11 +123,33 @@ export default function App() {
       if (params.get('date')) {
         return 'calendar';
       }
+      const savedSec = (localStorage.getItem('sheetcal_active_section_v1') || '')
+        .trim()
+        .toLowerCase();
+      if (
+        savedSec === 'calendar' ||
+        savedSec === 'schedule' ||
+        savedSec === 'dashboard' ||
+        savedSec === 'team' ||
+        savedSec === 'line' ||
+        savedSec === 'categories' ||
+        savedSec === 'database'
+      ) {
+        return savedSec as ActiveSection;
+      }
     } catch {
       // Ignore
     }
-    return 'dashboard';
+    return 'schedule';
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sheetcal_active_section_v1', activeSection);
+    } catch {
+      // Ignore
+    }
+  }, [activeSection]);
 
   // Passcode Protection for Admin Sections: ทีมที่ใช้ปฏิทินร่วมกัน ('team'), แจ้งเตือน & สั่งงาน LINE ('line'), ฐานข้อมูล Google Sheets ('database')
   const ADMIN_PASSCODE = '0841543524';
@@ -3230,16 +3253,32 @@ export default function App() {
     >
       {/* Strict 3-Zone Top Navigation Bar Contract */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3.5 bg-white border-b border-slate-200">
-        {/* Zone 1: Single text element wordmark */}
+        {/* Zone 1: Official Emblem & Brand Wordmark */}
         <a
-          href="#dashboard"
+          href="#schedule"
           onClick={(e) => {
             e.preventDefault();
-            setActiveSection('dashboard');
+            setActiveSection('schedule');
           }}
-          className="text-lg font-bold tracking-tight text-indigo-950 whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-indigo-950 whitespace-nowrap shrink-0"
         >
-          SheetCal <span className="text-[#06C755]">LINE</span>
+          <span className="h-9 w-9 rounded-full overflow-hidden bg-white border border-indigo-200 flex items-center justify-center shrink-0">
+            <img
+              src={ROBOT_MASCOT_DATA_URI}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.fallbackUsed) {
+                  target.dataset.fallbackUsed = '1';
+                  target.src = '/assets/aistudio/images_b42759e5.jpg';
+                }
+              }}
+              alt="ตราสัญลักษณ์ระบบ"
+              className="h-full w-full object-cover scale-105 rounded-full"
+            />
+          </span>
+          <span>
+            SheetCal <span className="text-[#06C755]">LINE</span>
+          </span>
         </a>
 
         {/* Zone 2: 5 concise single-line text navigation links */}
@@ -3717,6 +3756,72 @@ export default function App() {
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-6">
         {activeSection === 'dashboard' && (
           <div className="space-y-6">
+            {/* Executive Mission Header Banner on Main Dashboard */}
+            <div className="rounded-2xl border border-indigo-200 bg-white p-5 sm:p-6 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+              <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
+                <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full bg-white overflow-hidden border-2 border-indigo-200 flex items-center justify-center shrink-0">
+                  <img
+                    src={ROBOT_MASCOT_DATA_URI}
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      if (!target.dataset.fallbackUsed) {
+                        target.dataset.fallbackUsed = '1';
+                        target.src = '/assets/aistudio/images_b42759e5.jpg';
+                      }
+                    }}
+                    alt="ตราสัญลักษณ์ระบบตารางภารกิจ"
+                    className="h-full w-full object-cover scale-105 rounded-full"
+                  />
+                </div>
+                <div className="min-w-0 space-y-2.5">
+                  <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                    กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
+                  </h1>
+                  <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-950 font-bold">
+                      <span>ภารกิจวันนี้:</span>
+                      <span className="font-mono-tabular font-extrabold">
+                        {metrics.todayCount} งาน
+                      </span>
+                      <span className="text-slate-600 font-semibold">
+                        (รอทำ {metrics.todayPendingCount} · เสร็จแล้ว{' '}
+                        {Math.max(0, metrics.todayCount - metrics.todayPendingCount)})
+                      </span>
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-bold">
+                      <span>งานด่วน / สำคัญสูง:</span>
+                      <span className="font-mono-tabular font-extrabold">
+                        {
+                          tasks.filter(
+                            (t) =>
+                              t.priority === TaskPriority.HIGH &&
+                              t.status !== TaskStatus.COMPLETED
+                          ).length
+                        }{' '}
+                        งาน
+                      </span>
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 border border-slate-300 text-slate-900 font-bold">
+                      <span>รวมทุกกำหนดการ:</span>
+                      <span className="font-mono-tabular font-extrabold">
+                        {tasks.length} งาน
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveSection('schedule')}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-colors"
+                >
+                  <Tv className="h-4 w-4 shrink-0" />
+                  <span>เปิดหน้าตารางงานนำเสนอ (รายวัน)</span>
+                </button>
+              </div>
+            </div>
+
             {/* 4-Column KPI Summary Strip */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <div

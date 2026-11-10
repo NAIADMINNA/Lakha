@@ -29,6 +29,7 @@ import {
   inferTaskEndDate,
   isTaskActiveOnDate,
 } from '../services/lineCommandParser';
+import { ROBOT_MASCOT_DATA_URI } from '../assets/robotMascotDataUri';
 
 interface ScheduleBoardViewProps {
   tasks: Task[];
@@ -986,12 +987,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           top: `${stickyTopBanner}px`,
           boxShadow: `0 -20px 0 12px ${stickyMaskColor}, 0 12px 0 12px ${stickyMaskColor}`,
         }}
-        className={`sticky z-20 rounded-2xl border p-6 transition-colors ${surfaceCardClasses}`}
+        className={`sticky z-30 rounded-2xl border p-6 transition-colors ${surfaceCardClasses}`}
       >
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
             <div
-              className={`h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full bg-white p-1.5 border-2 flex items-center justify-center shrink-0 shadow-xs ${
+              className={`h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full bg-white overflow-hidden border-2 flex items-center justify-center shrink-0 shadow-xs ${
                 isNavyGold
                   ? 'border-amber-400'
                   : isDarkDisplay
@@ -1002,13 +1003,20 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               }`}
             >
               <img
-                src="/assets/aistudio/2b6f4798-6fe6-41d0-99e7-6b47b9750826_921c3a5e.png"
-                alt="ตราสัญลักษณ์ประจำกระทรวงแรงงาน / กรมการจัดหางาน"
-                className="h-full w-full object-contain rounded-full"
+                src={ROBOT_MASCOT_DATA_URI}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (!target.dataset.fallbackUsed) {
+                    target.dataset.fallbackUsed = '1';
+                    target.src = '/assets/aistudio/images_b42759e5.jpg';
+                  }
+                }}
+                alt="ตราสัญลักษณ์ระบบตารางภารกิจ"
+                className="h-full w-full object-cover scale-105 rounded-full"
               />
             </div>
 
-            <div className="min-w-0 space-y-3">
+            <div className="min-w-0">
               <h1
                 className={`font-extrabold tracking-tight leading-tight text-balance ${
                   isLargeText
@@ -1024,63 +1032,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               >
                 กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
               </h1>
-
-              {/* Executive Mission Summary Stats Strip */}
-              <div
-                className={`flex flex-wrap items-center gap-2.5 sm:gap-3 ${
-                  isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                }`}
-              >
-                <div
-                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
-                    isNavyGold
-                      ? 'bg-amber-400/20 border-amber-400/80 text-amber-100'
-                      : isDarkDisplay
-                      ? 'bg-sky-500/20 border-sky-400/80 text-sky-100'
-                      : isEmeraldExec
-                      ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                      : 'bg-indigo-50 border-indigo-200 text-indigo-950'
-                  }`}
-                >
-                  <span>ภารกิจวันนี้:</span>
-                  <span className="font-sans tabular-nums font-extrabold">
-                    {todayTasksSummary.total} งาน
-                  </span>
-                  <span
-                    className={`text-xs sm:text-sm font-semibold ${
-                      isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
-                    }`}
-                  >
-                    (รอทำ {todayTasksSummary.pending} · เสร็จแล้ว {todayTasksSummary.completed})
-                  </span>
-                </div>
-
-                <div
-                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
-                    isDarkDisplay
-                      ? 'bg-rose-500/25 border-rose-400/80 text-rose-100'
-                      : 'bg-rose-50 border-rose-200 text-rose-800'
-                  }`}
-                >
-                  <span>งานด่วน / สำคัญสูง:</span>
-                  <span className="font-sans tabular-nums font-extrabold">
-                    {todayTasksSummary.highPriorityCount} งาน
-                  </span>
-                </div>
-
-                <div
-                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
-                    isDarkDisplay
-                      ? 'bg-emerald-500/20 border-emerald-400/80 text-emerald-100'
-                      : 'bg-slate-100 border-slate-300 text-slate-900'
-                  }`}
-                >
-                  <span>รวมทุกกำหนดการ:</span>
-                  <span className="font-sans tabular-nums font-extrabold">
-                    {todayTasksSummary.allSchedulesCount} งาน
-                  </span>
-                </div>
-              </div>
             </div>
           </div>
 
