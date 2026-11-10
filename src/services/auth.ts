@@ -17,11 +17,19 @@ export const SCOPES = [
 
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
+provider.setCustomParameters({
+  prompt: 'consent',
+  include_granted_scopes: 'true',
+});
 
 // Flag to indicate if we are in the middle of a sign-in flow.
 let isSigningIn = false;
 // Cache the access token in memory ONLY (never in localStorage or sessionStorage).
 let cachedAccessToken: string | null = null;
+
+export const clearCachedAccessToken = () => {
+  cachedAccessToken = null;
+};
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,

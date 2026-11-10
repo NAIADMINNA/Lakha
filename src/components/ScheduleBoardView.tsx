@@ -6,9 +6,13 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Landmark,
   Maximize2,
   Minimize2,
   MonitorPlay,
+  Palette,
+  Pause,
+  Play,
   Plus,
   Printer,
   Search,
@@ -36,7 +40,8 @@ interface ScheduleBoardViewProps {
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
-type BoardLayoutMode = 'grouped_by_day' | 'single_day' | 'master_table';
+type BoardLayoutMode = 'grouped_by_day' | 'split_two_column' | 'single_day' | 'master_table';
+type BoardThemeMode = 'light' | 'dark' | 'navy_gold' | 'emerald_exec';
 
 const THAI_WEEKDAY_FULL = [
   'วันอาทิตย์',
@@ -152,6 +157,29 @@ function getReadableCategoryColor(hexColor: string, isDark: boolean): string {
   return `hsl(${Math.round(h)}, ${targetS}%, ${targetL}%)`;
 }
 
+function extractLocationFromText(title: string, description?: string): string | null {
+  const combined = `${title || ''} ${description || ''}`.trim();
+  if (!combined) return null;
+  const match = combined.match(
+    /(?:ณ\s+|สถานที่\s*:?\s*|ห้องประชุม\s*|ชั้น\s*\d+\s*อาคาร\s*)([^|\n•,]{3,65})/i
+  );
+  if (match && match[0]) {
+    return match[0].trim();
+  }
+  return null;
+}
+
+interface DayGroupEntry {
+  date: string;
+  items: Array<{
+    task: Task;
+    displayDate: string;
+    dayIndexOfSpan: number;
+    totalSpanDays: number;
+    timeRangeLabel?: string;
+  }>;
+}
+
 export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   tasks,
   categories,
@@ -189,11 +217,74 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [focusDate, setFocusDate] = useState<string>(() => formatLocalDateYMD());
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
+  const [selectedPriority, setSelectedPriority] = useState<string>('all');
   const [showCompleted, setShowCompleted] = useState<boolean>(true);
   const [expandMultiDay, setExpandMultiDay] = useState<boolean>(false);
-  const [isDarkDisplay, setIsDarkDisplay] = useState<boolean>(false);
+  const [boardTheme, setBoardTheme] = useState<BoardThemeMode>('light');
   const [isLargeText, setIsLargeText] = useState<boolean>(false);
   const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
+  const [isAutoScroll, setIsAutoScroll] = useState<boolean>(false);
+
+  const isDarkDisplay = boardTheme === 'dark' || boardTheme === 'navy_gold';
+  const isNavyGold = boardTheme === 'navy_gold';
+  const isEmeraldExec = boardTheme === 'emerald_exec';
+
+  const handleCycleTheme = () => {
+    setBoardTheme((prev) => {
+      if (prev === 'light') return 'navy_gold';
+      if (prev === 'navy_gold') return 'dark';
+      if (prev === 'dark') return 'emerald_exec';
+      return 'light';
+    });
+  };
+
+  const themeButtonLabel = useMemo(() => {
+    if (boardTheme === 'navy_gold') return 'โทนสี: กรมท่า-ทอง (ผู้บริหาร)';
+    if (boardTheme === 'dark') return 'โทนสี: จอมืด (Dark TV)';
+    if (boardTheme === 'emerald_exec') return 'โทนสี: เขียวมรกต';
+    return 'โทนสี: สว่างมาตรฐาน';
+  }, [boardTheme]);
+
+  // Auto-scroll effect for TV Kiosk mode
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!isAutoScroll) return;
+    let direction: 1 | -1 = 1;
+    let pauseTicks = 0;
+
+    const interval = setInterval(() => {
+      if (pauseTicks > 0) {
+        pauseTicks--;
+        return;
+      }
+      const scrollEl =
+        isPresentationMode && containerRef.current
+          ? containerRef.current
+          : document.scrollingElement || document.documentElement;
+      if (!scrollEl) return;
+
+      const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
+      if (maxScroll <= 10) return;
+
+      if (direction === 1) {
+        if (scrollEl.scrollTop + 2 >= maxScroll) {
+          pauseTicks = 45;
+          direction = -1;
+        } else {
+          scrollEl.scrollTop += 1.5;
+        }
+      } else {
+        if (scrollEl.scrollTop <= 2) {
+          pauseTicks = 45;
+          direction = 1;
+        } else {
+          scrollEl.scrollTop -= 2.5;
+        }
+      }
+    }, 40);
+
+    return () => clearInterval(interval);
+  }, [isAutoScroll, isPresentationMode]);
 
   const categoryMap = useMemo(() => {
     const map: Record<string, Category> = {};
@@ -229,7 +320,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const endOf7DaysStr = useMemo(() => addDaysYMD(todayStr, 6), [todayStr]);
 
   // Build grouped schedule entries by date (consolidating continuous tasks into a single entry by default)
-  const scheduleByDate = useMemo(() => {
+  const scheduleByDate = useMemo<DayGroupEntry[]>(() => {
     const normalizedTasks = tasks.map((t) => {
       const inferred = inferTaskEndDate(t);
       return inferred && (!t.endDate || inferred > t.endDate)
@@ -239,15 +330,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     const filtered = normalizedTasks.filter((t) => {
       if (!showCompleted && t.status === TaskStatus.COMPLETED) return false;
       if (selectedCategoryId !== 'all' && t.categoryId !== selectedCategoryId) return false;
+      if (selectedPriority !== 'all' && t.priority !== selectedPriority) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const catName = (categoryMap[t.categoryId]?.name || '').toLowerCase();
         const thaiDate = formatTaskDateRangeLabel(t, 'long').toLowerCase();
+        const assignee = (t.assigneeName || '').toLowerCase();
         const match =
           t.title.toLowerCase().includes(q) ||
           t.description.toLowerCase().includes(q) ||
           catName.includes(q) ||
           thaiDate.includes(q) ||
+          assignee.includes(q) ||
           t.date.includes(q) ||
           t.time.includes(q);
         if (!match) return false;
@@ -335,6 +429,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         if (layoutMode === 'single_day') {
           if (task.date > focusDate || taskEnd < focusDate) continue;
           anchorDate = focusDate;
+        } else if (layoutMode === 'split_two_column') {
+          if (taskEnd < todayStr) continue;
+          anchorDate = task.date < todayStr ? todayStr : task.date;
         } else if (rangeMode === 'today') {
           if (task.date > todayStr || taskEnd < todayStr) continue;
           anchorDate = todayStr;
@@ -360,6 +457,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         datesToPlace.forEach((dStr, idx) => {
           if (layoutMode === 'single_day') {
             if (dStr !== focusDate) return;
+          } else if (layoutMode === 'split_two_column') {
+            if (dStr < todayStr) return;
           } else {
             if (rangeMode === 'today' && dStr !== todayStr) return;
             if (rangeMode === 'upcoming' && dStr < todayStr) return;
@@ -393,6 +492,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     tasks,
     showCompleted,
     selectedCategoryId,
+    selectedPriority,
     searchQuery,
     categoryMap,
     expandMultiDay,
@@ -403,14 +503,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     endOf7DaysStr,
   ]);
 
-  const totalDisplayedTasksCount = useMemo(() => {
-    const uniqueIds = new Set<string>();
-    scheduleByDate.forEach((group) => {
-      group.items.forEach((entry) => uniqueIds.add(entry.task.id));
-    });
-    return uniqueIds.size;
-  }, [scheduleByDate]);
-
   const todayTasksSummary = useMemo(() => {
     const activeToday = tasks
       .filter((t) => isTaskActiveOnDate(t, todayStr))
@@ -420,22 +512,39 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     const nextUpcoming = activeToday.find(
       (t) => t.status !== TaskStatus.COMPLETED && t.time >= nowHM
     );
+    const upcomingAndTodayTasks = tasks.filter((t) => {
+      const end = t.endDate && t.endDate > t.date ? t.endDate : t.date;
+      return end >= todayStr;
+    });
+    const highPriorityCount = upcomingAndTodayTasks.filter(
+      (t) => t.priority === TaskPriority.HIGH && t.status !== TaskStatus.COMPLETED
+    ).length;
+    const allSchedulesCount =
+      upcomingAndTodayTasks.length > 0 ? upcomingAndTodayTasks.length : tasks.length;
+
     return {
       total: activeToday.length,
       pending,
       completed,
       nextUpcoming,
+      highPriorityCount,
+      allSchedulesCount,
     };
   }, [tasks, todayStr, nowHM]);
 
   const bannerRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [bannerHeight, setBannerHeight] = useState<number>(196);
+  const [toolbarHeight, setToolbarHeight] = useState<number>(74);
   const [headerHeight, setHeaderHeight] = useState<number>(61);
 
   useEffect(() => {
     const updateMeasurements = () => {
       if (bannerRef.current) {
         setBannerHeight(bannerRef.current.offsetHeight);
+      }
+      if (toolbarRef.current) {
+        setToolbarHeight(toolbarRef.current.offsetHeight);
       }
       const appHeader = document.querySelector('header');
       if (appHeader instanceof HTMLElement) {
@@ -455,6 +564,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     if (observer && bannerRef.current) {
       observer.observe(bannerRef.current);
     }
+    if (observer && toolbarRef.current) {
+      observer.observe(toolbarRef.current);
+    }
     const appHeader = document.querySelector('header');
     if (observer && appHeader instanceof HTMLElement) {
       observer.observe(appHeader);
@@ -465,22 +577,405 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       if (observer) observer.disconnect();
       window.removeEventListener('resize', updateMeasurements);
     };
-  }, [isLargeText, isDarkDisplay, isPresentationMode, todayTasksSummary]);
+  }, [isLargeText, boardTheme, isPresentationMode, todayTasksSummary, layoutMode]);
 
   const stickyTopBanner = isPresentationMode ? 12 : headerHeight + 8;
   const stickyGap = 16;
   const stickyTopToolbar = stickyTopBanner + bannerHeight + stickyGap;
-  const stickyMaskColor = isDarkDisplay ? '#020617' : '#F8FAFC';
+  const stickyTopToday = stickyTopToolbar + toolbarHeight + stickyGap;
+  const stickyMaskColor = isNavyGold
+    ? '#0A1628'
+    : isDarkDisplay
+    ? '#020617'
+    : isEmeraldExec
+    ? '#F0FDF4'
+    : '#F8FAFC';
+
+  const surfaceCardClasses = isNavyGold
+    ? 'bg-[#0F213C] border-amber-400/40 text-white'
+    : isDarkDisplay
+    ? 'bg-slate-900 border-slate-800 text-white'
+    : isEmeraldExec
+    ? 'bg-white border-emerald-200 text-slate-900'
+    : 'bg-white border-slate-200 text-slate-900';
+
+  const renderDaySection = (group: DayGroupEntry) => {
+    const isTodayGroup = group.date === todayStr;
+    const isPinnedToday = isTodayGroup && layoutMode === 'grouped_by_day';
+    const rel = getRelativeDayLabel(group.date, todayStr);
+    const doneInDay = group.items.filter(
+      (i) => i.task.status === TaskStatus.COMPLETED
+    ).length;
+    const pendingInDay = group.items.length - doneInDay;
+
+    return (
+      <section
+        key={group.date}
+        style={
+          isPinnedToday
+            ? {
+                top: `${stickyTopToday}px`,
+                boxShadow: `0 -16px 0 12px ${stickyMaskColor}, 0 10px 0 8px ${stickyMaskColor}, 0 16px 24px -6px rgba(15, 23, 42, 0.18)`,
+              }
+            : undefined
+        }
+        className={`${
+          isPinnedToday ? 'sticky z-[15] ' : ''
+        }rounded-2xl border overflow-hidden transition-colors ${
+          isTodayGroup
+            ? isNavyGold
+              ? 'bg-[#0F213C] border-amber-400/80'
+              : isDarkDisplay
+              ? 'bg-slate-900 border-emerald-500/70'
+              : isEmeraldExec
+              ? 'bg-white border-emerald-400'
+              : 'bg-white border-indigo-300'
+            : isNavyGold
+            ? 'bg-[#0F213C] border-slate-700/80'
+            : isDarkDisplay
+            ? 'bg-slate-900 border-slate-800'
+            : isEmeraldExec
+            ? 'bg-white border-emerald-200'
+            : 'bg-white border-slate-200'
+        }`}
+      >
+        {/* Day Header Bar */}
+        <div
+          className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 ${
+            isDarkDisplay
+              ? 'bg-white border-slate-200 text-slate-900'
+              : isEmeraldExec
+              ? isTodayGroup
+                ? 'bg-emerald-50/90 border-emerald-200 text-slate-900'
+                : 'bg-slate-50/90 border-slate-200 text-slate-900'
+              : isTodayGroup
+              ? 'bg-indigo-50/70 border-indigo-200/80'
+              : 'bg-slate-50/80 border-slate-200/80'
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <CalendarIcon
+              className={`h-6 w-6 shrink-0 ${
+                isTodayGroup
+                  ? isEmeraldExec
+                    ? 'text-emerald-700'
+                    : 'text-indigo-600'
+                  : 'text-slate-600'
+              }`}
+            />
+            <h2
+              className={`font-extrabold text-slate-900 ${
+                isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
+              }`}
+            >
+              {!expandMultiDay
+                ? formatSummaryCardHeaderDate(
+                    group.date,
+                    group.items.map((i) => i.task)
+                  )
+                : formatFullThaiDayHeader(group.date)}
+            </h2>
+            <span
+              className={`${
+                isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
+              } font-bold ${
+                rel.tone === 'today'
+                  ? 'text-emerald-600'
+                  : rel.tone === 'tomorrow'
+                  ? 'text-indigo-600'
+                  : 'text-slate-600'
+              }`}
+            >
+              · {rel.text}
+            </span>
+          </div>
+
+          <div
+            className={`flex flex-wrap items-center gap-4 ${
+              isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+            }`}
+          >
+            <div className="font-sans tabular-nums font-bold text-slate-700">
+              รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
+            </div>
+            <button
+              type="button"
+              onClick={() => onAddTaskForDate(group.date)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white font-bold transition-colors whitespace-nowrap shrink-0 ${
+                isEmeraldExec
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : 'bg-indigo-600 hover:bg-indigo-700'
+              }`}
+            >
+              <Plus className="h-4 w-4" />
+              <span>เพิ่มงานวันนี้</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Day Schedule Rows */}
+        <div
+          className={`divide-y ${
+            isDarkDisplay ? 'divide-slate-800' : 'divide-slate-200'
+          }`}
+        >
+          {group.items.map((entry, idx) => {
+            const {
+              task,
+              displayDate,
+              dayIndexOfSpan,
+              totalSpanDays,
+              timeRangeLabel,
+            } = entry;
+            const cat = categoryMap[task.categoryId];
+            const catColor = cat?.color || '#2563EB';
+            const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
+            const isDone = task.status === TaskStatus.COMPLETED;
+            const isHigh = task.priority === TaskPriority.HIGH;
+            const isCurrentDayPassed =
+              displayDate === todayStr && task.time <= nowHM && !isDone;
+            const isNextUpcomingRow =
+              displayDate === todayStr &&
+              !isDone &&
+              todayTasksSummary.nextUpcoming?.id === task.id;
+            const detectedVenue = extractLocationFromText(task.title, task.description);
+
+            return (
+              <div
+                key={`${displayDate}-${task.id}-${idx}`}
+                className={`px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+                  isNextUpcomingRow
+                    ? isDarkDisplay
+                      ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                      : 'bg-amber-50/70 hover:bg-amber-50'
+                    : isDarkDisplay
+                    ? 'hover:bg-slate-800/40'
+                    : 'hover:bg-slate-50/70'
+                }`}
+              >
+                {/* Left: Time Column + Task Details */}
+                <div className="flex items-start gap-5 min-w-0">
+                  {/* Distinct Time Slot Column */}
+                  <div className="w-36 sm:w-44 shrink-0">
+                    <div
+                      className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
+                        isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
+                      } ${
+                        isDone
+                          ? 'text-slate-400 line-through'
+                          : isNextUpcomingRow
+                          ? isDarkDisplay
+                            ? 'text-amber-300'
+                            : 'text-amber-800'
+                          : isDarkDisplay
+                          ? 'text-emerald-400'
+                          : 'text-indigo-950'
+                      }`}
+                    >
+                      <Clock
+                        className={`h-5 w-5 shrink-0 ${
+                          isDone
+                            ? 'text-slate-400'
+                            : isNextUpcomingRow
+                            ? isDarkDisplay
+                              ? 'text-amber-300'
+                              : 'text-amber-600'
+                            : isDarkDisplay
+                            ? 'text-emerald-400'
+                            : 'text-indigo-500'
+                        }`}
+                      />
+                      <span>{timeRangeLabel || task.time} น.</span>
+                    </div>
+                  </div>
+
+                  {/* Task Content */}
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => onEditTask(task)}
+                        className={`font-bold text-left hover:underline break-words ${
+                          isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
+                        } ${
+                          isDone
+                            ? 'line-through text-slate-400'
+                            : isDarkDisplay
+                            ? 'text-white'
+                            : 'text-slate-900'
+                        }`}
+                      >
+                        {task.title}
+                      </button>
+                      {isHigh && !isDone && (
+                        <span
+                          className={`${
+                            isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                          } font-bold ${
+                            isDarkDisplay ? 'text-rose-400' : 'text-rose-600'
+                          }`}
+                        >
+                          · ด่วนมาก
+                        </span>
+                      )}
+                      {isNextUpcomingRow && (
+                        <span
+                          className={`${
+                            isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                          } font-bold ${
+                            isDarkDisplay ? 'text-amber-300' : 'text-amber-700'
+                          }`}
+                        >
+                          · กำลังจะถึงกำหนด (คิวถัดไป)
+                        </span>
+                      )}
+                    </div>
+
+                    {task.description && (
+                      <p
+                        className={`leading-relaxed break-words ${
+                          isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
+                        } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
+                      >
+                        {task.description}
+                      </p>
+                    )}
+
+                    <div
+                      className={`flex flex-wrap items-center gap-2.5 ${
+                        isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                      } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'} pt-1`}
+                    >
+                      <span
+                        className="inline-flex items-center gap-2 font-bold"
+                        style={{ color: displayCatColor }}
+                      >
+                        <span
+                          className="h-3 w-3 rounded-xs shrink-0"
+                          style={{ backgroundColor: displayCatColor }}
+                        />
+                        <span>{cat?.name || 'ทั่วไป'}</span>
+                      </span>
+
+                      {totalSpanDays > 1 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={`font-bold ${
+                              isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
+                            }`}
+                          >
+                            {!expandMultiDay
+                              ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
+                                  task,
+                                  'long'
+                                )}`
+                              : `งานต่อเนื่อง ${formatTaskDateRangeLabel(
+                                  task,
+                                  'short'
+                                ).replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
+                          </span>
+                        </>
+                      )}
+
+                      {detectedVenue && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={`font-semibold ${
+                              isDarkDisplay ? 'text-amber-200' : 'text-slate-700'
+                            }`}
+                          >
+                            สถานที่: {detectedVenue}
+                          </span>
+                        </>
+                      )}
+
+                      {task.assigneeName && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={`font-medium ${
+                              isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
+                            }`}
+                          >
+                            ผู้รับผิดชอบ: {task.assigneeName}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Status & Quick Action */}
+                <div className="flex items-center justify-end gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onToggleStatus(task)}
+                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
+                      isLargeText ? 'text-base' : 'text-sm'
+                    } font-bold transition-colors whitespace-nowrap shrink-0 ${
+                      isDone
+                        ? isDarkDisplay
+                          ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : isCurrentDayPassed
+                        ? isDarkDisplay
+                          ? 'bg-amber-950/60 border-amber-700 text-amber-300'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                        : isDarkDisplay
+                        ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {isDone ? (
+                      <>
+                        <CheckCircle2
+                          className={`h-4 w-4 ${
+                            isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                          }`}
+                        />
+                        <span>เสร็จสิ้นแล้ว</span>
+                      </>
+                    ) : (
+                      <>
+                        <Circle
+                          className="h-4 w-4"
+                          style={{ color: displayCatColor }}
+                        />
+                        <span>
+                          {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <div
+      ref={containerRef}
       className={`space-y-4 transition-colors ${
         isPresentationMode
-          ? isDarkDisplay
+          ? isNavyGold
+            ? 'fixed inset-0 z-50 overflow-y-auto bg-[#0A1628] text-slate-100 p-6 sm:p-10'
+            : isDarkDisplay
             ? 'fixed inset-0 z-50 overflow-y-auto bg-slate-950 text-slate-100 p-6 sm:p-10'
+            : isEmeraldExec
+            ? 'fixed inset-0 z-50 overflow-y-auto bg-[#F0FDF4] text-slate-900 p-6 sm:p-10'
             : 'fixed inset-0 z-50 overflow-y-auto bg-slate-50 text-slate-900 p-6 sm:p-10'
+          : isNavyGold
+          ? 'bg-[#0A1628] text-slate-100 rounded-2xl p-6 border border-amber-400/40'
           : isDarkDisplay
-          ? 'bg-slate-950 text-slate-100 rounded-2xl p-6 border border-slate-800 shadow-lg'
+          ? 'bg-slate-950 text-slate-100 rounded-2xl p-6 border border-slate-800'
+          : isEmeraldExec
+          ? 'bg-[#F0FDF4] text-slate-900 rounded-2xl p-6 border border-emerald-200'
           : ''
       }`}
     >
@@ -491,32 +986,113 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           top: `${stickyTopBanner}px`,
           boxShadow: `0 -20px 0 12px ${stickyMaskColor}, 0 12px 0 12px ${stickyMaskColor}`,
         }}
-        className={`sticky z-20 rounded-2xl border p-6 transition-colors ${
-          isDarkDisplay
-            ? 'bg-slate-900 border-slate-800 text-white'
-            : 'bg-white border-slate-200 text-slate-900'
-        }`}
+        className={`sticky z-20 rounded-2xl border p-6 transition-colors ${surfaceCardClasses}`}
       >
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-1.5">
-            <h1
-              className={`font-extrabold tracking-tight leading-tight ${
-                isLargeText
-                  ? 'text-4xl sm:text-5xl md:text-[52px]'
-                  : 'text-3xl sm:text-4xl md:text-[42px]'
-              } ${isDarkDisplay ? 'text-white' : 'text-slate-900'}`}
+          <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
+            <div
+              className={`h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full bg-white p-1.5 border-2 flex items-center justify-center shrink-0 shadow-xs ${
+                isNavyGold
+                  ? 'border-amber-400'
+                  : isDarkDisplay
+                  ? 'border-sky-400/80'
+                  : isEmeraldExec
+                  ? 'border-emerald-400'
+                  : 'border-indigo-200'
+              }`}
             >
-              กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
-            </h1>
+              <img
+                src="/assets/aistudio/2b6f4798-6fe6-41d0-99e7-6b47b9750826_921c3a5e.png"
+                alt="ตราสัญลักษณ์ประจำกระทรวงแรงงาน / กรมการจัดหางาน"
+                className="h-full w-full object-contain rounded-full"
+              />
+            </div>
+
+            <div className="min-w-0 space-y-3">
+              <h1
+                className={`font-extrabold tracking-tight leading-tight text-balance ${
+                  isLargeText
+                    ? 'text-3xl sm:text-4xl md:text-[46px]'
+                    : 'text-2xl sm:text-3xl md:text-[38px]'
+                } ${
+                  isNavyGold
+                    ? 'text-amber-50'
+                    : isDarkDisplay
+                    ? 'text-white'
+                    : 'text-slate-900'
+                }`}
+              >
+                กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
+              </h1>
+
+              {/* Executive Mission Summary Stats Strip */}
+              <div
+                className={`flex flex-wrap items-center gap-2.5 sm:gap-3 ${
+                  isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                }`}
+              >
+                <div
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
+                    isNavyGold
+                      ? 'bg-amber-400/20 border-amber-400/80 text-amber-100'
+                      : isDarkDisplay
+                      ? 'bg-sky-500/20 border-sky-400/80 text-sky-100'
+                      : isEmeraldExec
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-950'
+                  }`}
+                >
+                  <span>ภารกิจวันนี้:</span>
+                  <span className="font-sans tabular-nums font-extrabold">
+                    {todayTasksSummary.total} งาน
+                  </span>
+                  <span
+                    className={`text-xs sm:text-sm font-semibold ${
+                      isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
+                    }`}
+                  >
+                    (รอทำ {todayTasksSummary.pending} · เสร็จแล้ว {todayTasksSummary.completed})
+                  </span>
+                </div>
+
+                <div
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
+                    isDarkDisplay
+                      ? 'bg-rose-500/25 border-rose-400/80 text-rose-100'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  <span>งานด่วน / สำคัญสูง:</span>
+                  <span className="font-sans tabular-nums font-extrabold">
+                    {todayTasksSummary.highPriorityCount} งาน
+                  </span>
+                </div>
+
+                <div
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl border font-bold ${
+                    isDarkDisplay
+                      ? 'bg-emerald-500/20 border-emerald-400/80 text-emerald-100'
+                      : 'bg-slate-100 border-slate-300 text-slate-900'
+                  }`}
+                >
+                  <span>รวมทุกกำหนดการ:</span>
+                  <span className="font-sans tabular-nums font-extrabold">
+                    {todayTasksSummary.allSchedulesCount} งาน
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Right Live Thailand Digital Clock */}
           <div className="flex items-center shrink-0">
             <div
               className={`min-w-[280px] sm:min-w-[350px] rounded-2xl border-2 px-6 py-3.5 sm:px-8 sm:py-4 text-right transition-colors ${
-                isDarkDisplay
-                  ? 'bg-white border-slate-200 text-slate-900 shadow-md'
-                  : 'bg-gradient-to-br from-indigo-50/95 via-white to-emerald-50/80 border-indigo-200 text-slate-900 shadow-sm'
+                isNavyGold
+                  ? 'bg-white border-amber-400 text-slate-900'
+                  : isDarkDisplay
+                  ? 'bg-white border-slate-200 text-slate-900'
+                  : 'bg-gradient-to-br from-indigo-50/95 via-white to-emerald-50/80 border-indigo-200 text-slate-900'
               }`}
             >
               <div
@@ -614,7 +1190,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
                 <span>
                   ภารกิจถัดไป:{' '}
-                  <strong className={isDarkDisplay ? 'text-white' : 'text-slate-900'}>
+                  <strong className={isDarkDisplay ? 'text-amber-200' : 'text-slate-900'}>
                     {todayTasksSummary.nextUpcoming.time} น. —{' '}
                     {todayTasksSummary.nextUpcoming.title}
                   </strong>
@@ -624,6 +1200,30 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsAutoScroll((prev) => !prev)}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                isAutoScroll
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : isDarkDisplay
+                  ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                  : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              {isAutoScroll ? (
+                <>
+                  <Pause className="h-3 w-3" />
+                  <span>หยุดเลื่อนจอ</span>
+                </>
+              ) : (
+                <>
+                  <Play className="h-3 w-3" />
+                  <span>เลื่อนจออัตโนมัติ (TV)</span>
+                </>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => setIsLargeText((prev) => !prev)}
@@ -640,14 +1240,19 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
             <button
               type="button"
-              onClick={() => setIsDarkDisplay((prev) => !prev)}
-              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                isDarkDisplay
-                  ? 'bg-amber-400 text-slate-950 border-amber-400'
+              onClick={handleCycleTheme}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                isNavyGold
+                  ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold'
+                  : isDarkDisplay
+                  ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold'
+                  : isEmeraldExec
+                  ? 'bg-emerald-700 text-white border-emerald-700'
                   : 'bg-slate-800 text-white border-slate-800 hover:bg-slate-700'
               }`}
             >
-              {isDarkDisplay ? 'โหมดสว่าง' : 'โหมดจอมืด (Dark TV)'}
+              <Palette className="h-3 w-3" />
+              <span>{themeButtonLabel}</span>
             </button>
 
             <button
@@ -666,7 +1271,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             <button
               type="button"
               onClick={handleTogglePresentationFullscreen}
-              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 shadow-2xs"
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-[11px] font-bold transition-colors whitespace-nowrap shrink-0"
             >
               {isPresentationMode ? (
                 <>
@@ -686,21 +1291,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
       {/* Filter & View Mode Toolbar */}
       <div
+        ref={toolbarRef}
         style={{
           top: `${stickyTopToolbar}px`,
           boxShadow: `0 -16px 0 12px ${stickyMaskColor}, 0 4px 0 6px ${stickyMaskColor}, 0 12px 20px -6px rgba(15, 23, 42, 0.14)`,
         }}
-        className={`sticky z-20 rounded-2xl border p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 ${
-          isDarkDisplay
-            ? 'bg-slate-900 border-slate-800 text-white'
-            : 'bg-white border-slate-200 text-slate-900'
-        }`}
+        className={`sticky z-20 rounded-2xl border p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 ${surfaceCardClasses}`}
       >
         {/* Left: Layout & Date Range Selector */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Layout Mode Tabs */}
           <div
-            className={`inline-flex items-center gap-1 p-1 rounded-xl ${
+            className={`inline-flex flex-wrap items-center gap-1 p-1 rounded-xl ${
               isDarkDisplay ? 'bg-slate-950' : 'bg-slate-100'
             }`}
           >
@@ -716,6 +1318,19 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               }`}
             >
               แยกตารางตามวัน
+            </button>
+            <button
+              type="button"
+              onClick={() => setLayoutMode('split_two_column')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+                layoutMode === 'split_two_column'
+                  ? 'bg-indigo-600 text-white'
+                  : isDarkDisplay
+                  ? 'text-slate-300 hover:text-white'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              แบ่ง 2 คอลัมน์ (วันนี้ + ล่วงหน้า)
             </button>
             <button
               type="button"
@@ -748,8 +1363,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </button>
           </div>
 
-          {/* Range Selector when not in single_day mode */}
-          {layoutMode !== 'single_day' ? (
+          {/* Range Selector when not in single_day or split_two_column mode */}
+          {layoutMode !== 'single_day' && layoutMode !== 'split_two_column' ? (
             <div
               className={`inline-flex items-center gap-1 p-1 rounded-xl ${
                 isDarkDisplay ? 'bg-slate-950' : 'bg-slate-100'
@@ -771,7 +1386,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     rangeMode === item.id
                       ? isDarkDisplay
                         ? 'bg-emerald-600 text-white font-semibold'
-                        : 'bg-white text-slate-900 font-semibold shadow-2xs'
+                        : 'bg-white text-slate-900 font-semibold'
                       : isDarkDisplay
                       ? 'text-slate-300 hover:text-white'
                       : 'text-slate-600 hover:text-slate-900'
@@ -781,7 +1396,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 </button>
               ))}
             </div>
-          ) : (
+          ) : layoutMode === 'single_day' ? (
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -821,18 +1436,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 กลับมาวันนี้
               </button>
             </div>
-          )}
+          ) : null}
         </div>
 
-        {/* Right: Search, Category Filter & Toggles */}
+        {/* Right: Search, Category Filter, Priority Filter & Toggles */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative min-w-[200px] flex-1 sm:flex-initial">
+          <div className="relative min-w-[180px] flex-1 sm:flex-initial">
             <Search className="h-3.5 w-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="ค้นหาชื่องาน, เวลา, วันที่..."
+              placeholder="ค้นหาชื่องาน, เวลา, สถานที่..."
               className="w-full rounded-xl border border-slate-300 !bg-white !text-slate-900 placeholder:text-slate-500 pl-8 pr-3 py-1.5 text-xs font-medium focus:border-indigo-600 focus:outline-none"
             />
           </div>
@@ -840,7 +1455,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           <select
             value={selectedCategoryId}
             onChange={(e) => setSelectedCategoryId(e.target.value)}
-            className="rounded-xl border border-slate-300 !bg-white !text-slate-900 px-3.5 py-1.5 text-xs sm:text-sm font-bold focus:border-indigo-600 focus:outline-none cursor-pointer"
+            className="rounded-xl border border-slate-300 !bg-white !text-slate-900 px-3 py-1.5 text-xs sm:text-sm font-bold focus:border-indigo-600 focus:outline-none cursor-pointer"
           >
             <option value="all" className="bg-white text-slate-900 font-bold">
               ทุกหมวดหมู่งาน
@@ -852,7 +1467,26 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             ))}
           </select>
 
-          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1.5 rounded-xl">
+          <select
+            value={selectedPriority}
+            onChange={(e) => setSelectedPriority(e.target.value)}
+            className="rounded-xl border border-slate-300 !bg-white !text-slate-900 px-3 py-1.5 text-xs sm:text-sm font-bold focus:border-indigo-600 focus:outline-none cursor-pointer"
+          >
+            <option value="all" className="bg-white text-slate-900 font-bold">
+              ทุกระดับความสำคัญ
+            </option>
+            <option value={TaskPriority.HIGH} className="bg-white text-rose-700 font-bold">
+              เฉพาะงานด่วนมาก (สูง)
+            </option>
+            <option value={TaskPriority.MEDIUM} className="bg-white text-amber-700 font-semibold">
+              ความสำคัญปานกลาง
+            </option>
+            <option value={TaskPriority.LOW} className="bg-white text-slate-700 font-semibold">
+              ความสำคัญทั่วไป
+            </option>
+          </select>
+
+          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1.5 rounded-xl whitespace-nowrap shrink-0">
             <input
               type="checkbox"
               checked={!expandMultiDay}
@@ -863,7 +1497,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </label>
 
           <label
-            className={`inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-semibold px-2.5 py-1.5 rounded-xl border ${
+            className={`inline-flex items-center gap-1.5 text-xs cursor-pointer select-none font-semibold px-2.5 py-1.5 rounded-xl border whitespace-nowrap shrink-0 ${
               isDarkDisplay
                 ? 'bg-slate-800 border-slate-700 text-white'
                 : 'bg-slate-50 border-slate-200 text-slate-800'
@@ -883,17 +1517,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       {/* Empty State */}
       {scheduleByDate.length === 0 ? (
         <div
-          className={`rounded-2xl border p-12 text-center space-y-3 ${
-            isDarkDisplay
-              ? 'bg-slate-900 border-slate-800 text-slate-300'
-              : 'bg-white border-slate-200 text-slate-600'
-          }`}
+          className={`rounded-2xl border p-12 text-center space-y-3 ${surfaceCardClasses}`}
         >
           <MonitorPlay className="h-10 w-10 mx-auto text-indigo-500 opacity-80" />
           <div className="text-base font-bold">
             ไม่มีรายการงานในช่วงวันที่หรือตัวกรองที่เลือก
           </div>
-          <p className="text-xs max-w-md mx-auto">
+          <p className={`text-xs max-w-md mx-auto ${isDarkDisplay ? 'text-slate-300' : 'text-slate-600'}`}>
             คุณสามารถสลับตัวกรองเป็น "ทุกวันทั้งหมด" หรือกดเพิ่มงานใหม่เพื่อแสดงในตารางสรุปงานได้ทันที
           </p>
           <div className="pt-2 flex items-center justify-center gap-3">
@@ -904,8 +1534,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 setLayoutMode('grouped_by_day');
                 setSearchQuery('');
                 setSelectedCategoryId('all');
+                setSelectedPriority('all');
               }}
-              className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-colors"
+              className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
             >
               ดูตารางงานทุกวันทั้งหมด
             </button>
@@ -914,7 +1545,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               onClick={() =>
                 onAddTaskForDate(layoutMode === 'single_day' ? focusDate : todayStr)
               }
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
               <span>เพิ่มงานใหม่</span>
@@ -924,11 +1555,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       ) : layoutMode === 'master_table' ? (
         /* Master Continuous Schedule Table */
         <div
-          className={`rounded-2xl border overflow-hidden ${
-            isDarkDisplay
-              ? 'bg-slate-900 border-slate-800'
-              : 'bg-white border-slate-200 shadow-2xs'
-          }`}
+          className={`rounded-2xl border overflow-hidden ${surfaceCardClasses}`}
         >
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -1124,295 +1751,103 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </table>
           </div>
         </div>
+      ) : layoutMode === 'split_two_column' ? (
+        /* 2-Column Executive Split View: Left = Today's Missions (Pinned), Right = Upcoming Missions (Scrollable) */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Column: Today's Schedule (Sticky / Pinned) */}
+          <div
+            style={{
+              top: `${stickyTopToday}px`,
+              boxShadow: `0 -16px 0 10px ${stickyMaskColor}, 0 10px 0 8px ${stickyMaskColor}`,
+            }}
+            className="lg:col-span-6 space-y-4 sticky z-[15]"
+          >
+            <div
+              className={`px-4 py-2.5 rounded-xl border flex items-center justify-between ${
+                isDarkDisplay
+                  ? 'bg-slate-900 border-emerald-500/60 text-emerald-300'
+                  : 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+              }`}
+            >
+              <span className="font-extrabold text-sm sm:text-base">
+                ภารกิจวันนี้ ({formatFullThaiDayHeader(todayStr)})
+              </span>
+              <span className="text-xs font-bold tabular-nums">
+                {scheduleByDate.find((g) => g.date === todayStr)?.items.length || 0} รายการ
+              </span>
+            </div>
+
+            {scheduleByDate.filter((g) => g.date === todayStr).length > 0 ? (
+              scheduleByDate
+                .filter((g) => g.date === todayStr)
+                .map((group) => renderDaySection(group))
+            ) : (
+              <div
+                className={`rounded-2xl border p-8 text-center space-y-3 ${surfaceCardClasses}`}
+              >
+                <div className="text-sm font-bold">ไม่มีภารกิจที่กำหนดไว้ในวันนี้</div>
+                <button
+                  type="button"
+                  onClick={() => onAddTaskForDate(todayStr)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>เพิ่มงานวันนี้</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Right Column: Tomorrow & Upcoming Schedule */}
+          <div className="lg:col-span-6 space-y-4">
+            <div
+              className={`px-4 py-2.5 rounded-xl border flex items-center justify-between ${
+                isDarkDisplay
+                  ? 'bg-slate-900 border-sky-500/60 text-sky-300'
+                  : 'bg-indigo-50/90 border-indigo-200 text-indigo-950'
+              }`}
+            >
+              <span className="font-extrabold text-sm sm:text-base">
+                ภารกิจวันพรุ่งนี้และล่วงหน้า
+              </span>
+              <span className="text-xs font-bold tabular-nums">
+                {scheduleByDate
+                  .filter((g) => g.date > todayStr)
+                  .reduce((acc, g) => acc + g.items.length, 0)}{' '}
+                รายการ
+              </span>
+            </div>
+
+            {scheduleByDate.filter((g) => g.date > todayStr).length > 0 ? (
+              <div className="space-y-5">
+                {scheduleByDate
+                  .filter((g) => g.date > todayStr)
+                  .map((group) => renderDaySection(group))}
+              </div>
+            ) : (
+              <div
+                className={`rounded-2xl border p-8 text-center space-y-3 ${surfaceCardClasses}`}
+              >
+                <div className="text-sm font-bold">ยังไม่มีภารกิจล่วงหน้าในรายการ</div>
+                <button
+                  type="button"
+                  onClick={() => onAddTaskForDate(addDaysYMD(todayStr, 1))}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>เพิ่มงานวันพรุ่งนี้</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       ) : (
         /* Day-by-Day Schedule Sections (Default & Single-Day Presentation View) */
         <div className="space-y-6">
-          {scheduleByDate.map((group) => {
-            const isTodayGroup = group.date === todayStr;
-            const rel = getRelativeDayLabel(group.date, todayStr);
-            const doneInDay = group.items.filter(
-              (i) => i.task.status === TaskStatus.COMPLETED
-            ).length;
-            const pendingInDay = group.items.length - doneInDay;
-
-            return (
-              <section
-                key={group.date}
-                className={`rounded-2xl border overflow-hidden transition-colors ${
-                  isTodayGroup
-                    ? isDarkDisplay
-                      ? 'bg-slate-900 border-emerald-500/70'
-                      : 'bg-white border-indigo-300 shadow-sm'
-                    : isDarkDisplay
-                    ? 'bg-slate-900 border-slate-800'
-                    : 'bg-white border-slate-200 shadow-2xs'
-                }`}
-              >
-                {/* Day Header Bar */}
-                <div
-                  className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 ${
-                    isDarkDisplay
-                      ? 'bg-white border-slate-200 text-slate-900'
-                      : isTodayGroup
-                      ? 'bg-indigo-50/70 border-indigo-200/80'
-                      : 'bg-slate-50/80 border-slate-200/80'
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center gap-3">
-                    <CalendarIcon
-                      className={`h-6 w-6 shrink-0 ${
-                        isTodayGroup ? 'text-indigo-600' : 'text-slate-600'
-                      }`}
-                    />
-                    <h2
-                      className={`font-extrabold text-slate-900 ${
-                        isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
-                      }`}
-                    >
-                      {!expandMultiDay
-                        ? formatSummaryCardHeaderDate(
-                            group.date,
-                            group.items.map((i) => i.task)
-                          )
-                        : formatFullThaiDayHeader(group.date)}
-                    </h2>
-                    <span
-                      className={`${
-                        isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
-                      } font-bold ${
-                        rel.tone === 'today'
-                          ? 'text-emerald-600'
-                          : rel.tone === 'tomorrow'
-                          ? 'text-indigo-600'
-                          : 'text-slate-600'
-                      }`}
-                    >
-                      · {rel.text}
-                    </span>
-                  </div>
-
-                  <div
-                    className={`flex flex-wrap items-center gap-4 ${
-                      isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                    }`}
-                  >
-                    <div className="font-sans tabular-nums font-bold text-slate-700">
-                      รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onAddTaskForDate(group.date)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <Plus className="h-4 w-4" />
-                      <span>เพิ่มงานวันนี้</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Day Schedule Rows */}
-                <div
-                  className={`divide-y ${
-                    isDarkDisplay ? 'divide-slate-800' : 'divide-slate-200'
-                  }`}
-                >
-                  {group.items.map((entry, idx) => {
-                    const {
-                      task,
-                      displayDate,
-                      dayIndexOfSpan,
-                      totalSpanDays,
-                      timeRangeLabel,
-                    } = entry;
-                    const cat = categoryMap[task.categoryId];
-                    const catColor = cat?.color || '#2563EB';
-                    const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
-                    const isDone = task.status === TaskStatus.COMPLETED;
-                    const isHigh = task.priority === TaskPriority.HIGH;
-                    const isCurrentDayPassed =
-                      displayDate === todayStr && task.time <= nowHM && !isDone;
-
-                    return (
-                      <div
-                        key={`${displayDate}-${task.id}-${idx}`}
-                        className={`px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
-                          isDarkDisplay ? 'hover:bg-slate-800/40' : 'hover:bg-slate-50/70'
-                        }`}
-                      >
-                        {/* Left: Time Column + Task Details */}
-                        <div className="flex items-start gap-5 min-w-0">
-                          {/* Distinct Time Slot Column */}
-                          <div className="w-36 sm:w-44 shrink-0">
-                            <div
-                              className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
-                                isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
-                              } ${
-                                isDone
-                                  ? 'text-slate-400 line-through'
-                                  : isDarkDisplay
-                                  ? 'text-emerald-400'
-                                  : 'text-indigo-950'
-                              }`}
-                            >
-                              <Clock
-                                className={`h-5 w-5 shrink-0 ${
-                                  isDone
-                                    ? 'text-slate-400'
-                                    : isDarkDisplay
-                                    ? 'text-emerald-400'
-                                    : 'text-indigo-500'
-                                }`}
-                              />
-                              <span>{timeRangeLabel || task.time} น.</span>
-                            </div>
-                          </div>
-
-                          {/* Task Content */}
-                          <div className="min-w-0 flex-1 space-y-1.5">
-                            <div className="flex flex-wrap items-center gap-2.5">
-                              <button
-                                type="button"
-                                onClick={() => onEditTask(task)}
-                                className={`font-bold text-left hover:underline break-words ${
-                                  isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
-                                } ${
-                                  isDone
-                                    ? 'line-through text-slate-400'
-                                    : isDarkDisplay
-                                    ? 'text-white'
-                                    : 'text-slate-900'
-                                }`}
-                              >
-                                {task.title}
-                              </button>
-                              {isHigh && !isDone && (
-                                <span
-                                  className={`${
-                                    isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                                  } font-bold ${
-                                    isDarkDisplay ? 'text-rose-400' : 'text-rose-600'
-                                  }`}
-                                >
-                                  · ด่วนมาก
-                                </span>
-                              )}
-                            </div>
-
-                            {task.description && (
-                              <p
-                                className={`leading-relaxed break-words ${
-                                  isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
-                                } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
-                              >
-                                {task.description}
-                              </p>
-                            )}
-
-                            <div
-                              className={`flex flex-wrap items-center gap-2.5 ${
-                                isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                              } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'} pt-1`}
-                            >
-                              <span
-                                className="inline-flex items-center gap-2 font-bold"
-                                style={{ color: displayCatColor }}
-                              >
-                                <span
-                                  className="h-3 w-3 rounded-xs shrink-0"
-                                  style={{ backgroundColor: displayCatColor }}
-                                />
-                                <span>{cat?.name || 'ทั่วไป'}</span>
-                              </span>
-
-                              {totalSpanDays > 1 && (
-                                <>
-                                  <span aria-hidden="true">·</span>
-                                  <span
-                                    className={`font-bold ${
-                                      isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
-                                    }`}
-                                  >
-                                    {!expandMultiDay
-                                      ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
-                                          task,
-                                          'long'
-                                        )}`
-                                      : `งานต่อเนื่อง ${formatTaskDateRangeLabel(
-                                          task,
-                                          'short'
-                                        ).replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
-                                  </span>
-                                </>
-                              )}
-
-                              {task.assigneeName && (
-                                <>
-                                  <span aria-hidden="true">·</span>
-                                  <span
-                                    className={`font-medium ${
-                                      isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
-                                    }`}
-                                  >
-                                    ผู้รับผิดชอบ: {task.assigneeName}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Right: Status & Quick Action */}
-                        <div className="flex items-center justify-end gap-3 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => onToggleStatus(task)}
-                            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
-                              isLargeText ? 'text-base' : 'text-sm'
-                            } font-bold transition-colors whitespace-nowrap shrink-0 ${
-                              isDone
-                                ? isDarkDisplay
-                                  ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-                                  : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                                : isCurrentDayPassed
-                                ? isDarkDisplay
-                                  ? 'bg-amber-950/60 border-amber-700 text-amber-300'
-                                  : 'bg-amber-50 border-amber-200 text-amber-900'
-                                : isDarkDisplay
-                                ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
-                                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                            }`}
-                          >
-                            {isDone ? (
-                              <>
-                                <CheckCircle2
-                                  className={`h-4 w-4 ${
-                                    isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
-                                  }`}
-                                />
-                                <span>เสร็จสิ้นแล้ว</span>
-                              </>
-                            ) : (
-                              <>
-                                <Circle
-                                  className="h-4 w-4"
-                                  style={{ color: displayCatColor }}
-                                />
-                                <span>
-                                  {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
-                                </span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            );
-          })}
+          {scheduleByDate.map((group) => renderDaySection(group))}
         </div>
       )}
     </div>
   );
 };
+

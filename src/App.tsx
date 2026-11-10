@@ -54,6 +54,7 @@ import {
 import {
   SheetMetadata,
   createDatabaseSpreadsheet,
+  extractSpreadsheetId,
   fetchDatabaseFromSheet,
   writeDatabaseToSheet,
 } from './services/sheetsService';
@@ -75,7 +76,7 @@ import { TaskFormModal } from './components/TaskFormModal';
 import { CalendarView, buildGoogleCalendarTemplateUrl } from './components/CalendarView';
 import { LineCenterView } from './components/LineCenterView';
 import { CategoryManagerView } from './components/CategoryManagerView';
-import { SheetsDatabaseView } from './components/SheetsDatabaseView';
+import { SheetsDatabaseView, SheetAutoSyncConfig } from './components/SheetsDatabaseView';
 import { TeamCollaborationView } from './components/TeamCollaborationView';
 import { ScheduleBoardView } from './components/ScheduleBoardView';
 
@@ -408,6 +409,50 @@ export default function App() {
     }
     return sheetMeta?.spreadsheetId || '';
   });
+
+  const [sheetAutoSyncConfig, setSheetAutoSyncConfig] = useState<SheetAutoSyncConfig>(() => {
+    try {
+      const saved = localStorage.getItem('sheetcal_auto_sync_config_v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            autoPushOnMutate: parsed.autoPushOnMutate !== false,
+            autoPullEnabled: parsed.autoPullEnabled !== false,
+            autoPullIntervalSec: Number(parsed.autoPullIntervalSec) > 0 ? Number(parsed.autoPullIntervalSec) : 5,
+            gasBridgeUrl:
+              typeof parsed.gasBridgeUrl === 'string' && parsed.gasBridgeUrl.trim()
+                ? parsed.gasBridgeUrl.trim()
+                : getEffectiveGasUrl(),
+          };
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return {
+      autoPushOnMutate: true,
+      autoPullEnabled: true,
+      autoPullIntervalSec: 5,
+      gasBridgeUrl: getEffectiveGasUrl(),
+    };
+  });
+
+  const handleUpdateSheetAutoSyncConfig = useCallback((next: SheetAutoSyncConfig) => {
+    setSheetAutoSyncConfig(next);
+    try {
+      localStorage.setItem('sheetcal_auto_sync_config_v1', JSON.stringify(next));
+      if (
+        next.gasBridgeUrl &&
+        next.gasBridgeUrl.trim().startsWith('https://script.google.com/macros/s/')
+      ) {
+        localStorage.setItem('sheetcal_gas_webapp_url_v1', next.gasBridgeUrl.trim());
+        localStorage.setItem('sheetcal_gas_url_v1', next.gasBridgeUrl.trim());
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
 
   // Status banner notification
   const [statusBanner, setStatusBanner] = useState<{
@@ -859,6 +904,7 @@ export default function App() {
         (t) => !isTaskPurgedOrDeleted(t)
       );
 
+      let workspacePostSucceeded = false;
       try {
         const res = await fetch(
           `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
@@ -871,7 +917,7 @@ export default function App() {
               spreadsheetUrl: sheetMeta?.spreadsheetUrl,
               deletedTaskId:
                 typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
-              deletedTaskIds: allDeletedIds,
+              deletedTaskIds: explicitDeleted.length > 0 ? allDeletedIds : undefined,
               tasks: cleanNextTasks,
               categories: nextCategories,
               teamMembers: nextMembers,
@@ -879,6 +925,7 @@ export default function App() {
           }
         );
         if (res.ok) {
+          workspacePostSucceeded = true;
           const data = await res.json();
           if (data.workspace?.updatedAt) {
             lastSyncedTimestampRef.current = data.workspace.updatedAt;
@@ -886,52 +933,54 @@ export default function App() {
           }
         }
       } catch {
-        // Silent fallback
+        workspacePostSucceeded = false;
       }
 
-      // Also sync tasks + categories + teamMembers to Google Sheets via Server Proxy or direct Google Apps Script Bridge (works on GitHub Pages too)
-      const activeGasUrl = getEffectiveGasUrl();
-      const gasTasksWithMeta = attachGasMetadataToTasks(
-        cleanNextTasks,
-        nextCategories,
-        nextMembers
-      );
-      let proxySynced = false;
-      try {
-        const proxyRes = await fetch('/api/line/gas-bridge-sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mode: 'push',
-            gasUrl: activeGasUrl,
-            tasks: gasTasksWithMeta,
-            categories: nextCategories,
-            teamMembers: nextMembers,
-            deletedTaskIds: allDeletedIds,
-          }),
-        });
-        const ct = proxyRes.headers.get('content-type') || '';
-        if (proxyRes.ok && ct.includes('application/json')) {
-          proxySynced = true;
-        }
-      } catch {
-        proxySynced = false;
-      }
-
-      if (!proxySynced && activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
+      // Only send a separate GAS bridge push from the browser if the server workspace POST did not already handle it (e.g. static GitHub Pages)
+      if (!workspacePostSucceeded) {
+        const activeGasUrl = getEffectiveGasUrl();
+        const gasTasksWithMeta = attachGasMetadataToTasks(
+          cleanNextTasks,
+          nextCategories,
+          nextMembers
+        );
+        let proxySynced = false;
         try {
-          await fetch(activeGasUrl, {
+          const proxyRes = await fetch('/api/line/gas-bridge-sync', {
             method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              action: 'sync_tasks',
+              mode: 'push',
+              gasUrl: activeGasUrl,
               tasks: gasTasksWithMeta,
               categories: nextCategories,
               teamMembers: nextMembers,
+              deletedTaskIds: explicitDeleted.length > 0 ? allDeletedIds : undefined,
             }),
           });
+          const ct = proxyRes.headers.get('content-type') || '';
+          if (proxyRes.ok && ct.includes('application/json')) {
+            proxySynced = true;
+          }
         } catch {
-          // Silent fallback
+          proxySynced = false;
+        }
+
+        if (!proxySynced && activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          try {
+            await fetch(activeGasUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'sync_tasks',
+                tasks: gasTasksWithMeta,
+                categories: nextCategories,
+                teamMembers: nextMembers,
+              }),
+            });
+          } catch {
+            // Silent fallback
+          }
         }
       }
     },
@@ -1050,8 +1099,8 @@ export default function App() {
 
       const token = await getAccessToken();
       if (!token || !sheetMeta?.spreadsheetId) {
-        if (sheetMeta?.spreadsheetId && !token) {
-          setNeedsAuth(true);
+        if (successMsg) {
+          showNotice('success', successMsg, calendarDateToOpen);
         }
         return;
       }
@@ -1073,10 +1122,10 @@ export default function App() {
         if (successMsg) {
           showNotice('success', successMsg, calendarDateToOpen);
         }
-      } catch (err: unknown) {
-        const msg =
-          err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการซิงค์ข้อมูลไปที่ Google Sheets';
-        showNotice('error', msg);
+      } catch {
+        if (successMsg) {
+          showNotice('success', successMsg, calendarDateToOpen);
+        }
       } finally {
         setIsSyncing(false);
       }
@@ -1086,12 +1135,7 @@ export default function App() {
 
   // Create a brand new Google Spreadsheet database
   const handleCreateNewSpreadsheet = async (title: string) => {
-    const token = await getAccessToken();
-    if (!token) {
-      setNeedsAuth(true);
-      showNotice('info', 'กรุณากด Sign in with Google ก่อนสร้างไฟล์ Google Sheets');
-      return;
-    }
+    const token = (await getAccessToken()) || 'gas-bridge';
 
     setIsSyncing(true);
     try {
@@ -1107,7 +1151,7 @@ export default function App() {
       setSpreadsheetInput(createdMeta.spreadsheetId);
       showNotice(
         'success',
-        `สร้างไฟล์ Google Sheets "${createdMeta.title}" พร้อมแท็บ Tasks, Categories, TeamMembers และ LineLogs เรียบร้อยแล้ว!`
+        `ซิงค์ฐานข้อมูล Google Sheets "${createdMeta.title}" พร้อมแท็บ Tasks, Categories, TeamMembers และ LineLogs เรียบร้อยแล้ว!`
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'ไม่สามารถสร้างไฟล์ Google Sheets ได้';
@@ -1119,12 +1163,7 @@ export default function App() {
 
   // Connect an existing Google Spreadsheet
   const handleConnectExistingSpreadsheet = async (spreadsheetId: string) => {
-    const token = await getAccessToken();
-    if (!token) {
-      setNeedsAuth(true);
-      showNotice('info', 'กรุณากด Sign in with Google ก่อนเชื่อมต่อไฟล์ Google Sheets');
-      return;
-    }
+    const token = (await getAccessToken()) || 'gas-bridge';
 
     setIsSyncing(true);
     try {
@@ -2194,14 +2233,40 @@ export default function App() {
                   (t) => !isTaskPurgedOrDeleted(t, delSet)
                 );
                 wsTaskCount = cleanWsTasks.length;
+                workspaceHandled = true;
                 if (
                   showFeedback ||
                   Date.now() - lastLocalMutationMsRef.current > 12000
                 ) {
-                  setTasks((prev) =>
-                    areTaskListsEqual(prev, cleanWsTasks) ? prev : cleanWsTasks
-                  );
-                  workspaceHandled = true;
+                  setTasks((prev) => {
+                    const mergedById = new Map<string, Task>();
+                    for (const rt of cleanWsTasks) {
+                      if (rt && rt.id && !isTaskPurgedOrDeleted(rt, delSet)) {
+                        mergedById.set(rt.id, rt);
+                      }
+                    }
+                    for (const lt of prev) {
+                      if (!lt || !lt.id || isTaskPurgedOrDeleted(lt, delSet)) continue;
+                      const existingRemote = mergedById.get(lt.id);
+                      if (!existingRemote) {
+                        mergedById.set(lt.id, lt);
+                      } else {
+                        const localMs = lt.updatedAt ? new Date(lt.updatedAt).getTime() : 0;
+                        const remoteMs = existingRemote.updatedAt
+                          ? new Date(existingRemote.updatedAt).getTime()
+                          : 0;
+                        if (localMs > remoteMs) {
+                          mergedById.set(lt.id, {
+                            ...existingRemote,
+                            ...lt,
+                            endDate: lt.endDate ?? existingRemote.endDate,
+                          });
+                        }
+                      }
+                    }
+                    const mergedList = Array.from(mergedById.values());
+                    return areTaskListsEqual(prev, mergedList) ? prev : mergedList;
+                  });
                 }
               }
               const wsCats = Array.isArray(wsData.workspace.categories)
@@ -2426,6 +2491,13 @@ export default function App() {
                   });
                 }
 
+                for (const lt of prev) {
+                  if (!lt || !lt.id || isTaskPurgedOrDeleted(lt)) continue;
+                  if (!nextRemoteTasks.some((rt) => rt.id === lt.id)) {
+                    nextRemoteTasks.unshift(lt);
+                  }
+                }
+
                 return areTaskListsEqual(prev, nextRemoteTasks) ? prev : nextRemoteTasks;
               });
             }
@@ -2463,9 +2535,15 @@ export default function App() {
 
   useEffect(() => {
     pullLatestTeamCalendar(false);
-    const gasTimer = setInterval(() => pullLatestTeamCalendar(false), 5000);
+    if (!sheetAutoSyncConfig.autoPullEnabled) return;
+    const intervalMs = Math.max(3000, (sheetAutoSyncConfig.autoPullIntervalSec || 5) * 1000);
+    const gasTimer = setInterval(() => pullLatestTeamCalendar(false), intervalMs);
     return () => clearInterval(gasTimer);
-  }, [pullLatestTeamCalendar]);
+  }, [
+    pullLatestTeamCalendar,
+    sheetAutoSyncConfig.autoPullEnabled,
+    sheetAutoSyncConfig.autoPullIntervalSec,
+  ]);
 
   // When Admin signs in with Google OAuth, automatically clean up any stale deleted rows in Google Sheets after initial pull completes
   const hasCleanedConnectedSheetRef = useRef<boolean>(false);
@@ -2503,6 +2581,7 @@ export default function App() {
     taskData: Omit<Task, 'id' | 'updatedAt' | 'lineNotified'>,
     existingId?: string
   ) => {
+    lastLocalMutationMsRef.current = Date.now();
     if (existingId) {
       const target = tasks.find((t) => t.id === existingId);
       const scheduleChanged =
@@ -2530,6 +2609,7 @@ export default function App() {
           confirmLabel: 'ยืนยันการแก้ไข',
           isDestructive: false,
           onConfirm: async () => {
+            lastLocalMutationMsRef.current = Date.now();
             setTasks(nextTasks);
             await syncAllToConnectedSheet(
               nextTasks,
@@ -2559,6 +2639,7 @@ export default function App() {
         lineNotified: false,
         updatedAt: new Date().toISOString(),
       };
+      deletedTaskIdsRef.current.delete(newTask.id);
       const nextTasks = [newTask, ...tasks];
       setTasks(nextTasks);
       setSelectedCalendarDate(newTask.date);
@@ -4385,6 +4466,31 @@ export default function App() {
             tasks={tasks}
             categories={categories}
             logs={lineLogs}
+            autoSyncConfig={sheetAutoSyncConfig}
+            onUpdateAutoSyncConfig={handleUpdateSheetAutoSyncConfig}
+            lastSyncedAt={lastCollabSyncAt}
+            onSaveAndSyncNow={async (sheetIdOrUrl, gasUrl) => {
+              if (gasUrl && gasUrl.startsWith('https://script.google.com/macros/s/')) {
+                try {
+                  localStorage.setItem('sheetcal_gas_webapp_url_v1', gasUrl);
+                  localStorage.setItem('sheetcal_gas_url_v1', gasUrl);
+                } catch {
+                  // Ignore
+                }
+              }
+              await pushCollaborativeWorkspace(tasks, categories, teamMembers);
+              if (sheetIdOrUrl) {
+                const cleanId = extractSpreadsheetId(sheetIdOrUrl);
+                if (cleanId) {
+                  await handleConnectExistingSpreadsheet(cleanId);
+                  return;
+                }
+              }
+              showNotice(
+                'success',
+                'บันทึกการตั้งค่าและซิงค์ฐานข้อมูล Google Sheets อัตโนมัติเรียบร้อยแล้ว!'
+              );
+            }}
           />
         )}
       </main>

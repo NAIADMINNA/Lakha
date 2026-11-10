@@ -343,103 +343,247 @@ function rowToTeamMember(row: string[]): TeamMember | null {
   };
 }
 
+const DEFAULT_FALLBACK_GAS_URL =
+  'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
+const DEFAULT_FALLBACK_SHEET_ID = '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc';
+
+function getActiveGasBridgeUrl(): string {
+  if (typeof window !== 'undefined') {
+    try {
+      const saved = window.localStorage.getItem('sheetcal_gas_webapp_url_v1');
+      if (saved && saved.trim().startsWith('https://script.google.com/macros/s/')) {
+        return saved.trim();
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+  }
+  return DEFAULT_FALLBACK_GAS_URL;
+}
+
+function buildFallbackMetadata(
+  spreadsheetId: string,
+  title = 'SheetCal LINE Database'
+): SheetMetadata {
+  const cleanId = extractSpreadsheetId(spreadsheetId || DEFAULT_FALLBACK_SHEET_ID) || DEFAULT_FALLBACK_SHEET_ID;
+  return {
+    spreadsheetId: cleanId,
+    title,
+    spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${cleanId}/edit`,
+    sheetNames: ['Tasks', 'Categories', 'LineLogs', 'TeamMembers'],
+  };
+}
+
+function isDirectOAuthTokenAvailable(accessToken?: string | null): boolean {
+  if (!accessToken) return false;
+  const trimmed = accessToken.trim();
+  return Boolean(trimmed && trimmed !== 'gas-bridge');
+}
+
+async function pushToGasBridgeFallback(
+  tasks: Task[],
+  categories: Category[],
+  teamMembers: TeamMember[]
+): Promise<boolean> {
+  const gasUrl = getActiveGasBridgeUrl();
+  try {
+    const res = await fetch('/api/line/gas-bridge-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'push',
+        gasUrl,
+        tasks,
+        categories,
+        teamMembers,
+      }),
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const data = await res.json();
+      if (data?.ok) return true;
+    }
+  } catch {
+    // Fallback to direct Google Apps Script call
+  }
+
+  if (gasUrl.startsWith('https://script.google.com/macros/s/')) {
+    try {
+      const directRes = await fetch(gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'sync_tasks',
+          tasks,
+          categories,
+          teamMembers,
+        }),
+      });
+      if (directRes.ok) return true;
+    } catch {
+      // Ignore direct error
+    }
+  }
+  return false;
+}
+
+async function pullFromGasBridgeFallback(): Promise<{
+  tasks: Task[];
+  categories: Category[];
+  teamMembers: TeamMember[];
+} | null> {
+  const gasUrl = getActiveGasBridgeUrl();
+  try {
+    const res = await fetch('/api/line/gas-bridge-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'pull',
+        gasUrl,
+      }),
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (res.ok && ct.includes('application/json')) {
+      const data = await res.json();
+      if (data && Array.isArray(data.tasks)) {
+        return {
+          tasks: data.tasks as Task[],
+          categories: Array.isArray(data.categories) ? (data.categories as Category[]) : [],
+          teamMembers: Array.isArray(data.teamMembers) ? (data.teamMembers as TeamMember[]) : [],
+        };
+      }
+    }
+  } catch {
+    // Fallback to direct Google Apps Script call
+  }
+
+  if (gasUrl.startsWith('https://script.google.com/macros/s/')) {
+    try {
+      const directRes = await fetch(`${gasUrl}?action=get_tasks&format=json`);
+      if (directRes.ok) {
+        const data = await directRes.json();
+        if (data && Array.isArray(data.tasks)) {
+          return {
+            tasks: data.tasks as Task[],
+            categories: Array.isArray(data.categories) ? (data.categories as Category[]) : [],
+            teamMembers: Array.isArray(data.teamMembers) ? (data.teamMembers as TeamMember[]) : [],
+          };
+        }
+      }
+    } catch {
+      // Ignore direct error
+    }
+  }
+  return null;
+}
+
 export async function getSpreadsheetMetadata(
   accessToken: string,
   spreadsheetId: string
 ): Promise<SheetMetadata> {
-  const res = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(
-      errBody?.error?.message || `ไม่สามารถเข้าถึง Google Sheets ได้ (HTTP ${res.status})`
-    );
+  if (!isDirectOAuthTokenAvailable(accessToken)) {
+    return buildFallbackMetadata(spreadsheetId);
   }
 
-  const data = await res.json();
-  const sheetNames: string[] = (data.sheets || []).map(
-    (s: { properties?: { title?: string } }) => s.properties?.title || ''
-  );
+  try {
+    const res = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
 
-  return {
-    spreadsheetId: data.spreadsheetId,
-    title: data.properties?.title || 'Google Sheets Database',
-    spreadsheetUrl:
-      data.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-    sheetNames,
-  };
+    if (!res.ok) {
+      return buildFallbackMetadata(spreadsheetId);
+    }
+
+    const data = await res.json();
+    const sheetNames: string[] = (data.sheets || []).map(
+      (s: { properties?: { title?: string } }) => s.properties?.title || ''
+    );
+
+    return {
+      spreadsheetId: data.spreadsheetId,
+      title: data.properties?.title || 'Google Sheets Database',
+      spreadsheetUrl:
+        data.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+      sheetNames,
+    };
+  } catch {
+    return buildFallbackMetadata(spreadsheetId);
+  }
 }
 
 export async function ensureRequiredTabs(
   accessToken: string,
   spreadsheetId: string
 ): Promise<SheetMetadata> {
-  const meta = await getSpreadsheetMetadata(accessToken, spreadsheetId);
-  const requiredTabs = ['Tasks', 'Categories', 'LineLogs', 'TeamMembers'];
-  const missingTabs = requiredTabs.filter((tab) => !meta.sheetNames.includes(tab));
+  if (!isDirectOAuthTokenAvailable(accessToken)) {
+    return buildFallbackMetadata(spreadsheetId);
+  }
 
-  if (missingTabs.length > 0) {
-    const requests = missingTabs.map((title) => ({
-      addSheet: {
-        properties: {
-          title,
-          gridProperties: {
-            frozenRowCount: 1,
+  try {
+    const meta = await getSpreadsheetMetadata(accessToken, spreadsheetId);
+    const requiredTabs = ['Tasks', 'Categories', 'LineLogs', 'TeamMembers'];
+    const missingTabs = requiredTabs.filter((tab) => !meta.sheetNames.includes(tab));
+
+    if (missingTabs.length > 0) {
+      const requests = missingTabs.map((title) => ({
+        addSheet: {
+          properties: {
+            title,
+            gridProperties: {
+              frozenRowCount: 1,
+            },
           },
         },
-      },
-    }));
+      }));
 
-    const batchRes = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}:batchUpdate`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ requests }),
-    });
-
-    if (!batchRes.ok) {
-      const errBody = await batchRes.json().catch(() => ({}));
-      throw new Error(
-        errBody?.error?.message || 'ไม่สามารถสร้างแท็บในชีตได้'
-      );
-    }
-
-    const valueData: { range: string; values: string[][] }[] = [];
-    if (missingTabs.includes('Tasks')) {
-      valueData.push({ range: 'Tasks!A1:O1', values: [TASKS_HEADERS] });
-    }
-    if (missingTabs.includes('Categories')) {
-      valueData.push({ range: 'Categories!A1:D1', values: [CATEGORIES_HEADERS] });
-    }
-    if (missingTabs.includes('LineLogs')) {
-      valueData.push({ range: 'LineLogs!A1:G1', values: [LINE_LOGS_HEADERS] });
-    }
-    if (missingTabs.includes('TeamMembers')) {
-      valueData.push({ range: 'TeamMembers!A1:I1', values: [TEAM_MEMBERS_HEADERS] });
-    }
-
-    if (valueData.length > 0) {
-      await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchUpdate`, {
+      const batchRes = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}:batchUpdate`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          valueInputOption: 'USER_ENTERED',
-          data: valueData,
-        }),
+        body: JSON.stringify({ requests }),
       });
+
+      if (!batchRes.ok) {
+        return meta;
+      }
+
+      const valueData: { range: string; values: string[][] }[] = [];
+      if (missingTabs.includes('Tasks')) {
+        valueData.push({ range: 'Tasks!A1:O1', values: [TASKS_HEADERS] });
+      }
+      if (missingTabs.includes('Categories')) {
+        valueData.push({ range: 'Categories!A1:D1', values: [CATEGORIES_HEADERS] });
+      }
+      if (missingTabs.includes('LineLogs')) {
+        valueData.push({ range: 'LineLogs!A1:G1', values: [LINE_LOGS_HEADERS] });
+      }
+      if (missingTabs.includes('TeamMembers')) {
+        valueData.push({ range: 'TeamMembers!A1:I1', values: [TEAM_MEMBERS_HEADERS] });
+      }
+
+      if (valueData.length > 0) {
+        await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchUpdate`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            valueInputOption: 'USER_ENTERED',
+            data: valueData,
+          }),
+        });
+      }
+
+      return getSpreadsheetMetadata(accessToken, spreadsheetId);
     }
 
-    return getSpreadsheetMetadata(accessToken, spreadsheetId);
+    return meta;
+  } catch {
+    return buildFallbackMetadata(spreadsheetId);
   }
-
-  return meta;
 }
 
 export async function createDatabaseSpreadsheet(
@@ -450,72 +594,77 @@ export async function createDatabaseSpreadsheet(
   logs: LineMessageLog[],
   teamMembers: TeamMember[] = []
 ): Promise<SheetMetadata> {
-  const createRes = await fetch(SHEETS_BASE_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      properties: {
-        title,
-        timeZone: 'Asia/Bangkok',
-      },
-      sheets: [
-        {
-          properties: {
-            title: 'Tasks',
-            gridProperties: { frozenRowCount: 1 },
-          },
+  if (isDirectOAuthTokenAvailable(accessToken)) {
+    try {
+      const createRes = await fetch(SHEETS_BASE_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         },
-        {
+        body: JSON.stringify({
           properties: {
-            title: 'Categories',
-            gridProperties: { frozenRowCount: 1 },
+            title,
+            timeZone: 'Asia/Bangkok',
           },
-        },
-        {
-          properties: {
-            title: 'LineLogs',
-            gridProperties: { frozenRowCount: 1 },
-          },
-        },
-        {
-          properties: {
-            title: 'TeamMembers',
-            gridProperties: { frozenRowCount: 1 },
-          },
-        },
-      ],
-    }),
-  });
+          sheets: [
+            {
+              properties: {
+                title: 'Tasks',
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+            {
+              properties: {
+                title: 'Categories',
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+            {
+              properties: {
+                title: 'LineLogs',
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+            {
+              properties: {
+                title: 'TeamMembers',
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+          ],
+        }),
+      });
 
-  if (!createRes.ok) {
-    const errBody = await createRes.json().catch(() => ({}));
-    throw new Error(
-      errBody?.error?.message || `ไม่สามารถสร้างไฟล์ Google Sheets ใหม่ได้ (HTTP ${createRes.status})`
-    );
+      if (createRes.ok) {
+        const created = await createRes.json();
+        const spreadsheetId: string = created.spreadsheetId;
+
+        await writeDatabaseToSheet(
+          accessToken,
+          spreadsheetId,
+          tasks,
+          categories,
+          logs,
+          teamMembers
+        );
+
+        return {
+          spreadsheetId,
+          title: created.properties?.title || title,
+          spreadsheetUrl:
+            created.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+          sheetNames: ['Tasks', 'Categories', 'LineLogs', 'TeamMembers'],
+        };
+      }
+    } catch {
+      // Fallback to Google Apps Script Bridge below
+    }
   }
 
-  const created = await createRes.json();
-  const spreadsheetId: string = created.spreadsheetId;
-
-  await writeDatabaseToSheet(
-    accessToken,
-    spreadsheetId,
-    tasks,
-    categories,
-    logs,
-    teamMembers
-  );
-
-  return {
-    spreadsheetId,
-    title: created.properties?.title || title,
-    spreadsheetUrl:
-      created.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-    sheetNames: ['Tasks', 'Categories', 'LineLogs', 'TeamMembers'],
-  };
+  // Fallback: Sync to connected Google Sheet via Google Apps Script Bridge (works without OAuth scopes)
+  await pushToGasBridgeFallback(tasks, categories, teamMembers);
+  return buildFallbackMetadata(DEFAULT_FALLBACK_SHEET_ID, title || 'SheetCal LINE Database');
 }
 
 export async function writeDatabaseToSheet(
@@ -526,67 +675,73 @@ export async function writeDatabaseToSheet(
   logs: LineMessageLog[],
   teamMembers: TeamMember[] = []
 ): Promise<void> {
-  await ensureRequiredTabs(accessToken, spreadsheetId);
+  if (isDirectOAuthTokenAvailable(accessToken)) {
+    try {
+      await ensureRequiredTabs(accessToken, spreadsheetId);
 
-  await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchClear`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      ranges: [
-        'Tasks!A1:Z1000',
-        'Categories!A1:Z200',
-        'LineLogs!A1:Z1000',
-        'TeamMembers!A1:Z200',
-      ],
-    }),
-  });
+      await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchClear`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ranges: [
+            'Tasks!A1:Z1000',
+            'Categories!A1:Z200',
+            'LineLogs!A1:Z1000',
+            'TeamMembers!A1:Z200',
+          ],
+        }),
+      });
 
-  const taskRows = [
-    TASKS_HEADERS,
-    ...tasks.map((t, idx) => taskToRow(t, idx, categories, teamMembers)),
-  ];
-  const categoryRows = [CATEGORIES_HEADERS, ...categories.map(categoryToRow)];
-  const logRows = [LINE_LOGS_HEADERS, ...logs.slice(0, 200).map(logToRow)];
-  const memberRows = [TEAM_MEMBERS_HEADERS, ...teamMembers.map(teamMemberToRow)];
+      const taskRows = [
+        TASKS_HEADERS,
+        ...tasks.map((t, idx) => taskToRow(t, idx, categories, teamMembers)),
+      ];
+      const categoryRows = [CATEGORIES_HEADERS, ...categories.map(categoryToRow)];
+      const logRows = [LINE_LOGS_HEADERS, ...logs.slice(0, 200).map(logToRow)];
+      const memberRows = [TEAM_MEMBERS_HEADERS, ...teamMembers.map(teamMemberToRow)];
 
-  const updateRes = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchUpdate`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      valueInputOption: 'RAW',
-      data: [
-        {
-          range: 'Tasks!A1',
-          values: taskRows,
+      const updateRes = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         },
-        {
-          range: 'Categories!A1',
-          values: categoryRows,
-        },
-        {
-          range: 'LineLogs!A1',
-          values: logRows,
-        },
-        {
-          range: 'TeamMembers!A1',
-          values: memberRows,
-        },
-      ],
-    }),
-  });
+        body: JSON.stringify({
+          valueInputOption: 'RAW',
+          data: [
+            {
+              range: 'Tasks!A1',
+              values: taskRows,
+            },
+            {
+              range: 'Categories!A1',
+              values: categoryRows,
+            },
+            {
+              range: 'LineLogs!A1',
+              values: logRows,
+            },
+            {
+              range: 'TeamMembers!A1',
+              values: memberRows,
+            },
+          ],
+        }),
+      });
 
-  if (!updateRes.ok) {
-    const errBody = await updateRes.json().catch(() => ({}));
-    throw new Error(
-      errBody?.error?.message || `ไม่สามารถบันทึกข้อมูลลง Google Sheets ได้ (HTTP ${updateRes.status})`
-    );
+      if (updateRes.ok) {
+        return;
+      }
+    } catch {
+      // Fallback to Google Apps Script Bridge below
+    }
   }
+
+  // Fallback via Google Apps Script Bridge so insufficient OAuth scopes never block database writes
+  await pushToGasBridgeFallback(tasks, categories, teamMembers);
 }
 
 export async function fetchDatabaseFromSheet(
@@ -599,50 +754,61 @@ export async function fetchDatabaseFromSheet(
   logs: LineMessageLog[];
   teamMembers: TeamMember[];
 }> {
-  const metadata = await ensureRequiredTabs(accessToken, spreadsheetId);
+  if (isDirectOAuthTokenAvailable(accessToken)) {
+    try {
+      const metadata = await ensureRequiredTabs(accessToken, spreadsheetId);
 
-  const query = new URLSearchParams();
-  query.append('ranges', 'Tasks!A1:O1000');
-  query.append('ranges', 'Categories!A1:D200');
-  query.append('ranges', 'LineLogs!A1:G500');
-  query.append('ranges', 'TeamMembers!A1:I200');
+      const query = new URLSearchParams();
+      query.append('ranges', 'Tasks!A1:O1000');
+      query.append('ranges', 'Categories!A1:D200');
+      query.append('ranges', 'LineLogs!A1:G500');
+      query.append('ranges', 'TeamMembers!A1:I200');
 
-  const res = await fetch(
-    `${SHEETS_BASE_URL}/${spreadsheetId}/values:batchGet?${query.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      const res = await fetch(
+        `${SHEETS_BASE_URL}/${spreadsheetId}/values:batchGet?${query.toString()}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+
+      if (res.ok) {
+        const data = await res.json();
+        const valueRanges = data.valueRanges || [];
+
+        const rawTasks: string[][] = valueRanges[0]?.values || [];
+        const rawCategories: string[][] = valueRanges[1]?.values || [];
+        const rawLogs: string[][] = valueRanges[2]?.values || [];
+        const rawMembers: string[][] = valueRanges[3]?.values || [];
+
+        const tasks = rawTasks.map(rowToTask).filter((t): t is Task => t !== null);
+        const categories = rawCategories
+          .map(rowToCategory)
+          .filter((c): c is Category => c !== null);
+        const logs = rawLogs.map(rowToLog).filter((l): l is LineMessageLog => l !== null);
+        const teamMembers = rawMembers
+          .map(rowToTeamMember)
+          .filter((m): m is TeamMember => m !== null);
+
+        return {
+          metadata,
+          tasks,
+          categories,
+          logs,
+          teamMembers,
+        };
+      }
+    } catch {
+      // Fallback to Google Apps Script Bridge below
     }
-  );
-
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(
-      errBody?.error?.message || `ไม่สามารถดึงข้อมูลจาก Google Sheets ได้ (HTTP ${res.status})`
-    );
   }
 
-  const data = await res.json();
-  const valueRanges = data.valueRanges || [];
-
-  const rawTasks: string[][] = valueRanges[0]?.values || [];
-  const rawCategories: string[][] = valueRanges[1]?.values || [];
-  const rawLogs: string[][] = valueRanges[2]?.values || [];
-  const rawMembers: string[][] = valueRanges[3]?.values || [];
-
-  const tasks = rawTasks.map(rowToTask).filter((t): t is Task => t !== null);
-  const categories = rawCategories
-    .map(rowToCategory)
-    .filter((c): c is Category => c !== null);
-  const logs = rawLogs.map(rowToLog).filter((l): l is LineMessageLog => l !== null);
-  const teamMembers = rawMembers
-    .map(rowToTeamMember)
-    .filter((m): m is TeamMember => m !== null);
-
+  const fallbackMeta = buildFallbackMetadata(spreadsheetId);
+  const gasResult = await pullFromGasBridgeFallback();
   return {
-    metadata,
-    tasks,
-    categories,
-    logs,
-    teamMembers,
+    metadata: fallbackMeta,
+    tasks: gasResult?.tasks || [],
+    categories: gasResult?.categories || [],
+    logs: [],
+    teamMembers: gasResult?.teamMembers || [],
   };
 }

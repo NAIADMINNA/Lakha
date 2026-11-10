@@ -9,7 +9,7 @@ export default defineConfig(() => {
     base: process.env.GITHUB_ACTIONS ? '/Lakha/' : '/',
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {

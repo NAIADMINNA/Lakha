@@ -14,6 +14,15 @@ import {
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
+process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING = 'true';
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception in server:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection in server:', reason);
+});
 
 interface IncomingLineWebhookItem {
   id: string;
@@ -1614,17 +1623,19 @@ async function startServer() {
               const gid = String(gt.id || '').trim();
               if (gid) gasTaskIds.add(gid);
             }
-            // Only keep local tasks that are either present in GAS or created within the last 15 seconds (in-flight creation)
-            const recentLocalTasks = currentTasks.filter((lt) => {
+            // Keep all local tasks that have not been explicitly deleted
+            const validLocalTasks = currentTasks.filter((lt) => {
               if (!lt || typeof lt !== 'object') return false;
               const rec = lt as Record<string, unknown>;
               const lid = String(rec.id || '').trim();
-              if (!lid || deletedTaskIds.has(lid)) return false;
-              if (gasTaskIds.has(lid)) return true;
-              const updatedMs = rec.updatedAt ? new Date(String(rec.updatedAt)).getTime() : 0;
-              return updatedMs > 0 && nowMs - updatedMs < 15000;
+              return Boolean(lid && !deletedTaskIds.has(lid));
             });
-            const merged = mergeTasksById(recentLocalTasks, decodedGas.tasks);
+            const merged = mergeTasksById(validLocalTasks, decodedGas.tasks);
+            const hasLocalTaskMissingInGas = validLocalTasks.some((lt) => {
+              const rec = lt as Record<string, unknown>;
+              const lid = String(rec.id || '').trim();
+              return Boolean(lid && !gasTaskIds.has(lid));
+            });
             const remoteCats =
               Array.isArray(gasData.categories) && gasData.categories.length > 0
                 ? gasData.categories
@@ -1658,6 +1669,20 @@ async function startServer() {
               sharedWorkspaces.set('sheetcal-team-clean', state);
               sharedWorkspaces.set('team-default', state);
               savePersistedWorkspaceCache();
+            }
+
+            if (hasLocalTaskMissingInGas) {
+              const gasTasksWithMeta = attachGasMetadataToTasks(
+                merged,
+                nextCats,
+                nextMembers
+              );
+              postToGoogleAppsScript(cleanGas, {
+                action: 'sync_tasks',
+                tasks: gasTasksWithMeta,
+                categories: nextCats,
+                teamMembers: nextMembers,
+              }).catch(() => {});
             }
           }
         }
@@ -1725,28 +1750,8 @@ async function startServer() {
       ? extractGasMetadataFromTasks(tasks).tasks
       : [];
 
-    // When a client pushes a full `tasks` array (without a single-item `action`),
-    // treat `incomingTasks` as the authoritative task list and mark any tasks removed from `existingTasks` as deleted!
-    let nextTasks: Record<string, unknown>[];
-    if (Array.isArray(tasks) && !action) {
-      const incomingIdSet = new Set<string>();
-      for (const item of incomingTasks) {
-        const id = String(item.id || '').trim();
-        if (id && !deletedTaskIds.has(id)) {
-          incomingIdSet.add(id);
-        }
-      }
-      for (const oldItem of existingTasks) {
-        const oldId = String(oldItem.id || '').trim();
-        if (oldId && !incomingIdSet.has(oldId)) {
-          deletedTaskIds.add(oldId);
-          explicitDeletedIds.add(oldId);
-        }
-      }
-      nextTasks = mergeTasksById(incomingTasks, []);
-    } else {
-      nextTasks = mergeTasksById(incomingTasks, existingTasks);
-    }
+    // Merge incoming tasks with existing server tasks so newly added tasks are never lost across tabs/devices
+    let nextTasks = mergeTasksById(incomingTasks, existingTasks);
 
     if (action === 'add_task' && task && typeof task === 'object') {
       const rec = task as Record<string, unknown>;
@@ -1763,10 +1768,13 @@ async function startServer() {
             }
           : rec;
       });
-    } else if (explicitDeletedIds.size > 0) {
-      nextTasks = nextTasks.filter(
-        (t) => !explicitDeletedIds.has(String((t as Record<string, unknown>).id))
-      );
+    }
+
+    if (explicitDeletedIds.size > 0 || deletedTaskIds.size > 0) {
+      nextTasks = nextTasks.filter((t) => {
+        const tid = String((t as Record<string, unknown>).id || '').trim();
+        return Boolean(tid && !explicitDeletedIds.has(tid) && !deletedTaskIds.has(tid));
+      });
     }
 
     const nextCategories =
@@ -3208,33 +3216,15 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
-    let viteMiddleware: express.RequestHandler | null = null;
-    const vitePromise = createViteServer({
+    const vite = await createViteServer({
       server: {
         middlewareMode: true,
         hmr: false,
         watch: null,
       },
       appType: 'spa',
-    }).then((vite) => {
-      viteMiddleware = vite.middlewares;
-      return vite;
     });
-
-    app.use(async (req, res, next) => {
-      try {
-        if (!viteMiddleware) {
-          await vitePromise;
-        }
-        if (viteMiddleware) {
-          viteMiddleware(req, res, next);
-        } else {
-          next();
-        }
-      } catch (err) {
-        next(err);
-      }
-    });
+    app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
