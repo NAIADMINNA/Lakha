@@ -1793,20 +1793,35 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               onChange={(e) => setSelectedCategoryId(e.target.value)}
               className={`h-9 rounded-xl border px-3 text-xs font-semibold transition-colors focus:outline-none cursor-pointer ${
                 isNavyGold
-                  ? 'bg-[#091526]/90 border-amber-400/30 text-white focus:border-amber-400'
+                  ? 'bg-[#091526]! focus:bg-[#0F213C]! border-amber-400/45! text-amber-50! shadow-none! focus:border-amber-300! scheme-dark'
                   : isDarkDisplay
-                  ? 'bg-slate-950 border-slate-700 text-white focus:border-sky-400'
-                  : 'bg-slate-50/70 hover:bg-white border-slate-200/90 text-slate-800 focus:border-indigo-500'
+                  ? 'bg-slate-950! focus:bg-slate-900! border-slate-700! text-white! shadow-none! focus:border-sky-400! scheme-dark'
+                  : 'bg-slate-50/70 hover:bg-white border-slate-200/90 text-slate-800 focus:border-indigo-500 scheme-light'
               }`}
             >
-              <option value="all" className="bg-white text-slate-900 font-bold">
+              <option
+                value="all"
+                className={
+                  isNavyGold
+                    ? 'bg-[#0F213C] text-amber-50 font-bold'
+                    : isDarkDisplay
+                    ? 'bg-slate-900 text-white font-bold'
+                    : 'bg-white text-slate-900 font-bold'
+                }
+              >
                 ทุกหมวดหมู่งาน
               </option>
               {categories.map((cat) => (
                 <option
                   key={cat.id}
                   value={cat.id}
-                  className="bg-white text-slate-900 font-semibold"
+                  className={
+                    isNavyGold
+                      ? 'bg-[#0F213C] text-amber-50 font-semibold'
+                      : isDarkDisplay
+                      ? 'bg-slate-900 text-white font-semibold'
+                      : 'bg-white text-slate-900 font-semibold'
+                  }
                 >
                   {cat.name}
                 </option>
@@ -1818,22 +1833,58 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               onChange={(e) => setSelectedPriority(e.target.value)}
               className={`h-9 rounded-xl border px-3 text-xs font-semibold transition-colors focus:outline-none cursor-pointer ${
                 isNavyGold
-                  ? 'bg-[#091526]/90 border-amber-400/30 text-white focus:border-amber-400'
+                  ? 'bg-[#091526]! focus:bg-[#0F213C]! border-amber-400/45! text-amber-50! shadow-none! focus:border-amber-300! scheme-dark'
                   : isDarkDisplay
-                  ? 'bg-slate-950 border-slate-700 text-white focus:border-sky-400'
-                  : 'bg-slate-50/70 hover:bg-white border-slate-200/90 text-slate-800 focus:border-indigo-500'
+                  ? 'bg-slate-950! focus:bg-slate-900! border-slate-700! text-white! shadow-none! focus:border-sky-400! scheme-dark'
+                  : 'bg-slate-50/70 hover:bg-white border-slate-200/90 text-slate-800 focus:border-indigo-500 scheme-light'
               }`}
             >
-              <option value="all" className="bg-white text-slate-900 font-bold">
+              <option
+                value="all"
+                className={
+                  isNavyGold
+                    ? 'bg-[#0F213C] text-amber-50 font-bold'
+                    : isDarkDisplay
+                    ? 'bg-slate-900 text-white font-bold'
+                    : 'bg-white text-slate-900 font-bold'
+                }
+              >
                 ทุกระดับความสำคัญ
               </option>
-              <option value={TaskPriority.HIGH} className="bg-white text-rose-700 font-bold">
+              <option
+                value={TaskPriority.HIGH}
+                className={
+                  isNavyGold
+                    ? 'bg-[#0F213C] text-rose-300 font-bold'
+                    : isDarkDisplay
+                    ? 'bg-slate-900 text-rose-300 font-bold'
+                    : 'bg-white text-rose-700 font-bold'
+                }
+              >
                 เฉพาะงานด่วนมาก (สูง)
               </option>
-              <option value={TaskPriority.MEDIUM} className="bg-white text-amber-700 font-semibold">
+              <option
+                value={TaskPriority.MEDIUM}
+                className={
+                  isNavyGold
+                    ? 'bg-[#0F213C] text-amber-300 font-semibold'
+                    : isDarkDisplay
+                    ? 'bg-slate-900 text-amber-300 font-semibold'
+                    : 'bg-white text-amber-700 font-semibold'
+                }
+              >
                 ความสำคัญปานกลาง
               </option>
-              <option value={TaskPriority.LOW} className="bg-white text-slate-700 font-semibold">
+              <option
+                value={TaskPriority.LOW}
+                className={
+                  isNavyGold
+                    ? 'bg-[#0F213C] text-slate-200 font-semibold'
+                    : isDarkDisplay
+                    ? 'bg-slate-900 text-slate-200 font-semibold'
+                    : 'bg-white text-slate-700 font-semibold'
+                }
+              >
                 ความสำคัญทั่วไป
               </option>
             </select>
