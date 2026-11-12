@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bell, Calendar, Clock, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Bell, Calendar, Clock, MapPin, X } from 'lucide-react';
 import { Category, Task, TaskPriority, TaskStatus } from '../types';
 import {
   REMINDER_TIMING_OPTIONS,
@@ -14,9 +14,49 @@ interface TaskFormModalProps {
   onClose: () => void;
   onSave: (taskData: Omit<Task, 'id' | 'updatedAt' | 'lineNotified'>, existingId?: string) => void;
   categories: Category[];
+  existingTasks?: Task[];
   initialDate?: string;
   editingTask?: Task | null;
   defaultRemindMinutes: number;
+}
+
+const QUICK_TIME_PRESETS = ['08:30', '09:00', '09:30', '10:00', '13:30', '14:00', '15:00'];
+const QUICK_LOCATION_PRESETS = [
+  'ห้องประชุมสำนักฯ',
+  'ห้องประชุมกรมฯ',
+  'กระทรวงแรงงาน',
+  'ออนไลน์ (Zoom)',
+];
+
+function splitLocationAndDescription(rawDescription: string): {
+  location: string;
+  notes: string;
+} {
+  const raw = (rawDescription || '').trim();
+  if (!raw) return { location: '', notes: '' };
+  const lines = raw.split('\n');
+  let extractedLocation = '';
+  const remainingLines: string[] = [];
+
+  for (const line of lines) {
+    const match = line.trim().match(/^สถานที่\s*:\s*(.+)$/i);
+    if (match && !extractedLocation) {
+      extractedLocation = match[1].trim();
+    } else {
+      remainingLines.push(line);
+    }
+  }
+
+  return {
+    location: extractedLocation,
+    notes: remainingLines.join('\n').trim(),
+  };
+}
+
+function parseTimeMinutes(hm: string): number | null {
+  const m = (hm || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
 export const TaskFormModal: React.FC<TaskFormModalProps> = ({
@@ -24,11 +64,13 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   onClose,
   onSave,
   categories,
+  existingTasks = [],
   initialDate,
   editingTask,
   defaultRemindMinutes,
 }) => {
   const [title, setTitle] = useState('');
+  const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(() => initialDate || formatLocalDateYMD());
   const [endDate, setEndDate] = useState('');
@@ -53,10 +95,14 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
     prevOpenSessionKeyRef.current = sessionKey;
 
     if (editingTask) {
+      const parsedDesc = splitLocationAndDescription(editingTask.description);
       setTitle(editingTask.title);
-      setDescription(editingTask.description);
+      setLocation(parsedDesc.location);
+      setDescription(parsedDesc.notes);
       setDate(editingTask.date);
-      setEndDate(editingTask.endDate && editingTask.endDate > editingTask.date ? editingTask.endDate : '');
+      setEndDate(
+        editingTask.endDate && editingTask.endDate > editingTask.date ? editingTask.endDate : ''
+      );
       setTime(editingTask.time);
       setCategoryId(editingTask.categoryId);
       setPriority(editingTask.priority);
@@ -64,6 +110,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setRemindMinutesBefore(editingTask.remindMinutesBefore);
     } else {
       setTitle('');
+      setLocation('');
       setDescription('');
       setDate(initialDate || formatLocalDateYMD());
       setEndDate('');
@@ -74,6 +121,24 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setRemindMinutesBefore(defaultRemindMinutes);
     }
   }, [isOpen, editingTask, initialDate, categories, defaultRemindMinutes]);
+
+  const conflictingTasks = useMemo(() => {
+    if (!isOpen || !date || !time) return [];
+    const targetMins = parseTimeMinutes(time);
+    if (targetMins === null) return [];
+    const targetEnd = endDate && endDate > date ? endDate : date;
+
+    return existingTasks.filter((t) => {
+      if (!t || t.id === editingTask?.id) return false;
+      if (t.status === TaskStatus.COMPLETED) return false;
+      const tEnd = t.endDate && t.endDate > t.date ? t.endDate : t.date;
+      const datesOverlap = t.date <= targetEnd && tEnd >= date;
+      if (!datesOverlap) return false;
+      const tMins = parseTimeMinutes(t.time);
+      if (tMins === null) return false;
+      return Math.abs(tMins - targetMins) < 45;
+    });
+  }, [isOpen, existingTasks, editingTask?.id, date, endDate, time]);
 
   if (!isOpen) return null;
 
@@ -96,10 +161,18 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
     e.preventDefault();
     if (!title.trim()) return;
 
+    const cleanLoc = location.trim();
+    const cleanNotes = description.trim();
+    const combinedDescription = cleanLoc
+      ? cleanNotes
+        ? `สถานที่: ${cleanLoc}\n${cleanNotes}`
+        : `สถานที่: ${cleanLoc}`
+      : cleanNotes;
+
     onSave(
       {
         title: title.trim(),
-        description: description.trim(),
+        description: combinedDescription,
         date,
         endDate: endDate && endDate > date ? endDate : undefined,
         time,
@@ -116,61 +189,91 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 backdrop-blur-xs p-4"
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-lg rounded-xl bg-white border border-slate-200 p-6 shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+      <div className="w-full max-w-xl rounded-2xl bg-white border border-slate-200/90 overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        {/* Top Ceremonial Accent Bar */}
+        <div
+          aria-hidden="true"
+          className="h-1.5 w-full bg-gradient-to-r from-indigo-900 via-indigo-600 to-amber-500 shrink-0"
+        />
+
+        {/* Modal Header */}
+        <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-slate-100 bg-gradient-to-br from-white via-slate-50/40 to-indigo-50/30 shrink-0">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">
-              {editingTask ? 'แก้ไขงานในปฏิทิน' : 'เพิ่มงานใหม่ลงปฏิทิน'}
+            <h2 className="text-lg font-extrabold tracking-tight text-slate-900">
+              {editingTask ? 'แก้ไขกำหนดการภารกิจ' : 'เพิ่มกำหนดการภารกิจใหม่'}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              บันทึกในปฏิทินร่วมกันของทีมและซิงค์กับ Google Sheets (รองรับงานวันเดียวและงานต่อเนื่องหลายวัน)
+              บันทึกในปฏิทินร่วมกันของทีมและซิงค์เข้าฐานข้อมูล Google Sheets อัตโนมัติ
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
+            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
             aria-label="ปิดหน้าต่าง"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
+          {/* Task Title */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              หัวข้องาน *
+            <label className="block text-xs font-bold text-slate-800 mb-1.5">
+              หัวข้อภารกิจ / นัดหมาย *
             </label>
             <input
               type="text"
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="เช่น ประชุมสรุปแผนงาน, อบรมสัมมนาต่างจังหวัด..."
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+              placeholder="เช่น ประชุมคณะทำงานบริหารแรงงานต่างด้าว, ลงพื้นที่ตรวจเยี่ยม..."
+              className="w-full rounded-xl border border-slate-200/90 bg-slate-50/50 focus:bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none transition-colors"
             />
           </div>
 
+          {/* Dedicated Location / Meeting Room Field + Quick Chips */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              รายละเอียดเพิ่มเติม
+            <label className="block text-xs font-bold text-slate-800 mb-1.5">
+              สถานที่ / ห้องประชุม
             </label>
-            <textarea
-              rows={2}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="ระบุหมายเหตุหรือรายละเอียดงาน..."
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-            />
+            <div className="relative">
+              <MapPin className="h-4 w-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="เช่น ห้องประชุมชั้น 5, กระทรวงแรงงาน หรือลิงก์ประชุมออนไลน์..."
+                className="w-full rounded-xl border border-slate-200/90 bg-slate-50/50 focus:bg-white pl-9 pr-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none transition-colors"
+              />
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-400 font-medium">เลือกด่วน:</span>
+              {QUICK_LOCATION_PRESETS.map((locPreset) => (
+                <button
+                  key={locPreset}
+                  type="button"
+                  onClick={() => setLocation(locPreset)}
+                  className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-medium transition-colors ${
+                    location === locPreset
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900'
+                  }`}
+                >
+                  {locPreset}
+                </button>
+              ))}
+            </div>
           </div>
 
+          {/* Date & Time Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 วันที่เริ่มต้น *
               </label>
               <input
@@ -184,13 +287,13 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
                     setEndDate('');
                   }
                 }}
-                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 bg-white px-3 text-xs font-bold text-slate-900 font-mono-tabular focus:border-indigo-600 focus:outline-none"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                ถึงวันที่ (กรณีมากกว่า 1 วัน)
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                ถึงวันที่ (งานหลายวัน)
               </label>
               <input
                 type="date"
@@ -198,81 +301,132 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 placeholder="เว้นว่างถ้า 1 วัน"
-                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 bg-white px-3 text-xs font-bold text-slate-900 font-mono-tabular focus:border-indigo-600 focus:outline-none"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                เวลางาน
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                เวลาเริ่มงาน *
               </label>
               <input
                 type="time"
                 required
                 value={time}
                 onChange={(e) => setTime(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-900 font-mono-tabular focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 bg-white px-3 text-xs font-bold text-slate-900 font-mono-tabular focus:border-indigo-600 focus:outline-none"
               />
             </div>
           </div>
 
-          {/* Thai Date Format Live Display & Quick Multi-Day Duration Selector */}
-          <div className="rounded-lg bg-indigo-50/70 border border-indigo-200/80 px-3 py-2 text-xs text-indigo-950 flex flex-wrap items-center justify-between gap-2">
-            <span>
-              📅 วันที่แสดงผลภาษาไทย:{' '}
-              <strong className="font-bold text-indigo-700">
+          {/* Quick Time Presets & Multi-Day Duration Presets */}
+          <div className="space-y-2 rounded-xl bg-slate-50/80 border border-slate-200/80 p-3">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="text-slate-500 font-semibold mr-1">เวลาที่ใช้บ่อย:</span>
+              {QUICK_TIME_PRESETS.map((presetTime) => (
+                <button
+                  key={presetTime}
+                  type="button"
+                  onClick={() => setTime(presetTime)}
+                  className={`px-2.5 py-1 rounded-lg border font-mono-tabular font-semibold transition-colors ${
+                    time === presetTime
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-200'
+                  }`}
+                >
+                  {presetTime}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70 text-[11px]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-slate-500 font-semibold mr-1">ระยะเวลา:</span>
+                {[
+                  { label: '1 วัน', days: 1 },
+                  { label: '2 วัน', days: 2 },
+                  { label: '3 วัน', days: 3 },
+                  { label: '5 วัน', days: 5 },
+                ].map((item) => {
+                  const isActiveDur =
+                    (item.days === 1 && !endDate) ||
+                    (item.days > 1 &&
+                      Boolean(endDate) &&
+                      Math.round(
+                        (new Date(`${endDate}T00:00:00`).getTime() -
+                          new Date(`${date}T00:00:00`).getTime()) /
+                          (1000 * 60 * 60 * 24)
+                      ) +
+                        1 ===
+                        item.days);
+                  return (
+                    <button
+                      key={item.days}
+                      type="button"
+                      onClick={() => applyQuickDurationDays(item.days)}
+                      className={`px-2.5 py-0.5 rounded-lg border font-semibold transition-colors ${
+                        isActiveDur
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <span className="text-indigo-700 font-bold">
                 {endDate && endDate > date
                   ? formatTaskDateRangeLabel({ date, endDate }, 'long')
-                  : formatThaiDateDisplay(date, 'long')}
-              </strong>
-            </span>
-            <span className="text-[11px] font-semibold text-indigo-600">
-              เวลา {time} น.
-            </span>
+                  : formatThaiDateDisplay(date, 'long')}{' '}
+                · {time} น.
+              </span>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="text-slate-500 font-medium mr-1">เลือกระยะเวลาด่วน:</span>
-            {[
-              { label: '1 วัน (วันเดียว)', days: 1 },
-              { label: '2 วัน', days: 2 },
-              { label: '3 วัน', days: 3 },
-              { label: '5 วัน', days: 5 },
-              { label: '7 วัน', days: 7 },
-            ].map((item) => (
-              <button
-                key={item.days}
-                type="button"
-                onClick={() => applyQuickDurationDays(item.days)}
-                className={`px-2.5 py-1 rounded-md border font-medium transition-colors ${
-                  (item.days === 1 && !endDate) ||
-                  (item.days > 1 &&
-                    endDate &&
-                    Math.round(
-                      (new Date(`${endDate}T00:00:00`).getTime() -
-                        new Date(`${date}T00:00:00`).getTime()) /
-                        (1000 * 60 * 60 * 24)
-                    ) +
-                      1 ===
-                      item.days)
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+          {/* Real-time Time Conflict Warning */}
+          {conflictingTasks.length > 0 && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200/90 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="min-w-0 space-y-0.5">
+                <div className="font-bold text-amber-900">
+                  แจ้งเตือนเวลาใกล้เคียงกับภารกิจอื่นในวันเดียวกัน ({conflictingTasks.length} รายการ)
+                </div>
+                {conflictingTasks.slice(0, 2).map((ct) => (
+                  <div key={ct.id} className="text-amber-800 truncate">
+                    • <span className="font-mono-tabular font-semibold">{ct.time} น.</span> —{' '}
+                    {ct.title}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Additional Notes */}
+          <div>
+            <label className="block text-xs font-bold text-slate-800 mb-1.5">
+              รายละเอียด / หมายเหตุเพิ่มเติม
+            </label>
+            <textarea
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="ระบุการแต่งกาย ผู้เข้าร่วม หรือหมายเหตุเพิ่มเติม..."
+              className="w-full rounded-xl border border-slate-200/90 bg-slate-50/50 focus:bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none transition-colors"
+            />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Category & Priority */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 หมวดหมู่งาน
               </label>
               <select
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 bg-white focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 px-3 text-sm font-medium text-slate-900 bg-white focus:border-indigo-600 focus:outline-none"
               >
                 {categories.length === 0 ? (
                   <option value="cat-work">ทั่วไป (ยังไม่มีหมวดหมู่ที่ตั้งไว้)</option>
@@ -287,30 +441,31 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 ระดับความสำคัญ
               </label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as TaskPriority)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 bg-white focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 px-3 text-sm font-medium text-slate-900 bg-white focus:border-indigo-600 focus:outline-none"
               >
-                <option value={TaskPriority.HIGH}>สูง (High Priority)</option>
+                <option value={TaskPriority.HIGH}>ด่วนมาก / สำคัญสูง (High)</option>
                 <option value={TaskPriority.MEDIUM}>ปานกลาง (Medium)</option>
                 <option value={TaskPriority.LOW}>ทั่วไป (Low)</option>
               </select>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Status & LINE Reminder */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                สถานะงาน
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                สถานะภารกิจ
               </label>
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as TaskStatus)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 bg-white focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 px-3 text-sm font-medium text-slate-900 bg-white focus:border-indigo-600 focus:outline-none"
               >
                 <option value={TaskStatus.PENDING}>รอดำเนินการ</option>
                 <option value={TaskStatus.IN_PROGRESS}>กำลังดำเนินการ</option>
@@ -319,13 +474,13 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 แจ้งเตือนผ่าน LINE ล่วงหน้า
               </label>
               <select
                 value={remindMinutesBefore}
                 onChange={(e) => setRemindMinutesBefore(Number(e.target.value))}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 bg-white focus:border-slate-900 focus:outline-none"
+                className="w-full h-10 rounded-xl border border-slate-200/90 px-3 text-sm font-medium text-slate-900 bg-white focus:border-indigo-600 focus:outline-none"
               >
                 <option value={0}>ไม่แจ้งเตือนอัตโนมัติ</option>
                 {REMINDER_TIMING_OPTIONS.map((opt) => (
@@ -337,7 +492,8 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+          {/* Reminder Summary Footer Strip */}
+          <div className="rounded-xl bg-slate-50 border border-slate-200/80 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>
@@ -348,27 +504,26 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
             </div>
             <div className="flex items-center gap-1.5 font-mono-tabular text-slate-500 shrink-0">
               <Calendar className="h-3.5 w-3.5" />
-              <span>
-                {endDate && endDate > date ? `${date} ถึง ${endDate}` : date}
-              </span>
+              <span>{endDate && endDate > date ? `${date} ถึง ${endDate}` : date}</span>
               <Clock className="h-3.5 w-3.5 ml-1" />
               <span>{time}</span>
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
+          {/* Submit Actions */}
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+              className="h-10 px-4 text-xs font-semibold text-slate-700 bg-white border border-slate-200/90 rounded-xl hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
             >
               ยกเลิก
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+              className="h-10 px-5 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 shadow-xs transition-colors whitespace-nowrap shrink-0"
             >
-              {editingTask ? 'บันทึกการแก้ไข' : 'บันทึกงานลงปฏิทิน'}
+              {editingTask ? 'บันทึกการแก้ไข' : 'บันทึกกำหนดการลงปฏิทิน'}
             </button>
           </div>
         </form>
@@ -376,3 +531,4 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
     </div>
   );
 };
+

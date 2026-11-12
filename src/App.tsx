@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   CheckCircle2,
   Circle,
+  Clock,
   Cloud,
   Edit3,
   ExternalLink,
@@ -12,6 +13,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Lock,
+  MapPin,
   MessageSquareText,
   Plus,
   RefreshCw,
@@ -21,6 +23,7 @@ import {
   Tv,
   Unlock,
   Users,
+  X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
@@ -404,13 +407,19 @@ export default function App() {
   const [sheetMeta, setSheetMeta] = useState<SheetMetadata | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SHEET_META);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.title === 'SheetCal LINE Database') {
+          parsed.title = 'ระบบน้องเลขา Database';
+        }
+        return parsed;
+      }
     } catch {
       // Ignore
     }
     return {
       spreadsheetId: DEFAULT_SPREADSHEET_ID,
-      title: 'SheetCal LINE Database',
+      title: 'ระบบน้องเลขา Database',
       spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${DEFAULT_SPREADSHEET_ID}/edit`,
       lastSyncedAt: new Date().toISOString(),
     };
@@ -1164,7 +1173,7 @@ export default function App() {
     try {
       const createdMeta = await createDatabaseSpreadsheet(
         token,
-        title || 'SheetCal LINE Database',
+        title || 'ระบบน้องเลขา Database',
         tasks,
         categories,
         lineLogs,
@@ -3252,7 +3261,7 @@ export default function App() {
       }`}
     >
       {/* Strict 3-Zone Top Navigation Bar Contract */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-3.5 bg-white border-b border-slate-200">
+      <header className="sticky top-0 z-40 flex items-center justify-between gap-4 px-4 sm:px-6 py-2.5 bg-white border-b border-slate-200/90 shadow-2xs">
         {/* Zone 1: Official Emblem & Brand Wordmark */}
         <a
           href="#schedule"
@@ -3260,9 +3269,9 @@ export default function App() {
             e.preventDefault();
             setActiveSection('schedule');
           }}
-          className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-indigo-950 whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2.5 whitespace-nowrap shrink-0 group"
         >
-          <span className="h-9 w-9 rounded-full overflow-hidden bg-white border border-indigo-200 flex items-center justify-center shrink-0">
+          <span className="h-9 w-9 rounded-full p-0.5 bg-gradient-to-br from-indigo-50 via-white to-amber-50 ring-1 ring-indigo-200/90 shadow-2xs flex items-center justify-center shrink-0 overflow-hidden">
             <img
               src={ROBOT_MASCOT_DATA_URI}
               onError={(e) => {
@@ -3276,26 +3285,32 @@ export default function App() {
               className="h-full w-full object-cover scale-105 rounded-full"
             />
           </span>
-          <span>
-            SheetCal <span className="text-[#06C755]">LINE</span>
-          </span>
+          <div className="flex flex-col leading-tight">
+            <span className="text-base sm:text-lg font-extrabold tracking-tight text-indigo-950 group-hover:text-indigo-700 transition-colors">
+              ระบบ<span className="text-[#06C755]">น้องเลขา</span>
+            </span>
+            <span className="hidden xl:inline text-[10px] font-semibold text-slate-500">
+              สำนักบริหารแรงงานต่างด้าว
+            </span>
+          </div>
         </a>
 
-        {/* Zone 2: 5 concise single-line text navigation links */}
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
+        {/* Zone 2: Executive Segmented Navigation Links */}
+        <nav className="hidden md:flex items-center gap-1 p-1 rounded-xl bg-slate-100/85 border border-slate-200/75 text-xs lg:text-sm font-medium text-slate-600 overflow-x-auto">
           <a
             href="#dashboard"
             onClick={(e) => {
               e.preventDefault();
               setActiveSection('dashboard');
             }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'dashboard'
-                ? 'text-indigo-600 underline underline-offset-8 decoration-2 decoration-indigo-600 font-semibold'
-                : 'hover:text-indigo-600'
+                ? 'bg-white text-indigo-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
-            Dashboard สรุปงาน
+            <LayoutDashboard className="h-3.5 w-3.5 shrink-0" />
+            <span>Dashboard สรุปงาน</span>
           </a>
           <a
             href="#schedule"
@@ -3303,10 +3318,10 @@ export default function App() {
               e.preventDefault();
               setActiveSection('schedule');
             }}
-            className={`py-1 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'schedule'
-                ? 'text-indigo-600 underline underline-offset-8 decoration-2 decoration-indigo-600 font-semibold'
-                : 'hover:text-indigo-600'
+                ? 'bg-white text-indigo-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
             <Tv className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
@@ -3318,13 +3333,14 @@ export default function App() {
               e.preventDefault();
               setActiveSection('calendar');
             }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'calendar'
-                ? 'text-indigo-600 underline underline-offset-8 decoration-2 decoration-indigo-600 font-semibold'
-                : 'hover:text-indigo-600'
+                ? 'bg-white text-indigo-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
             }`}
           >
-            ปฏิทินรายเดือน
+            <CalendarIcon className="h-3.5 w-3.5 shrink-0" />
+            <span>ปฏิทินรายเดือน</span>
           </a>
           <a
             href="#team"
@@ -3333,10 +3349,10 @@ export default function App() {
               setAdminPasscodeError('');
               setActiveSection('team');
             }}
-            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'team'
-                ? 'text-emerald-600 underline underline-offset-8 decoration-2 decoration-emerald-600 font-semibold'
-                : 'hover:text-emerald-600'
+                ? 'bg-white text-emerald-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-emerald-700 hover:bg-white/60'
             }`}
           >
             {isAdminUnlocked ? (
@@ -3344,7 +3360,7 @@ export default function App() {
             ) : (
               <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
             )}
-            <span>ทีมที่ใช้ปฏิทินร่วมกัน ({teamMembers.length})</span>
+            <span>ทีมร่วม ({teamMembers.length})</span>
           </a>
           <a
             href="#line"
@@ -3353,10 +3369,10 @@ export default function App() {
               setAdminPasscodeError('');
               setActiveSection('line');
             }}
-            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'line'
-                ? 'text-[#06C755] underline underline-offset-8 decoration-2 decoration-[#06C755] font-semibold'
-                : 'hover:text-[#06C755]'
+                ? 'bg-white text-[#06C755] font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-[#06C755] hover:bg-white/60'
             }`}
           >
             {isAdminUnlocked ? (
@@ -3364,7 +3380,7 @@ export default function App() {
             ) : (
               <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
             )}
-            <span>แจ้งเตือน & สั่งงาน LINE</span>
+            <span>แจ้งเตือน LINE</span>
           </a>
           <a
             href="#database"
@@ -3373,10 +3389,10 @@ export default function App() {
               setAdminPasscodeError('');
               setActiveSection('database');
             }}
-            className={`py-1 inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'database' || activeSection === 'categories'
-                ? 'text-violet-600 underline underline-offset-8 decoration-2 decoration-violet-600 font-semibold'
-                : 'hover:text-violet-600'
+                ? 'bg-white text-violet-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-violet-700 hover:bg-white/60'
             }`}
           >
             {isAdminUnlocked ? (
@@ -3384,12 +3400,12 @@ export default function App() {
             ) : (
               <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
             )}
-            <span>ฐานข้อมูล Google Sheets</span>
+            <span>ฐานข้อมูล Sheets</span>
           </a>
         </nav>
 
         {/* Zone 3: 1 primary action */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -3397,22 +3413,23 @@ export default function App() {
               setModalInitialDate(selectedCalendarDate || todayStr);
               setIsTaskModalOpen(true);
             }}
-            className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-2xs transition-colors whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 h-9 px-4 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 shadow-xs transition-all whitespace-nowrap shrink-0"
           >
-            + เพิ่มงานใหม่
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <span>เพิ่มงานใหม่</span>
           </button>
         </div>
       </header>
 
       {/* Mobile Navigation Tabs */}
-      <div className="md:hidden bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-2 overflow-x-auto">
+      <div className="md:hidden bg-white/95 border-b border-slate-200/80 px-3 py-2 flex items-center gap-1.5 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveSection('dashboard')}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'dashboard'
-              ? 'bg-indigo-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-indigo-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           <LayoutDashboard className="h-3.5 w-3.5" />
@@ -3421,10 +3438,10 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('schedule')}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'schedule'
-              ? 'bg-indigo-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-indigo-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           <Tv className="h-3.5 w-3.5" />
@@ -3433,10 +3450,10 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('calendar')}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'calendar'
-              ? 'bg-indigo-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-indigo-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           <CalendarIcon className="h-3.5 w-3.5" />
@@ -3448,10 +3465,10 @@ export default function App() {
             setAdminPasscodeError('');
             setActiveSection('team');
           }}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'team'
-              ? 'bg-emerald-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-emerald-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           {isAdminUnlocked ? (
@@ -3459,7 +3476,7 @@ export default function App() {
           ) : (
             <Lock className="h-3.5 w-3.5" />
           )}
-          <span>ทีมที่ใช้ปฏิทินร่วมกัน</span>
+          <span>ทีมร่วม ({teamMembers.length})</span>
         </button>
         <button
           type="button"
@@ -3467,10 +3484,10 @@ export default function App() {
             setAdminPasscodeError('');
             setActiveSection('line');
           }}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'line'
-              ? 'bg-[#06C755] text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-[#06C755] text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           {isAdminUnlocked ? (
@@ -3483,10 +3500,10 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('categories')}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'categories'
-              ? 'bg-violet-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-violet-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           <FolderKanban className="h-3.5 w-3.5" />
@@ -3498,10 +3515,10 @@ export default function App() {
             setAdminPasscodeError('');
             setActiveSection('database');
           }}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'database'
-              ? 'bg-violet-600 text-white'
-              : 'text-slate-600 bg-slate-100'
+              ? 'bg-violet-600 text-white shadow-2xs'
+              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           {isAdminUnlocked ? (
@@ -3518,7 +3535,7 @@ export default function App() {
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5">
           <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-amber-950">
             <div>
-              <strong>💡 คุณกำลังเปิดผ่านเบราว์เซอร์ภายในแอป LINE:</strong>{' '}
+              <strong>คุณกำลังเปิดผ่านเบราว์เซอร์ภายในแอป LINE:</strong>{' '}
               สมาชิกทุกคนดูตารางงานและเพิ่มงานได้ทันทีโดยไม่ต้องล็อกอิน แต่หากแอดมินต้องการตั้งค่าบัญชี Google OAuth กรุณาเปิดใน Safari หรือ Chrome
             </div>
             <button
@@ -3534,15 +3551,18 @@ export default function App() {
       )}
 
       {/* Minimalist Workspace Status Bar */}
-      <div className="bg-gradient-to-r from-indigo-50/70 via-white to-emerald-50/70 border-b border-slate-200 px-6 py-2">
+      <div className="bg-slate-50/90 border-b border-slate-200/80 px-4 sm:px-6 py-2">
         <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-600">
             {!needsAuth && user ? (
               <>
-                <span className="text-emerald-700 font-semibold">
-                  เชื่อมต่อ Google ({user.email})
+                <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
+                  <span>เชื่อมต่อ Google ({user.email})</span>
                 </span>
-                <span aria-hidden="true">·</span>
+                <span aria-hidden="true" className="text-slate-300">
+                  ·
+                </span>
                 {sheetMeta ? (
                   <a
                     href={sheetMeta.spreadsheetUrl}
@@ -3564,21 +3584,25 @@ export default function App() {
                 )}
               </>
             ) : (
-              <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>เชื่อมต่อปฏิทินทีมอัตโนมัติแล้ว (สมาชิกใช้งานได้ทันที ไม่ต้องล็อกอิน)</span>
+              <span className="inline-flex items-center gap-1.5 text-emerald-800 font-semibold">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
+                <span>ซิงค์ปฏิทินทีมอัตโนมัติพร้อมใช้งาน</span>
               </span>
             )}
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="text-slate-300">
+              ·
+            </span>
             <button
               type="button"
               onClick={() => setActiveSection('team')}
-              className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-900 font-semibold hover:underline"
+              className="inline-flex items-center gap-1 text-slate-700 hover:text-emerald-700 font-semibold transition-colors"
             >
               <Users className="h-3.5 w-3.5 text-emerald-600" />
-              <span>สมาชิกที่ใช้ปฏิทินร่วมกัน {teamMembers.length} คน</span>
+              <span>สมาชิก {teamMembers.length} คน</span>
             </button>
-            <span aria-hidden="true">·</span>
+            <span aria-hidden="true" className="text-slate-300">
+              ·
+            </span>
             <button
               type="button"
               onClick={handleToggleUiStyle}
@@ -3589,18 +3613,18 @@ export default function App() {
                   ? 'bg-[#FEF08A] text-slate-950 border-2 border-slate-900 shadow-[2px_2px_0px_#0F172A]'
                   : uiStyleMode === 'clay'
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                  : 'bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-100'
               }`}
               title="คลิกเพื่อสลับดีไซน์: Neumorphism ↔ Neo-Brutalism ↔ Claymorphism 3D ↔ Minimal Clean"
             >
               <span>
                 {uiStyleMode === 'neumorphism'
-                  ? '🎛️ ดีไซน์: Neumorphism'
+                  ? 'ดีไซน์: Neumorphism'
                   : uiStyleMode === 'neobrutalism'
-                  ? '⚡ ดีไซน์: Neo-Brutalism'
+                  ? 'ดีไซน์: Neo-Brutalism'
                   : uiStyleMode === 'clay'
-                  ? '🎨 ดีไซน์: Claymorphism 3D'
-                  : '✨ ดีไซน์: Minimal Clean'}
+                  ? 'ดีไซน์: Claymorphism 3D'
+                  : 'ดีไซน์: Minimal Clean'}
               </span>
             </button>
           </div>
@@ -3653,7 +3677,7 @@ export default function App() {
                     disabled={isSyncing}
                     onClick={() =>
                       handleCreateNewSpreadsheet(
-                        'SheetCal LINE — ฐานข้อมูลตารางงานและแจ้งเตือน'
+                        'ระบบน้องเลขา — ฐานข้อมูลตารางงานและแจ้งเตือน'
                       )
                     }
                     className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors whitespace-nowrap shrink-0"
@@ -3755,75 +3779,99 @@ export default function App() {
       {/* Main Content Container */}
       <main className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-6">
         {activeSection === 'dashboard' && (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {/* Executive Mission Header Banner on Main Dashboard */}
-            <div className="rounded-2xl border border-indigo-200 bg-white p-5 sm:p-6 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-              <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
-                <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full bg-white overflow-hidden border-2 border-indigo-200 flex items-center justify-center shrink-0">
-                  <img
-                    src={ROBOT_MASCOT_DATA_URI}
-                    onError={(e) => {
-                      const target = e.currentTarget;
-                      if (!target.dataset.fallbackUsed) {
-                        target.dataset.fallbackUsed = '1';
-                        target.src = '/assets/aistudio/images_b42759e5.jpg';
-                      }
-                    }}
-                    alt="ตราสัญลักษณ์ระบบตารางภารกิจ"
-                    className="h-full w-full object-cover scale-105 rounded-full"
-                  />
-                </div>
-                <div className="min-w-0 space-y-2.5">
-                  <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-tight">
-                    กำหนดการภารกิจของผู้อำนวยการสำนักบริหารแรงงานต่างด้าว
-                  </h1>
-                  <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-950 font-bold">
-                      <span>ภารกิจวันนี้:</span>
-                      <span className="font-mono-tabular font-extrabold">
-                        {metrics.todayCount} งาน
+            <div className="rounded-2xl border border-slate-200/90 bg-white overflow-hidden shadow-xs">
+              <div
+                aria-hidden="true"
+                className="h-1.5 w-full bg-gradient-to-r from-indigo-900 via-indigo-600 to-amber-500"
+              />
+              <div className="p-5 sm:p-6 bg-gradient-to-br from-white via-slate-50/40 to-indigo-50/25 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+                <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
+                  <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full p-1 bg-gradient-to-br from-indigo-50 via-white to-amber-50 ring-1 ring-indigo-200/90 shadow-sm flex items-center justify-center shrink-0 overflow-hidden">
+                    <img
+                      src={ROBOT_MASCOT_DATA_URI}
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        if (!target.dataset.fallbackUsed) {
+                          target.dataset.fallbackUsed = '1';
+                          target.src = '/assets/aistudio/images_b42759e5.jpg';
+                        }
+                      }}
+                      alt="ตราสัญลักษณ์ระบบตารางภารกิจ"
+                      className="h-full w-full object-cover scale-105 rounded-full"
+                    />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                      กำหนดการภารกิจของผู้อำนวยการ
+                    </h1>
+                    <div className="text-xs sm:text-sm font-semibold tracking-wide text-indigo-700">
+                      สำนักบริหารแรงงานต่างด้าว · กรมการจัดหางาน
+                    </div>
+                    <div className="pt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-slate-600">
+                      <span className="inline-flex items-baseline gap-1.5">
+                        <span className="font-semibold text-slate-700">ภารกิจวันนี้</span>
+                        <strong className="font-mono-tabular font-extrabold text-indigo-700">
+                          {metrics.todayCount} งาน
+                        </strong>
+                        <span className="text-slate-500 font-mono-tabular">
+                          (รอทำ {metrics.todayPendingCount} · เสร็จแล้ว{' '}
+                          {Math.max(0, metrics.todayCount - metrics.todayPendingCount)})
+                        </span>
                       </span>
-                      <span className="text-slate-600 font-semibold">
-                        (รอทำ {metrics.todayPendingCount} · เสร็จแล้ว{' '}
-                        {Math.max(0, metrics.todayCount - metrics.todayPendingCount)})
+                      <span aria-hidden="true" className="text-slate-300">
+                        ·
                       </span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-bold">
-                      <span>งานด่วน / สำคัญสูง:</span>
-                      <span className="font-mono-tabular font-extrabold">
-                        {
-                          tasks.filter(
-                            (t) =>
-                              t.priority === TaskPriority.HIGH &&
-                              t.status !== TaskStatus.COMPLETED
-                          ).length
-                        }{' '}
-                        งาน
+                      <span className="inline-flex items-baseline gap-1.5">
+                        <span className="font-semibold text-slate-700">งานด่วน/สำคัญสูง</span>
+                        <strong className="font-mono-tabular font-extrabold text-rose-600">
+                          {
+                            tasks.filter(
+                              (t) =>
+                                t.priority === TaskPriority.HIGH &&
+                                t.status !== TaskStatus.COMPLETED
+                            ).length
+                          }{' '}
+                          งาน
+                        </strong>
                       </span>
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 border border-slate-300 text-slate-900 font-bold">
-                      <span>รวมทุกกำหนดการ:</span>
-                      <span className="font-mono-tabular font-extrabold">
-                        {tasks.length} งาน
+                      <span aria-hidden="true" className="text-slate-300">
+                        ·
                       </span>
-                    </span>
+                      <span className="inline-flex items-baseline gap-1.5">
+                        <span className="font-semibold text-slate-700">รวมทุกกำหนดการ</span>
+                        <strong className="font-mono-tabular font-extrabold text-slate-900">
+                          {tasks.length} งาน
+                        </strong>
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setActiveSection('schedule')}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-xs sm:text-sm font-bold hover:bg-indigo-700 transition-colors"
-                >
-                  <Tv className="h-4 w-4 shrink-0" />
-                  <span>เปิดหน้าตารางงานนำเสนอ (รายวัน)</span>
-                </button>
+
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('calendar')}
+                    className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-white border border-slate-200/90 text-slate-700 text-xs sm:text-sm font-bold hover:bg-slate-50 transition-colors whitespace-nowrap"
+                  >
+                    <CalendarIcon className="h-4 w-4 text-indigo-600 shrink-0" />
+                    <span>ปฏิทินรายเดือน</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('schedule')}
+                    className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-indigo-600 text-white text-xs sm:text-sm font-bold hover:bg-indigo-700 shadow-xs transition-colors whitespace-nowrap"
+                  >
+                    <Tv className="h-4 w-4 shrink-0" />
+                    <span>เปิดหน้าตารางงานนำเสนอ</span>
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* 4-Column KPI Summary Strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div
                 className={
                   uiStyleMode === 'neumorphism'
@@ -3832,18 +3880,16 @@ export default function App() {
                     ? 'brutal-kpi-indigo p-5'
                     : uiStyleMode === 'clay'
                     ? 'clay-kpi-indigo p-5'
-                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                    : 'bg-white border border-slate-200/90 border-t-2 border-t-indigo-600 rounded-2xl p-5 shadow-2xs'
                 }
               >
-                <div className="text-xs font-bold text-indigo-950">
-                  งานวันนี้
-                </div>
-                <div className="mt-2.5 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-indigo-700 font-mono-tabular">
+                <div className="text-xs font-bold text-slate-600">ภารกิจวันนี้</div>
+                <div className="mt-2 flex items-baseline justify-between gap-2">
+                  <span className="text-3xl font-extrabold text-indigo-700 font-mono-tabular">
                     {metrics.todayCount}
                   </span>
-                  <span className="text-xs text-indigo-950/80 font-mono-tabular font-semibold">
-                    ค้าง {metrics.todayPendingCount} รายการ
+                  <span className="text-xs text-slate-600 font-mono-tabular font-semibold">
+                    รอดำเนินการ {metrics.todayPendingCount} งาน
                   </span>
                 </div>
               </div>
@@ -3856,17 +3902,19 @@ export default function App() {
                     ? 'brutal-kpi-amber p-5'
                     : uiStyleMode === 'clay'
                     ? 'clay-kpi-amber p-5'
-                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                    : 'bg-white border border-slate-200/90 border-t-2 border-t-amber-500 rounded-2xl p-5 shadow-2xs'
                 }
               >
-                <div className="text-xs font-bold text-amber-950">
-                  งานค้างทั้งหมด
-                </div>
-                <div className="mt-2.5 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-amber-800 font-mono-tabular">
+                <div className="text-xs font-bold text-slate-600">งานค้างทั้งหมด</div>
+                <div className="mt-2 flex items-baseline justify-between gap-2">
+                  <span className="text-3xl font-extrabold text-amber-700 font-mono-tabular">
                     {metrics.pendingCount}
                   </span>
-                  <span className="text-xs text-rose-700 font-mono-tabular font-semibold">
+                  <span
+                    className={`text-xs font-mono-tabular font-semibold ${
+                      metrics.overdueCount > 0 ? 'text-rose-600' : 'text-slate-500'
+                    }`}
+                  >
                     เลยกำหนด {metrics.overdueCount} งาน
                   </span>
                 </div>
@@ -3880,30 +3928,28 @@ export default function App() {
                     ? 'brutal-kpi-emerald p-5'
                     : uiStyleMode === 'clay'
                     ? 'clay-kpi-emerald p-5'
-                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                    : 'bg-white border border-slate-200/90 border-t-2 border-t-emerald-600 rounded-2xl p-5 shadow-2xs'
                 }
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-bold text-emerald-950">
-                    งานที่ทำเสร็จแล้ว
-                  </div>
+                  <div className="text-xs font-bold text-slate-600">เสร็จสิ้นแล้ว</div>
                   {metrics.completedCount > 0 && (
                     <button
                       type="button"
                       onClick={handleDeleteCompletedTasks}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50/90 hover:bg-rose-100 text-rose-700 border border-rose-200/80 text-[10px] font-bold transition-colors whitespace-nowrap"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 text-[10px] font-bold transition-colors whitespace-nowrap"
                       title="ลบงานที่ทำเสร็จแล้วทั้งหมดในครั้งเดียว"
                     >
                       <Trash2 className="h-3 w-3" />
-                      <span>ลบทั้งหมด</span>
+                      <span>ล้างงานเสร็จ</span>
                     </button>
                   )}
                 </div>
-                <div className="mt-2.5 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-emerald-800 font-mono-tabular">
+                <div className="mt-2 flex items-baseline justify-between gap-2">
+                  <span className="text-3xl font-extrabold text-emerald-700 font-mono-tabular">
                     {metrics.completedCount}
                   </span>
-                  <span className="text-xs text-emerald-900 font-mono-tabular font-semibold">
+                  <span className="text-xs text-emerald-700 font-mono-tabular font-semibold">
                     สำเร็จ {metrics.completionRate}%
                   </span>
                 </div>
@@ -3917,83 +3963,125 @@ export default function App() {
                     ? 'brutal-kpi-rose p-5'
                     : uiStyleMode === 'clay'
                     ? 'clay-kpi-rose p-5'
-                    : 'bg-white border border-slate-200 rounded-xl p-5 shadow-2xs'
+                    : 'bg-white border border-slate-200/90 border-t-2 border-t-rose-600 rounded-2xl p-5 shadow-2xs'
                 }
               >
-                <div className="text-xs font-bold text-rose-950">
-                  งานความสำคัญสูง
-                </div>
-                <div className="mt-2.5 flex items-baseline justify-between">
-                  <span className="text-3xl font-bold text-rose-700 font-mono-tabular">
+                <div className="text-xs font-bold text-slate-600">ความสำคัญสูง / เร่งด่วน</div>
+                <div className="mt-2 flex items-baseline justify-between gap-2">
+                  <span className="text-3xl font-extrabold text-rose-600 font-mono-tabular">
                     {metrics.highPriorityCount}
                   </span>
-                  <span className="text-xs text-rose-900 font-semibold">รายการเร่งด่วน</span>
+                  <span className="text-xs text-rose-700 font-semibold">ต้องติดตามพิเศษ</span>
                 </div>
               </div>
             </div>
 
-            {/* Quick Natural-Language LINE Command Input Bar */}
-            <div className="bg-white rounded-2xl p-4 border border-emerald-200/80 shadow-2xs">
+            {/* Quick Natural-Language LINE Command Input Bar + 1-Click Quick Chips */}
+            <div className="bg-white rounded-2xl p-4 sm:px-5 border border-slate-200/90 shadow-2xs space-y-2.5">
               <form
                 onSubmit={handleQuickLineSubmit}
-                className="flex flex-col sm:flex-row sm:items-center gap-3"
+                className="flex flex-col md:flex-row md:items-center gap-2.5"
               >
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl bg-[#06C755] text-white text-[10px] font-bold clay-btn-emerald">
+                  <span className="inline-flex h-7 px-2 items-center justify-center rounded-lg bg-[#06C755] text-white text-[10px] font-extrabold tracking-wide">
                     LINE
                   </span>
-                  <span className="text-xs font-semibold text-emerald-950 whitespace-nowrap">
+                  <span className="text-xs font-bold text-slate-800 whitespace-nowrap">
                     สั่งงานด่วนเข้าปฏิทิน:
                   </span>
                 </div>
-                <input
-                  type="text"
-                  value={quickLineInput}
-                  onChange={(e) => setQuickLineInput(e.target.value)}
-                  placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "อบรมสัมมนา 5-7 พ.ย. 09:00 #สูง" หรือ "ประชุม พรุ่งนี้ 10:30"...'
-                  className="flex-1 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#06C755] focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#06C755] rounded-xl hover:bg-[#05b04b] transition-all whitespace-nowrap shrink-0"
-                >
-                  <Send className="h-3.5 w-3.5" />
-                  <span>บันทึกเข้าปฏิทิน</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={isSendingPush}
-                  onClick={async () => {
-                    await handleTestLinePush();
-                    setActiveSection('line');
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-all whitespace-nowrap shrink-0"
-                >
-                  <Bell className="h-3.5 w-3.5" />
-                  <span>📊 ส่งการ์ดสรุปงานเข้า LINE</span>
-                </button>
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={quickLineInput}
+                    onChange={(e) => setQuickLineInput(e.target.value)}
+                    placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมผู้บริหาร พรุ่งนี้ 09:30 ห้องประชุมสำนักฯ #สูง"...'
+                    className="w-full h-10 rounded-xl border border-slate-200/90 bg-slate-50/60 focus:bg-white pl-3.5 pr-8 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#06C755] focus:outline-none transition-colors"
+                  />
+                  {quickLineInput && (
+                    <button
+                      type="button"
+                      onClick={() => setQuickLineInput('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 rounded"
+                      aria-label="ล้างข้อความ"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="submit"
+                    className="inline-flex items-center justify-center gap-1.5 h-10 px-4 text-xs font-bold text-white bg-[#06C755] rounded-xl hover:bg-[#05b04b] shadow-2xs transition-all whitespace-nowrap shrink-0"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>บันทึกเข้าปฏิทิน</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSendingPush}
+                    onClick={async () => {
+                      await handleTestLinePush();
+                      setActiveSection('line');
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 h-10 px-4 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/90 rounded-xl hover:bg-indigo-100 transition-all whitespace-nowrap shrink-0"
+                  >
+                    <Bell className="h-3.5 w-3.5" />
+                    <span>ส่งการ์ดสรุปเข้า LINE</span>
+                  </button>
+                </div>
               </form>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <span className="text-slate-400 font-semibold mr-1">เติมคำสั่งด่วน:</span>
+                {[
+                  'วันนี้ 09:30',
+                  'วันนี้ 13:30',
+                  'พรุ่งนี้ 09:00',
+                  'พรุ่งนี้ 13:30',
+                  'สถานที่: ห้องประชุมสำนักฯ',
+                  'สถานที่: กระทรวงแรงงาน',
+                  '#สูง',
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() =>
+                      setQuickLineInput((prev) =>
+                        prev.trim() ? `${prev.trim()} ${chip}` : `${chip} `
+                      )
+                    }
+                    className="px-2.5 py-0.5 rounded-lg border border-slate-200/90 bg-slate-50/70 hover:bg-emerald-50 hover:border-emerald-200 text-slate-600 hover:text-emerald-800 font-medium transition-colors"
+                  >
+                    + {chip}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Main Dashboard Split: Clean Task List (8 cols) + Shared Calendar & Categories Sidebar (4 cols) */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left 8 Columns: Task Management Table */}
-              <div className="lg:col-span-8 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+              <div className="lg:col-span-8 bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+                <div
+                  aria-hidden="true"
+                  className="h-1 w-full bg-gradient-to-r from-indigo-900 via-indigo-600 to-sky-500"
+                />
                 <div className="p-5 border-b border-slate-200/80 space-y-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h2 className="text-base font-bold text-slate-900">
-                      รายการงานในปฏิทินของทีม
+                    <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
+                      รายการกำหนดการภารกิจทั้งหมด
                     </h2>
 
                     {/* Interactive Filter Tabs + 1-Click Clear Completed Button */}
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="flex items-center gap-1 p-1.5 bg-slate-100 rounded-xl clay-inset overflow-x-auto">
+                      <div className="flex items-center gap-1 p-1 bg-slate-100/90 border border-slate-200/70 rounded-xl overflow-x-auto">
                         {(
                           [
                             { id: 'all', label: `ทั้งหมด (${tasks.length})` },
                             { id: 'today', label: `วันนี้ (${metrics.todayCount})` },
                             { id: 'pending', label: `งานค้าง (${metrics.pendingCount})` },
-                            { id: 'high', label: `Priority สูง (${metrics.highPriorityCount})` },
+                            { id: 'high', label: `สำคัญสูง (${metrics.highPriorityCount})` },
                             { id: 'completed', label: `เสร็จแล้ว (${metrics.completedCount})` },
                           ] as { id: TaskFilterTab; label: string }[]
                         ).map((tab) => (
@@ -4001,10 +4089,10 @@ export default function App() {
                             key={tab.id}
                             type="button"
                             onClick={() => setTaskFilter(tab.id)}
-                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all whitespace-nowrap shrink-0 ${
+                            className={`px-3 py-1.5 text-xs rounded-lg transition-all whitespace-nowrap shrink-0 ${
                               taskFilter === tab.id
-                                ? 'bg-indigo-600 text-white font-semibold shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900'
+                                ? 'bg-white text-indigo-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                                : 'text-slate-600 font-medium hover:text-slate-900'
                             }`}
                           >
                             {tab.label}
@@ -4016,32 +4104,42 @@ export default function App() {
                         <button
                           type="button"
                           onClick={handleDeleteCompletedTasks}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl hover:bg-rose-100 transition-colors whitespace-nowrap shrink-0"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200/80 rounded-xl hover:bg-rose-100 transition-colors whitespace-nowrap shrink-0"
                           title="ลบงานที่ทำเสร็จแล้วทั้งหมดในครั้งเดียว"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
-                          <span>ลบงานที่เสร็จแล้วทั้งหมด ({metrics.completedCount})</span>
+                          <span>ล้างงานเสร็จ ({metrics.completedCount})</span>
                         </button>
                       )}
                     </div>
                   </div>
 
                   {/* Clean Search & Category Filter Row */}
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
                     <div className="relative flex-1">
-                      <Search className="h-3.5 w-3.5 text-indigo-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="ค้นหาชื่องาน รายละเอียด หรือวันที่ (เช่น 4 พ.ย. 2569)..."
-                        className="w-full rounded-lg border border-slate-300 bg-white pl-8 pr-3 py-1.5 text-xs text-slate-900 focus:border-indigo-600 focus:outline-none"
+                        placeholder="ค้นหาชื่องาน สถานที่ รายละเอียด หรือวันที่ (เช่น 4 พ.ย. 2569)..."
+                        className="w-full h-9 rounded-xl border border-slate-200/90 bg-slate-50/60 focus:bg-white pl-8 pr-8 text-xs text-slate-900 focus:border-indigo-600 focus:outline-none transition-colors"
                       />
+                      {searchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                          aria-label="ล้างคำค้นหา"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                     <select
                       value={categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value)}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white focus:border-indigo-600 focus:outline-none"
+                      className="h-9 rounded-xl border border-slate-200/90 px-3 text-xs font-semibold text-slate-700 bg-white focus:border-indigo-600 focus:outline-none"
                     >
                       <option value="all">ทุกหมวดหมู่งาน ({categories.length})</option>
                       {categories.map((cat) => (
@@ -4055,9 +4153,12 @@ export default function App() {
 
                 {/* Task Rows */}
                 {filteredTasks.length === 0 ? (
-                  <div className="py-12 px-4 text-center">
-                    <p className="text-sm font-medium text-slate-700">
-                      ไม่พบรายการงานในหมวดตัวกรองที่เลือก
+                  <div className="py-14 px-4 text-center">
+                    <p className="text-sm font-semibold text-slate-700">
+                      ไม่พบรายการภารกิจในตัวกรองที่เลือก
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      ลองเปลี่ยนคำค้นหา หรือกดปุ่มด้านล่างเพื่อเพิ่มกำหนดการใหม่
                     </p>
                     <button
                       type="button"
@@ -4066,14 +4167,14 @@ export default function App() {
                         setModalInitialDate(todayStr);
                         setIsTaskModalOpen(true);
                       }}
-                      className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+                      className="mt-3.5 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
                     >
                       <Plus className="h-3.5 w-3.5" />
-                      <span>เพิ่มงานใหม่</span>
+                      <span>เพิ่มกำหนดการใหม่</span>
                     </button>
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-200">
+                  <div className="divide-y divide-slate-100">
                     {filteredTasks.map((task) => {
                       const cat = categoryMap[task.categoryId];
                       const catColor = cat?.color || '#2563EB';
@@ -4085,19 +4186,24 @@ export default function App() {
                       const isOverdue = !isDone && effectiveEndDate < todayStr;
                       const googleCalUrl = buildGoogleCalendarTemplateUrl(task, cat?.name);
 
+                      const locMatch = (task.description || '').match(
+                        /^สถานที่\s*:\s*(.+)$/im
+                      );
+                      const parsedLocation = locMatch ? locMatch[1].trim() : '';
+                      const cleanNotes = (task.description || '')
+                        .replace(/^สถานที่\s*:\s*.+$/im, '')
+                        .trim();
+
                       return (
                         <div
                           key={task.id}
-                          style={{
-                            borderLeft: `4px solid ${isDone ? '#10B981' : catColor}`,
-                          }}
-                          className="px-4 py-3.5 hover:bg-indigo-50/25 transition-colors flex items-start justify-between gap-4"
+                          className="px-4 sm:px-5 py-3.5 hover:bg-slate-50/80 transition-colors flex items-start justify-between gap-4 group"
                         >
                           <div className="flex items-start gap-3 min-w-0">
                             <button
                               type="button"
                               onClick={() => handleToggleTaskStatus(task)}
-                              className="mt-0.5 text-slate-400 hover:text-emerald-600 transition-colors shrink-0"
+                              className="mt-1 text-slate-400 hover:text-emerald-600 transition-colors shrink-0"
                               title={
                                 isDone
                                   ? 'เปลี่ยนเป็นรอดำเนินการ'
@@ -4111,32 +4217,60 @@ export default function App() {
                               )}
                             </button>
 
-                            <div className="min-w-0">
-                              <div
-                                className={`text-sm font-semibold text-slate-900 break-words ${
-                                  isDone ? 'line-through text-slate-400' : ''
-                                }`}
-                              >
-                                {task.title}
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`inline-flex items-center gap-1 font-mono-tabular text-xs font-extrabold ${
+                                    isDone ? 'text-slate-400' : 'text-indigo-950'
+                                  }`}
+                                >
+                                  <Clock className="h-3 w-3 text-indigo-500 shrink-0" />
+                                  {task.time} น.
+                                </span>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
+                                <span
+                                  className={`text-sm font-bold break-words ${
+                                    isDone
+                                      ? 'line-through text-slate-400'
+                                      : 'text-slate-900'
+                                  }`}
+                                >
+                                  {task.title}
+                                </span>
                               </div>
-                              {task.description && (
-                                <p className="text-xs text-slate-600 mt-0.5 break-words">
-                                  {task.description}
-                                </p>
+
+                              {(parsedLocation || cleanNotes) && (
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-600">
+                                  {parsedLocation && (
+                                    <span className="inline-flex items-center gap-1 font-medium text-slate-700">
+                                      <MapPin className="h-3 w-3 text-indigo-500 shrink-0" />
+                                      <span>{parsedLocation}</span>
+                                    </span>
+                                  )}
+                                  {cleanNotes && (
+                                    <span className="text-slate-500 break-words">
+                                      {cleanNotes}
+                                    </span>
+                                  )}
+                                </div>
                               )}
 
-                              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 pt-0.5">
                                 <span
                                   className="inline-flex items-center gap-1.5 font-semibold"
                                   style={{ color: catColor }}
                                 >
                                   <span
-                                    className="h-2 w-2 rounded-xs shrink-0"
+                                    className="h-2 w-2 rounded-full shrink-0"
                                     style={{ backgroundColor: catColor }}
                                   />
                                   {cat?.name || 'ทั่วไป'}
                                 </span>
-                                <span aria-hidden="true">·</span>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
                                 <button
                                   type="button"
                                   onClick={() => handleOpenDateInCalendar(task.date)}
@@ -4147,31 +4281,35 @@ export default function App() {
                                   }`}
                                   title="คลิกเพื่อเปิดดูในปฏิทินรายเดือน"
                                 >
-                                  {formatTaskDateRangeLabel(task)} เวลา {task.time} น.
+                                  {formatTaskDateRangeLabel(task)}
                                   {isOverdue ? ' (เลยกำหนด)' : ''}
                                 </button>
-                                <span aria-hidden="true">·</span>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
                                 <span
                                   className={
                                     task.priority === TaskPriority.HIGH
-                                      ? 'text-rose-600 font-semibold'
+                                      ? 'text-rose-600 font-bold'
                                       : task.priority === TaskPriority.MEDIUM
-                                      ? 'text-amber-600 font-medium'
+                                      ? 'text-amber-700 font-medium'
                                       : 'text-slate-500'
                                   }
                                 >
                                   {task.priority === TaskPriority.HIGH
-                                    ? 'Priority สูง'
+                                    ? 'สำคัญสูง'
                                     : task.priority === TaskPriority.MEDIUM
-                                    ? 'Priority ปานกลาง'
-                                    : 'Priority ทั่วไป'}
+                                    ? 'ปานกลาง'
+                                    : 'ทั่วไป'}
                                 </span>
-                                <span aria-hidden="true">·</span>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
                                 <a
                                   href={googleCalUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium underline"
+                                  className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium hover:underline"
                                 >
                                   <CalendarPlus className="h-3 w-3" />
                                   <span>+Google Calendar</span>
@@ -4184,7 +4322,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => dispatchLineReminder(task, true)}
-                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"
+                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                               title="ส่งแจ้งเตือนงานนี้เข้า LINE OA ทันที"
                             >
                               <Bell className="h-4 w-4" />
@@ -4195,7 +4333,7 @@ export default function App() {
                                 setEditingTask(task);
                                 setIsTaskModalOpen(true);
                               }}
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
                               title="แก้ไขรายละเอียดงาน"
                             >
                               <Edit3 className="h-4 w-4" />
@@ -4203,7 +4341,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleDeleteTask(task)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                               title="ลบงาน"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -4219,122 +4357,135 @@ export default function App() {
               {/* Right 4 Columns: Clean Shared Calendar Team Card & Category Breakdown */}
               <div className="lg:col-span-4 space-y-6">
                 {/* Shared Calendar Team Card */}
-                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                    <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                      <Users className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>ทีมที่ใช้ปฏิทินร่วมกัน ({teamMembers.length} คน)</span>
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => setActiveSection('team')}
-                      className="text-xs font-semibold text-emerald-700 hover:underline whitespace-nowrap shrink-0"
-                    >
-                      แชร์ปฏิทิน / จัดการทีม
-                    </button>
-                  </div>
-
-                  <div className="mt-3.5 space-y-2.5">
-                    {teamMembers.map((member) => (
-                      <div
-                        key={member.id}
-                        className="flex items-center justify-between text-xs"
+                <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+                  <div
+                    aria-hidden="true"
+                    className="h-1 w-full bg-gradient-to-r from-emerald-600 to-teal-500"
+                  />
+                  <div className="p-5">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-1.5">
+                        <Users className="h-4 w-4 text-emerald-600 shrink-0" />
+                        <span>ทีมที่ใช้ปฏิทินร่วมกัน ({teamMembers.length})</span>
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSection('team')}
+                        className="text-xs font-bold text-emerald-700 hover:underline whitespace-nowrap shrink-0"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
+                        จัดการทีม
+                      </button>
+                    </div>
+
+                    <div className="mt-3.5 space-y-2.5">
+                      {teamMembers.map((member) => (
+                        <div
+                          key={member.id}
+                          className="flex items-center justify-between text-xs py-0.5"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              className="h-6 w-6 rounded-full text-white font-bold text-[11px] inline-flex items-center justify-center shrink-0 shadow-2xs"
+                              style={{
+                                backgroundColor: member.avatarColor || '#0F172A',
+                              }}
+                            >
+                              {member.name.slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="font-semibold text-slate-800 truncate">
+                              {member.name}
+                            </span>
+                          </div>
                           <span
-                            className="h-6 w-6 rounded-lg text-white font-bold text-[11px] inline-flex items-center justify-center shrink-0 shadow-xs"
-                            style={{
-                              backgroundColor: member.avatarColor || '#0F172A',
-                            }}
+                            className={`font-semibold shrink-0 ${
+                              member.role === 'owner'
+                                ? 'text-indigo-700'
+                                : member.role === 'editor'
+                                ? 'text-emerald-700'
+                                : 'text-slate-500'
+                            }`}
                           >
-                            {member.name.slice(0, 1).toUpperCase()}
-                          </span>
-                          <span className="font-medium text-slate-800 truncate">
-                            {member.name}
+                            {member.role === 'owner'
+                              ? 'Owner'
+                              : member.role === 'editor'
+                              ? 'Editor'
+                              : 'Viewer'}
                           </span>
                         </div>
-                        <span
-                          className={`font-semibold shrink-0 ${
-                            member.role === 'owner'
-                              ? 'text-indigo-700'
-                              : member.role === 'editor'
-                              ? 'text-emerald-700'
-                              : 'text-slate-500'
-                          }`}
-                        >
-                          {member.role === 'owner'
-                            ? 'Owner'
-                            : member.role === 'editor'
-                            ? 'Editor'
-                            : 'Viewer'}
-                        </span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
 
                 {/* Category Summary Card */}
-                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs">
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                    <h3 className="text-sm font-bold text-slate-900">
-                      หมวดหมู่งานตามสี
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => setActiveSection('categories')}
-                      className="text-xs font-semibold text-violet-700 hover:text-violet-900 hover:underline whitespace-nowrap shrink-0"
-                    >
-                      จัดการหมวดหมู่
-                    </button>
-                  </div>
+                <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+                  <div
+                    aria-hidden="true"
+                    className="h-1 w-full bg-gradient-to-r from-violet-600 to-indigo-500"
+                  />
+                  <div className="p-5">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <h3 className="text-sm font-extrabold text-slate-900">
+                        หมวดหมู่งานตามสี
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSection('categories')}
+                        className="text-xs font-bold text-violet-700 hover:text-violet-900 hover:underline whitespace-nowrap shrink-0"
+                      >
+                        จัดการหมวดหมู่
+                      </button>
+                    </div>
 
-                  <div className="mt-3.5 space-y-2.5">
-                    {categories.map((cat) => {
-                      const catTasks = tasks.filter((t) => t.categoryId === cat.id);
-                      const pendingCount = catTasks.filter(
-                        (t) => t.status !== TaskStatus.COMPLETED
-                      ).length;
-                      const isSelected = categoryFilter === cat.id;
+                    <div className="mt-3.5 space-y-2">
+                      {categories.map((cat) => {
+                        const catTasks = tasks.filter((t) => t.categoryId === cat.id);
+                        const pendingCount = catTasks.filter(
+                          (t) => t.status !== TaskStatus.COMPLETED
+                        ).length;
+                        const isSelected = categoryFilter === cat.id;
 
-                      return (
-                        <div
-                          key={cat.id}
-                          onClick={() => {
-                            setCategoryFilter(
-                              categoryFilter === cat.id ? 'all' : cat.id
-                            );
-                          }}
-                          style={{
-                            borderLeft: `3px solid ${cat.color}`,
-                            backgroundColor: isSelected ? `${cat.color}14` : undefined,
-                          }}
-                          className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-50 pl-2.5 pr-2 py-1.5 rounded-r-md transition-colors"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span
-                              className="h-3 w-3 rounded-xs shrink-0"
-                              style={{ backgroundColor: cat.color }}
-                            />
-                            <span
-                              className="font-semibold truncate"
-                              style={{ color: isSelected ? cat.color : '#1E293B' }}
-                            >
-                              {cat.name}
-                            </span>
-                          </div>
-                          <div className="font-mono-tabular text-slate-500 shrink-0">
-                            <span>{catTasks.length} งาน</span>
-                            <span className="mx-1">·</span>
-                            <span
-                              className="font-semibold"
-                              style={{ color: cat.color }}
-                            >
-                              ค้าง {pendingCount}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        return (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => {
+                              setCategoryFilter(
+                                categoryFilter === cat.id ? 'all' : cat.id
+                              );
+                            }}
+                            className={`w-full flex items-center justify-between text-xs px-3 py-2 rounded-xl border transition-all ${
+                              isSelected
+                                ? 'bg-indigo-50/70 border-indigo-200 shadow-2xs'
+                                : 'bg-white border-slate-100 hover:border-slate-200 hover:bg-slate-50/80'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="h-2.5 w-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: cat.color }}
+                              />
+                              <span
+                                className="font-bold truncate"
+                                style={{ color: isSelected ? cat.color : '#1E293B' }}
+                              >
+                                {cat.name}
+                              </span>
+                            </div>
+                            <div className="font-mono-tabular text-slate-500 shrink-0">
+                              <span>{catTasks.length} งาน</span>
+                              <span className="mx-1 text-slate-300">·</span>
+                              <span
+                                className="font-bold"
+                                style={{ color: cat.color }}
+                              >
+                                ค้าง {pendingCount}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4530,7 +4681,7 @@ export default function App() {
             onOpenDateInCalendar={handleOpenDateInCalendar}
             onPullFromSheets={handlePullFromSheets}
             onCreateSpreadsheet={() =>
-              handleCreateNewSpreadsheet('SheetCal LINE — ฐานข้อมูลตารางงานและแจ้งเตือน')
+              handleCreateNewSpreadsheet('ระบบน้องเลขา — ฐานข้อมูลตารางงานและแจ้งเตือน')
             }
             isSendingPush={isSendingPush}
             isSyncing={isSyncing}
@@ -4604,7 +4755,7 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white px-4 sm:px-6 pt-4 pb-20 md:pb-4 mt-12">
         <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
           <span>
-            SheetCal LINE — ระบบปฏิทินตารางงานร่วมกันของทีม แจ้งเตือนผ่าน LINE OA และฐานข้อมูล Google Sheets
+            ระบบน้องเลขา — ระบบปฏิทินตารางงานร่วมกันของทีม แจ้งเตือนผ่าน LINE OA และฐานข้อมูล Google Sheets
           </span>
           <div className="flex flex-wrap items-center gap-4">
             <button
@@ -4642,14 +4793,14 @@ export default function App() {
       {/* Thumb-Friendly Mobile Bottom Navigation Bar (< 768px) */}
       <nav
         aria-label="เมนูหลักบนมือถือ"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 py-1.5 grid grid-cols-6 gap-1 shadow-lg"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] grid grid-cols-6 gap-1 shadow-lg"
       >
         <button
           type="button"
           onClick={() => setActiveSection('dashboard')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'dashboard'
-              ? 'text-indigo-600 bg-indigo-50/80'
+              ? 'text-indigo-700 bg-indigo-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4659,9 +4810,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('schedule')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'schedule'
-              ? 'text-indigo-600 bg-indigo-50/80'
+              ? 'text-indigo-700 bg-indigo-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4671,9 +4822,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('calendar')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'calendar'
-              ? 'text-indigo-600 bg-indigo-50/80'
+              ? 'text-indigo-700 bg-indigo-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4683,9 +4834,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('team')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'team'
-              ? 'text-emerald-600 bg-emerald-50/80'
+              ? 'text-emerald-700 bg-emerald-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4695,9 +4846,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('line')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'line'
-              ? 'text-[#06C755] bg-emerald-50/80'
+              ? 'text-[#06C755] bg-emerald-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4707,9 +4858,9 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveSection('database')}
-          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors ${
+          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'database' || activeSection === 'categories'
-              ? 'text-violet-600 bg-violet-50/80'
+              ? 'text-violet-700 bg-violet-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
@@ -4727,6 +4878,7 @@ export default function App() {
         }}
         onSave={handleSaveTask}
         categories={categories}
+        existingTasks={tasks}
         initialDate={modalInitialDate}
         editingTask={editingTask}
         defaultRemindMinutes={lineSettings.defaultRemindMinutes}

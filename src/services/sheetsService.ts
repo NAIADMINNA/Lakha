@@ -363,7 +363,7 @@ function getActiveGasBridgeUrl(): string {
 
 function buildFallbackMetadata(
   spreadsheetId: string,
-  title = 'SheetCal LINE Database'
+  title = 'ระบบน้องเลขา Database'
 ): SheetMetadata {
   const cleanId = extractSpreadsheetId(spreadsheetId || DEFAULT_FALLBACK_SHEET_ID) || DEFAULT_FALLBACK_SHEET_ID;
   return {
@@ -664,7 +664,7 @@ export async function createDatabaseSpreadsheet(
 
   // Fallback: Sync to connected Google Sheet via Google Apps Script Bridge (works without OAuth scopes)
   await pushToGasBridgeFallback(tasks, categories, teamMembers);
-  return buildFallbackMetadata(DEFAULT_FALLBACK_SHEET_ID, title || 'SheetCal LINE Database');
+  return buildFallbackMetadata(DEFAULT_FALLBACK_SHEET_ID, title || 'ระบบน้องเลขา Database');
 }
 
 export async function writeDatabaseToSheet(

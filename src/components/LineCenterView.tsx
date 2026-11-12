@@ -438,7 +438,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             to: isValidUserIdFormat ? rawUserId : '',
             targetGroupId: isValidGroupIdFormat ? rawGroupId : '',
             teamNotificationMode: activeMode,
-            text: `✅ [SheetCal LINE Diagnostic - Web]\nทดสอบส่งแจ้งเตือนจากหน้าเว็บจริงผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
+            text: `✅ [ระบบน้องเลขา Diagnostic - Web]\nทดสอบส่งแจ้งเตือนจากหน้าเว็บจริงผ่าน Google Apps Script สำเร็จ!\n⏰ เวลา: ${new Date().toLocaleTimeString('th-TH')} น.`,
           }),
         });
         const gasText = await gasRes.text();

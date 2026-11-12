@@ -1502,7 +1502,7 @@ export function generateGoogleAppsScriptCode(
 
   return `/**
  * ============================================================================
- * SheetCal LINE (v2.7) — โค้ดเชื่อมต่อแอป LINE จริง + เว็บปฏิทินทีม Apps Script (ซิงค์ 2 ทาง 100%)
+ * ระบบน้องเลขา (v2.7) — โค้ดเชื่อมต่อแอป LINE จริง + เว็บปฏิทินทีม Apps Script (ซิงค์ 2 ทาง 100%)
  * ============================================================================
  * วิธีติดตั้ง / อัปเดตโค้ด:
  * 1. เปิดไฟล์ Google Sheets > Extensions (ส่วนขยาย) > Apps Script
@@ -2496,7 +2496,7 @@ function openSafeSpreadsheet() {
     }
   } catch (err3) {}
   try {
-    var created = SpreadsheetApp.create('SheetCal LINE — ตารางงานของทีม');
+    var created = SpreadsheetApp.create('ระบบน้องเลขา — ตารางงานของทีม');
     if (created && created.getId()) {
       PropertiesService.getScriptProperties().setProperty('AUTO_CREATED_SHEET_ID', created.getId());
       return created;
@@ -2590,7 +2590,7 @@ function doGet(e) {
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         tasks: tasks,
-        message: 'SheetCal LINE Webhook & Team Portal Ready (v2.7)'
+        message: 'ระบบน้องเลขา Webhook & Team Portal Ready (v2.7)'
       }))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -2635,7 +2635,7 @@ function doGet(e) {
   var html = [
     '<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">',
-    '<title>SheetCal LINE — ปฏิทินและจัดการงานของทีม</title>',
+    '<title>ระบบน้องเลขา — ปฏิทินและจัดการงานของทีม</title>',
     '<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">',
     '<style>',
     '*{box-sizing:border-box;font-family:"Prompt",sans-serif;}',
@@ -2688,7 +2688,7 @@ function doGet(e) {
     '.btn-del{background:#FEE2E2;border-color:#FCA5A5;color:#B91C1C;}',
     '</style></head><body><div class="wrap">',
     '<div class="header">',
-    '<h1>📅 ปฏิทินและจัดการงานของทีม (SheetCal LINE)</h1>',
+    '<h1>📅 ปฏิทินและจัดการงานของทีม (ระบบน้องเลขา)</h1>',
     '<p>หน้าเว็บปฏิทินกลางสำหรับสมาชิกทุกคนในกลุ่ม LINE — คลิกเลือกวันบนปฏิทิน เพิ่มงานใหม่ และติ๊กงานเสร็จได้ทันที (ซิงค์ Google Sheets อัตโนมัติ)</p>',
     '<div class="top-links">',
     (sheetUrl ? '<a class="btn-link" href="' + sheetUrl + '" target="_blank">📊 เปิดตาราง Google Sheets</a>' : ''),
@@ -2957,7 +2957,7 @@ function doGet(e) {
   ].join('\\n');
 
   return HtmlService.createHtmlOutput(html)
-    .setTitle('SheetCal LINE — ปฏิทินและจัดการงานของทีม')
+    .setTitle('ระบบน้องเลขา — ปฏิทินและจัดการงานของทีม')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -3035,7 +3035,7 @@ function doPost(e) {
         : (/^[CR][0-9a-fA-F]{32}$/.test(targetId) ? targetId : getSavedGroupId());
 
       clearAllRichMenusFromLine(token, targetId);
-      var msgText = payload.text || 'แจ้งเตือนตารางงานจาก SheetCal LINE';
+      var msgText = payload.text || 'แจ้งเตือนตารางงานจากระบบน้องเลขา';
       var isValidUserTarget = /^U[0-9a-fA-F]{32}$/.test(targetId);
       var sentSuccess = false;
       var sentGroupSuccess = false;
@@ -3655,7 +3655,7 @@ function doPost(e) {
           var startDt = new Date(parsed.date + 'T' + parsed.time + ':00+07:00');
           var endDt = new Date(startDt.getTime() + 60 * 60 * 1000);
           CalendarApp.getDefaultCalendar().createEvent(parsed.title, startDt, endDt, {
-            description: 'บันทึกอัตโนมัติจาก SheetCal LINE OA'
+            description: 'บันทึกอัตโนมัติจากระบบน้องเลขา LINE OA'
           });
         } catch (calErr) {}
 

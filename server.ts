@@ -136,7 +136,7 @@ function buildGoogleCalUrl(title: string, date: string, time: string, details: s
     action: 'TEMPLATE',
     text: title || 'Task',
     dates: datesParam,
-    details: details || 'SheetCal LINE Task',
+    details: details || 'ระบบน้องเลขา Task',
   });
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
@@ -2266,7 +2266,7 @@ async function startServer() {
               taskTitle: parsedTitle,
               description: senderGroupId
                 ? `บันทึกลงปฏิทินทีมเรียบร้อยแล้ว (🔑 Group ID: ${senderGroupId})`
-                : 'บันทึกลงปฏิทิน SheetCal LINE และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
+                : 'บันทึกลงปฏิทินระบบน้องเลขา และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
               date: dateResult.dateStr || todayStr,
               time: timeResult.timeStr || '09:00',
               categoryName: senderGroupId ? 'งานกลุ่ม LINE ของทีม' : 'บันทึกผ่านแชท LINE OA',
@@ -2403,7 +2403,7 @@ async function startServer() {
       } else if (messageFormat === 'text_custom' && !taskTitle) {
         flexMessage = {
           type: 'text',
-          text: text || 'ข้อความแจ้งเตือนจาก SheetCal LINE OA',
+          text: text || 'ข้อความแจ้งเตือนจากระบบน้องเลขา LINE OA',
         };
       } else if (taskTitle) {
         flexMessage = buildSingleTaskReminderFlexMessage({
@@ -2429,7 +2429,7 @@ async function startServer() {
       } else {
         flexMessage = {
           type: 'text',
-          text: text || 'ข้อความแจ้งเตือนจาก SheetCal LINE OA',
+          text: text || 'ข้อความแจ้งเตือนจากระบบน้องเลขา LINE OA',
         };
       }
 
@@ -2439,7 +2439,7 @@ async function startServer() {
           text ||
           (taskTitle
             ? `🔔 แจ้งเตือนงาน: ${taskTitle}\n🗓️ วันที่: ${date || ''} เวลา ${time || ''} น.\n${description || ''}`
-            : 'ข้อความแจ้งเตือนจาก SheetCal LINE OA'),
+            : 'ข้อความแจ้งเตือนจากระบบน้องเลขา LINE OA'),
       };
 
       const messages = [flexMessage];
@@ -2774,7 +2774,7 @@ async function startServer() {
       if (sendTest) {
         const testMsg = {
           type: 'text',
-          text: `✅ [SheetCal LINE Diagnostic]\nทดสอบการเชื่อมต่อแจ้งเตือนสำเร็จ!\n🤖 บอท: ${
+          text: `✅ [ระบบน้องเลขา Diagnostic]\nทดสอบการเชื่อมต่อแจ้งเตือนสำเร็จ!\n🤖 บอท: ${
             botInfo.displayName || 'LINE OA'
           } (${botInfo.basicId || ''})\n⏰ เวลาทดสอบ: ${new Date().toLocaleTimeString('th-TH')} น.`,
         };

@@ -72,7 +72,7 @@ export const SheetsDatabaseView: React.FC<SheetsDatabaseViewProps> = ({
   onSaveAndSyncNow,
 }) => {
   const [newSheetTitle, setNewSheetTitle] = useState(
-    'SheetCal LINE — ฐานข้อมูลตารางงานและแจ้งเตือน'
+    'ระบบน้องเลขา — ฐานข้อมูลตารางงานและแจ้งเตือน'
   );
   const [previewTab, setPreviewTab] = useState<'Tasks' | 'Categories' | 'LineLogs'>('Tasks');
   const [gasUrlInput, setGasUrlInput] = useState(
