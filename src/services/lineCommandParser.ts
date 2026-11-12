@@ -1,4 +1,5 @@
 import { Category, LineMessageLog, LineSettings, Task, TaskPriority, TaskStatus, TeamMember } from '../types';
+import { getInternetNow } from './internetTimeService';
 
 export interface ParsedLineCommandResult {
   action: 'add_task' | 'complete_task' | 'delete_task' | 'query_today' | 'query_pending' | 'help';
@@ -118,7 +119,7 @@ export function doesTaskTriggerNotification(
  * Returns YYYY-MM-DD in Thailand timezone (Asia/Bangkok) so both server-side
  * LINE Webhooks and client-side browsers always resolve the exact same date.
  */
-export function formatLocalDateYMD(date: Date = new Date()): string {
+export function formatLocalDateYMD(date: Date = getInternetNow()): string {
   try {
     const parts = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Bangkok',
@@ -141,7 +142,7 @@ export function formatLocalDateYMD(date: Date = new Date()): string {
   return `${y}-${m}-${d}`;
 }
 
-export function formatLocalTimeHM(date: Date = new Date()): string {
+export function formatLocalTimeHM(date: Date = getInternetNow()): string {
   try {
     const parts = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Bangkok',

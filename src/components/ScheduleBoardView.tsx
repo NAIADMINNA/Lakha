@@ -29,6 +29,12 @@ import {
   isTaskActiveOnDate,
 } from '../services/lineCommandParser';
 import { ROBOT_MASCOT_DATA_URI } from '../assets/robotMascotDataUri';
+import {
+  ensureInternetTimeAutoSync,
+  getInternetNow,
+  getInternetNowMs,
+  onInternetTimeSync,
+} from '../services/internetTimeService';
 
 interface ScheduleBoardViewProps {
   tasks: Task[];
@@ -161,10 +167,13 @@ function extractLocationFromText(title: string, description?: string): string | 
   const combined = `${title || ''} ${description || ''}`.trim();
   if (!combined) return null;
   const match = combined.match(
-    /(?:ณ\s+|สถานที่\s*:?\s*|ห้องประชุม\s*|ชั้น\s*\d+\s*อาคาร\s*)([^|\n•,]{3,65})/i
+    /(?:ณ\.?\s+|ณ\.(?=\S)|สถานที่\s*:?\s*|ห้องประชุม\s*|ชั้น\s*\d+\s*อาคาร\s*)([^|\n•,]{3,65})/i
   );
   if (match && match[0]) {
-    return match[0].trim();
+    const cleaned = match[0]
+      .replace(/^(?:สถานที่\s*:?\s*|ณ\.?\s*)/i, '')
+      .trim();
+    return cleaned || null;
   }
   return null;
 }
@@ -186,13 +195,34 @@ const LiveBangkokClockDisplay: React.FC<{
   isDarkDisplay: boolean;
   isEmeraldExec: boolean;
 }> = React.memo(({ isLargeText, isNavyGold, isDarkDisplay, isEmeraldExec }) => {
-  const [clockTick, setClockTick] = useState<Date>(() => new Date());
+  const [clockTick, setClockTick] = useState<Date>(() => getInternetNow());
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setClockTick(new Date());
-    }, 1000);
-    return () => window.clearInterval(timer);
+    ensureInternetTimeAutoSync();
+    let timeoutId: number | undefined;
+    let cancelled = false;
+
+    const scheduleNextSecond = () => {
+      if (cancelled) return;
+      const nowMs = getInternetNowMs();
+      setClockTick(new Date(nowMs));
+      const delayMs = Math.max(50, 1005 - (nowMs % 1000));
+      timeoutId = window.setTimeout(scheduleNextSecond, delayMs);
+    };
+
+    scheduleNextSecond();
+
+    const unsubscribe = onInternetTimeSync(() => {
+      if (cancelled) return;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      scheduleNextSecond();
+    });
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      unsubscribe();
+    };
   }, []);
 
   const formattedSec = useMemo(() => {
@@ -238,22 +268,32 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onToggleStatus,
   onOpenCalendarDate,
 }) => {
-  // Update minute-level state only when HH:mm changes so 1s clock ticks never re-render the schedule list
-  const [nowDate, setNowDate] = useState<Date>(() => new Date());
+  // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
+  const [nowDate, setNowDate] = useState<Date>(() => getInternetNow());
   const todayStr = useMemo(() => formatLocalDateYMD(nowDate), [nowDate]);
   const nowHM = useMemo(() => formatLocalTimeHM(nowDate), [nowDate]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      const next = new Date();
+    ensureInternetTimeAutoSync();
+    const syncMinuteState = () => {
+      const next = getInternetNow();
       setNowDate((prev) =>
         formatLocalTimeHM(prev) !== formatLocalTimeHM(next) ||
         formatLocalDateYMD(prev) !== formatLocalDateYMD(next)
           ? next
           : prev
       );
-    }, 15000);
-    return () => window.clearInterval(timer);
+    };
+
+    const unsubscribe = onInternetTimeSync(() => {
+      syncMinuteState();
+    });
+    const timer = window.setInterval(syncMinuteState, 10000);
+
+    return () => {
+      unsubscribe();
+      window.clearInterval(timer);
+    };
   }, []);
 
   const [rangeMode, setRangeMode] = useState<BoardRangeMode>('upcoming');
@@ -937,6 +977,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               !isDone &&
               todayTasksSummary.nextUpcoming?.id === task.id;
             const detectedVenue = extractLocationFromText(task.title, task.description);
+            const displayDescription = task.description
+              ? detectedVenue
+                ? task.description
+                    .split('\n')
+                    .filter((line) => !/^\s*สถานที่\s*:/i.test(line))
+                    .join('\n')
+                    .trim()
+                : task.description
+              : '';
 
             return (
               <div
@@ -1029,13 +1078,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       )}
                     </div>
 
-                    {task.description && (
+                    {displayDescription && (
                       <p
                         className={`leading-relaxed break-words ${
                           isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
                         } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
                       >
-                        {task.description}
+                        {displayDescription}
                       </p>
                     )}
 

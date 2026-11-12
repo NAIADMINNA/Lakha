@@ -2296,6 +2296,102 @@ async function startServer() {
     }
   });
 
+  // Server-side Internet Standard Time endpoint (queries upstream HTTPS time authorities with RTT/2 latency compensation)
+  let serverSyncedEpochMs: number | null = null;
+  let serverSyncedMonoMs = 0;
+  let serverLastSyncedAt = 0;
+
+  async function resolveUpstreamInternetEpochMs(): Promise<{ epochMs: number; source: string }> {
+    const nowMono = performance.now();
+    if (serverSyncedEpochMs !== null && nowMono - serverLastSyncedAt < 60_000) {
+      return {
+        epochMs: Math.round(serverSyncedEpochMs + (nowMono - serverSyncedMonoMs)),
+        source: 'internet_cached',
+      };
+    }
+
+    // Primary: TimeAPI.io (millisecond precision in Asia/Bangkok)
+    try {
+      const t0 = performance.now();
+      const res = await fetch(
+        'https://timeapi.io/api/time/current/zone?timeZone=Asia%2FBangkok',
+        { signal: AbortSignal.timeout(2500) }
+      );
+      const t1 = performance.now();
+      if (res.ok) {
+        const data = (await res.json()) as {
+          year?: number;
+          month?: number;
+          day?: number;
+          hour?: number;
+          minute?: number;
+          seconds?: number;
+          milliSeconds?: number;
+        };
+        if (
+          typeof data.year === 'number' &&
+          typeof data.month === 'number' &&
+          typeof data.day === 'number' &&
+          typeof data.hour === 'number' &&
+          typeof data.minute === 'number' &&
+          typeof data.seconds === 'number'
+        ) {
+          const utcMs =
+            Date.UTC(
+              data.year,
+              data.month - 1,
+              data.day,
+              data.hour - 7,
+              data.minute,
+              data.seconds,
+              typeof data.milliSeconds === 'number' ? data.milliSeconds : 0
+            ) +
+            (t1 - t0) / 2;
+          serverSyncedEpochMs = utcMs;
+          serverSyncedMonoMs = t1;
+          serverLastSyncedAt = t1;
+          return { epochMs: Math.round(utcMs), source: 'timeapi.io' };
+        }
+      }
+    } catch {
+      // Fallback to Cloudflare edge timestamp
+    }
+
+    // Secondary: Cloudflare global edge trace timestamp
+    try {
+      const t0 = performance.now();
+      const res = await fetch('https://www.cloudflare.com/cdn-cgi/trace', {
+        signal: AbortSignal.timeout(2500),
+      });
+      const t1 = performance.now();
+      if (res.ok) {
+        const text = await res.text();
+        const match = text.match(/^ts=(\d+(?:\.\d+)?)/m);
+        if (match && match[1]) {
+          const utcMs = parseFloat(match[1]) * 1000 + (t1 - t0) / 2;
+          serverSyncedEpochMs = utcMs;
+          serverSyncedMonoMs = t1;
+          serverLastSyncedAt = t1;
+          return { epochMs: Math.round(utcMs), source: 'cloudflare_edge' };
+        }
+      }
+    } catch {
+      // Fallback to Cloud NTP clock
+    }
+
+    return { epochMs: Date.now(), source: 'cloud_ntp' };
+  }
+
+  app.get('/api/time', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    const synced = await resolveUpstreamInternetEpochMs();
+    res.json({
+      epochMs: synced.epochMs,
+      iso: new Date(synced.epochMs).toISOString(),
+      source: synced.source,
+    });
+  });
+
   // Poll endpoint for the Web App to consume real LINE Webhook messages & detected Group ID
   app.get('/api/line/webhook-events', (_req, res) => {
     const items = pendingWebhookMessages.splice(0, pendingWebhookMessages.length);
