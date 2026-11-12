@@ -440,14 +440,16 @@ export function formatSummaryCardHeaderDate(
     'วันเสาร์ที่',
   ];
 
+  const cleanYmd = String(targetDate || '').slice(0, 10);
   const list = Array.isArray(tasksOnCard) ? tasksOnCard : [];
   if (list.length > 0) {
-    let minStart = '';
-    let maxEnd = '';
-    let hasMultiDayTask = false;
+    let uniformStart = '';
+    let uniformEnd = '';
+    let allSameMultiDayRange = true;
+    let validCount = 0;
 
     for (const item of list) {
-      const s = String(item.date || targetDate || '').slice(0, 10);
+      const s = String(item.date || cleanYmd || '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) continue;
       const inferredEnd = inferTaskEndDate({
         date: s,
@@ -456,17 +458,32 @@ export function formatSummaryCardHeaderDate(
         description: item.description || '',
       });
       const e = inferredEnd && inferredEnd > s ? inferredEnd : s;
-      if (e > s) hasMultiDayTask = true;
-      if (!minStart || s < minStart) minStart = s;
-      if (!maxEnd || e > maxEnd) maxEnd = e;
+      validCount++;
+
+      if (validCount === 1) {
+        uniformStart = s;
+        uniformEnd = e;
+        if (e <= s) {
+          allSameMultiDayRange = false;
+        }
+      } else if (s !== uniformStart || e !== uniformEnd) {
+        allSameMultiDayRange = false;
+      }
     }
 
-    if (hasMultiDayTask && minStart && maxEnd && maxEnd > minStart) {
-      return `วันที่ ${formatTaskDateRangeLabel({ date: minStart, endDate: maxEnd }, 'long')}`;
+    if (
+      validCount > 0 &&
+      allSameMultiDayRange &&
+      uniformEnd > uniformStart &&
+      (!cleanYmd || uniformStart === cleanYmd)
+    ) {
+      return `วันที่ ${formatTaskDateRangeLabel(
+        { date: uniformStart, endDate: uniformEnd },
+        'long'
+      )}`;
     }
   }
 
-  const cleanYmd = String(targetDate || '').slice(0, 10);
   const parts = cleanYmd.split('-').map(Number);
   if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
     const dt = new Date(parts[0], parts[1] - 1, parts[2]);

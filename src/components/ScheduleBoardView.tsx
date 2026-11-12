@@ -839,7 +839,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
               }`}
             >
-              {!expandMultiDay
+              {!expandMultiDay && !isTodayGroup && layoutMode !== 'single_day'
                 ? formatSummaryCardHeaderDate(
                     group.date,
                     group.items.map((i) => i.task)
