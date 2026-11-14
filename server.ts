@@ -1532,6 +1532,16 @@ async function startServer() {
     };
   }
 
+  function normalizeTaskSemanticKey(rec: Record<string, unknown>): string {
+    const normTitle = String(rec.title || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+    const normDate = String(rec.date || '').trim().slice(0, 10);
+    const normTime = String(rec.time || '09:00').trim().slice(0, 5);
+    return `${normTitle}|${normDate}|${normTime}`;
+  }
+
   function mergeTasksById(
     primaryList: unknown[],
     secondaryList: unknown[]
@@ -1580,11 +1590,177 @@ async function startServer() {
         }
       }
     }
-    return Array.from(byId.values()).sort((a, b) =>
+
+    // Semantic deduplication across distinct task IDs with identical (title + date + time)
+    const bySemanticKey = new Map<string, Record<string, unknown>>();
+    for (const candidate of byId.values()) {
+      const sigKey = normalizeTaskSemanticKey(candidate);
+      const existingDup = bySemanticKey.get(sigKey);
+      if (!existingDup) {
+        bySemanticKey.set(sigKey, candidate);
+        continue;
+      }
+
+      const existingId = String(existingDup.id || '').trim();
+      const candidateId = String(candidate.id || '').trim();
+      const existingTime = existingDup.updatedAt
+        ? new Date(String(existingDup.updatedAt)).getTime()
+        : 0;
+      const candidateTime = candidate.updatedAt
+        ? new Date(String(candidate.updatedAt)).getTime()
+        : 0;
+      const existingDone = existingDup.status === 'completed';
+      const candidateDone = candidate.status === 'completed';
+
+      const preferCandidate =
+        (candidateDone && !existingDone) ||
+        (candidateDone === existingDone && candidateTime >= existingTime);
+
+      const winner = preferCandidate ? candidate : existingDup;
+      const loser = preferCandidate ? existingDup : candidate;
+      const loserId = preferCandidate ? existingId : candidateId;
+
+      const mergedWinner: Record<string, unknown> = {
+        ...loser,
+        ...winner,
+        endDate: winner.endDate ?? loser.endDate,
+        description:
+          String(winner.description || '').trim() ||
+          String(loser.description || '').trim(),
+      };
+
+      if (loserId && loserId !== String(mergedWinner.id || '').trim()) {
+        deletedTaskIds.add(loserId);
+      }
+      bySemanticKey.set(sigKey, mergedWinner);
+    }
+
+    return Array.from(bySemanticKey.values()).sort((a, b) =>
       String(`${a.date || ''} ${a.time || ''}`).localeCompare(
         String(`${b.date || ''} ${b.time || ''}`)
       )
     );
+  }
+
+  // Deduplicate any pre-existing duplicate tasks in the loaded workspace cache on server startup
+  {
+    let cacheMutated = false;
+    for (const [wsKey, wsVal] of sharedWorkspaces.entries()) {
+      if (wsVal && Array.isArray(wsVal.tasks)) {
+        const beforeCount = wsVal.tasks.length;
+        const decoded = extractGasMetadataFromTasks(wsVal.tasks);
+        const deduped = mergeTasksById(decoded.tasks, []);
+        if (deduped.length !== beforeCount || JSON.stringify(deduped) !== JSON.stringify(wsVal.tasks)) {
+          wsVal.tasks = deduped;
+          sharedWorkspaces.set(wsKey, wsVal);
+          cacheMutated = true;
+        }
+      }
+    }
+    if (cacheMutated) {
+      savePersistedWorkspaceCache();
+    }
+  }
+
+  let gasSyncChain: Promise<{ ok: boolean; version?: unknown; json?: Record<string, unknown> }> =
+    Promise.resolve({ ok: true });
+
+  function syncWorkspaceToGasSafely(
+    targetGasUrl: string,
+    workspaceId = 'sheetcal-team-clean'
+  ): Promise<{ ok: boolean; version?: unknown; json?: Record<string, unknown> }> {
+    const cleanGas = resolveCleanGasUrl(targetGasUrl);
+    if (!cleanGas.startsWith('https://script.google.com/macros/s/')) {
+      return Promise.resolve({ ok: false });
+    }
+
+    const nextOp = gasSyncChain.then(async () => {
+      try {
+        // 1. Pull latest tasks from GAS first so a web save NEVER wipes out a task just added in LINE Group
+        try {
+          const gasGetRes = await fetch(`${cleanGas}?action=get_tasks&format=json`, {
+            method: 'GET',
+            redirect: 'follow',
+          });
+          if (gasGetRes.ok) {
+            const gasData = (await gasGetRes.json().catch(() => ({}))) as {
+              tasks?: unknown[];
+              categories?: unknown[];
+              teamMembers?: unknown[];
+              detectedGroupId?: string;
+            };
+            if (
+              typeof gasData.detectedGroupId === 'string' &&
+              /^[CR][0-9a-fA-F]{32}$/.test(gasData.detectedGroupId.trim())
+            ) {
+              runtimeDetectedGroupId = gasData.detectedGroupId.trim();
+            }
+            if (Array.isArray(gasData.tasks) && gasData.tasks.length > 0) {
+              const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
+              const validRemoteGas = decodedGas.tasks.filter((rt) => {
+                const rid = String(rt.id || '').trim();
+                return Boolean(rid && !deletedTaskIds.has(rid));
+              });
+              const curState =
+                sharedWorkspaces.get(workspaceId) ||
+                sharedWorkspaces.get('sheetcal-team-clean') ||
+                sharedWorkspaces.get('team-default');
+              const curTasks = Array.isArray(curState?.tasks)
+                ? extractGasMetadataFromTasks(curState.tasks).tasks
+                : [];
+              const merged = mergeTasksById(curTasks, validRemoteGas);
+              if (curState && JSON.stringify(merged) !== JSON.stringify(curState.tasks)) {
+                const updatedState: CollaborativeWorkspaceState = {
+                  ...curState,
+                  updatedAt: new Date().toISOString(),
+                  tasks: merged,
+                };
+                sharedWorkspaces.set(workspaceId, updatedState);
+                sharedWorkspaces.set('sheetcal-team-clean', updatedState);
+                sharedWorkspaces.set('team-default', updatedState);
+                savePersistedWorkspaceCache();
+              }
+            }
+          }
+        } catch {
+          // Proceed with current server tasks if pre-pull fails transiently
+        }
+
+        // 2. Push the unified merged & deduplicated task list + tombstones to GAS
+        const latestState =
+          sharedWorkspaces.get(workspaceId) ||
+          sharedWorkspaces.get('sheetcal-team-clean') ||
+          sharedWorkspaces.get('team-default');
+        const finalTasks = Array.isArray(latestState?.tasks) ? latestState.tasks : [];
+        const finalCats = Array.isArray(latestState?.categories) ? latestState.categories : [];
+        const finalMembers = Array.isArray(latestState?.teamMembers)
+          ? latestState.teamMembers
+          : [];
+        const gasTasksWithMeta = attachGasMetadataToTasks(
+          finalTasks,
+          finalCats,
+          finalMembers
+        );
+        const syncRes = await postToGoogleAppsScript(cleanGas, {
+          action: 'sync_tasks',
+          tasks: gasTasksWithMeta,
+          categories: finalCats,
+          teamMembers: finalMembers,
+          deletedTaskIds: Array.from(deletedTaskIds),
+        });
+        savePersistedWorkspaceCache();
+        return {
+          ok: Boolean(syncRes.json.ok),
+          version: syncRes.json.version,
+          json: syncRes.json,
+        };
+      } catch {
+        return { ok: false };
+      }
+    });
+
+    gasSyncChain = nextOp.catch(() => ({ ok: false }));
+    return nextOp;
   }
 
   // Real-time Collaborative Shared Calendar Workspace Endpoints
@@ -1600,8 +1776,8 @@ async function startServer() {
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
       cleanGas.startsWith('https://script.google.com/macros/s/') &&
-      nowMs - lastGasPullMs > 4000 &&
-      nowMs - lastWorkspacePostMs > 10000
+      nowMs - lastGasPullMs > 3500 &&
+      nowMs - lastWorkspacePostMs > 2500
     ) {
       lastGasPullMs = nowMs;
       try {
@@ -1614,7 +1790,14 @@ async function startServer() {
             tasks?: unknown[];
             categories?: unknown[];
             teamMembers?: unknown[];
+            detectedGroupId?: string;
           };
+          if (
+            typeof gasData.detectedGroupId === 'string' &&
+            /^[CR][0-9a-fA-F]{32}$/.test(gasData.detectedGroupId.trim())
+          ) {
+            runtimeDetectedGroupId = gasData.detectedGroupId.trim();
+          }
           if (Array.isArray(gasData.tasks)) {
             const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
             const currentTasks = Array.isArray(state?.tasks) ? state.tasks : [];
@@ -1631,11 +1814,13 @@ async function startServer() {
               return Boolean(lid && !deletedTaskIds.has(lid));
             });
             const merged = mergeTasksById(validLocalTasks, decodedGas.tasks);
-            const hasLocalTaskMissingInGas = validLocalTasks.some((lt) => {
-              const rec = lt as Record<string, unknown>;
-              const lid = String(rec.id || '').trim();
-              return Boolean(lid && !gasTaskIds.has(lid));
+            const hasLocalTaskMissingInGas = merged.some((mt) => {
+              const mid = String(mt.id || '').trim();
+              return Boolean(mid && !gasTaskIds.has(mid));
             });
+            const hasDeletedTaskStillInGas = Array.from(gasTaskIds).some((gid) =>
+              deletedTaskIds.has(gid)
+            );
             const remoteCats =
               Array.isArray(gasData.categories) && gasData.categories.length > 0
                 ? gasData.categories
@@ -1671,7 +1856,7 @@ async function startServer() {
               savePersistedWorkspaceCache();
             }
 
-            if (hasLocalTaskMissingInGas) {
+            if (hasLocalTaskMissingInGas || hasDeletedTaskStillInGas) {
               const gasTasksWithMeta = attachGasMetadataToTasks(
                 merged,
                 nextCats,
@@ -1682,6 +1867,7 @@ async function startServer() {
                 tasks: gasTasksWithMeta,
                 categories: nextCats,
                 teamMembers: nextMembers,
+                deletedTaskIds: Array.from(deletedTaskIds),
               }).catch(() => {});
             }
           }
@@ -1803,17 +1989,7 @@ async function startServer() {
 
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
-      const gasTasksWithMeta = attachGasMetadataToTasks(
-        nextTasks,
-        nextCategories,
-        nextTeamMembers
-      );
-      postToGoogleAppsScript(cleanGas, {
-        action: 'sync_tasks',
-        tasks: gasTasksWithMeta,
-        categories: nextCategories,
-        teamMembers: nextTeamMembers,
-      }).catch(() => {});
+      syncWorkspaceToGasSafely(cleanGas, workspaceId).catch(() => {});
     }
 
     res.json({
@@ -1856,7 +2032,13 @@ async function startServer() {
           const id = String(t.id || '').trim();
           return Boolean(id && !deletedTaskIds.has(id));
         });
-        const existingWs = sharedWorkspaces.get('sheetcal-team-clean');
+        const existingWs =
+          sharedWorkspaces.get('sheetcal-team-clean') ||
+          sharedWorkspaces.get('team-default');
+        const existingTasks = Array.isArray(existingWs?.tasks)
+          ? extractGasMetadataFromTasks(existingWs.tasks).tasks
+          : [];
+        const mergedTasks = mergeTasksById(cleanPushTasks, existingTasks);
         const effectiveCats =
           Array.isArray(categories) && categories.length > 0
             ? categories
@@ -1866,33 +2048,25 @@ async function startServer() {
             ? teamMembers
             : decodedIncoming.teamMembers || existingWs?.teamMembers || [];
 
-        if (existingWs) {
-          const updatedWs: CollaborativeWorkspaceState = {
-            ...existingWs,
-            updatedAt: new Date().toISOString(),
-            tasks: cleanPushTasks,
-            categories: effectiveCats,
-            teamMembers: effectiveMembers,
-          };
-          sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
-          sharedWorkspaces.set('team-default', updatedWs);
-          savePersistedWorkspaceCache();
-        }
-        const gasTasksWithMeta = attachGasMetadataToTasks(
-          cleanPushTasks,
-          effectiveCats,
-          effectiveMembers
-        );
-        const syncRes = await postToGoogleAppsScript(targetGasUrl, {
-          action: 'sync_tasks',
-          tasks: gasTasksWithMeta,
+        const updatedWs: CollaborativeWorkspaceState = {
+          workspaceId: existingWs?.workspaceId || 'sheetcal-team-clean',
+          updatedAt: new Date().toISOString(),
+          updatedBy: existingWs?.updatedBy || 'สมาชิกทีม',
+          spreadsheetId: existingWs?.spreadsheetId,
+          spreadsheetUrl: existingWs?.spreadsheetUrl,
+          tasks: mergedTasks,
           categories: effectiveCats,
           teamMembers: effectiveMembers,
-        });
+        };
+        sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
+        sharedWorkspaces.set('team-default', updatedWs);
+        savePersistedWorkspaceCache();
+
+        const syncRes = await syncWorkspaceToGasSafely(targetGasUrl, 'sheetcal-team-clean');
         res.json({
-          ok: Boolean(syncRes.json.ok),
+          ok: Boolean(syncRes.ok),
           gasUrl: targetGasUrl,
-          version: syncRes.json.version,
+          version: syncRes.version,
           deletedTaskIds: Array.from(deletedTaskIds),
           categories: effectiveCats,
           teamMembers: effectiveMembers,
@@ -2062,6 +2236,8 @@ async function startServer() {
     res.status(200).json(result);
   });
 
+  const processedWebhookEventIds = new Set<string>();
+
   // Real LINE Official Account Webhook Endpoint (supports 1-on-1 AND Group Chat Format 2)
   app.post('/api/line/webhook', async (req, res) => {
     try {
@@ -2081,19 +2257,33 @@ async function startServer() {
           : 'https://naiadminna.github.io/Lakha/?section=calendar&openExternalBrowser=1';
 
       for (const event of events) {
+        // Deduplicate LINE Webhook deliveries (prevents double task creation on webhook retries)
+        const eventKey = String(
+          event.webhookEventId || event.message?.id || ''
+        ).trim();
+        if (eventKey) {
+          if (processedWebhookEventIds.has(eventKey)) {
+            continue;
+          }
+          processedWebhookEventIds.add(eventKey);
+          if (processedWebhookEventIds.size > 1000) {
+            const oldest = processedWebhookEventIds.values().next().value;
+            if (oldest) processedWebhookEventIds.delete(oldest);
+          }
+        }
+
         const senderGroupId = String(
           event.source?.groupId || event.source?.roomId || ''
         ).trim();
         const senderUserId = String(event.source?.userId || '').trim();
-        // IMPORTANT: In a LINE Group Chat, event.source contains BOTH groupId (C...) and userId (U...).
-        // We MUST prioritize senderGroupId so Group Chat notifications (Format 2) capture C.../R... properly!
-        const senderId = senderGroupId || senderUserId;
 
         if (senderGroupId) {
           runtimeDetectedGroupId = senderGroupId;
           runtimeDefaultUserId = senderGroupId;
+          savePersistedWorkspaceCache();
         } else if (senderUserId && !runtimeDefaultUserId) {
           runtimeDefaultUserId = senderUserId;
+          savePersistedWorkspaceCache();
         }
 
         if (runtimeChannelAccessToken && senderUserId) {
@@ -2174,7 +2364,7 @@ async function startServer() {
                     },
                     {
                       type: 'text',
-                      text: '💡 พิมพ์สั่งงานในกลุ่มได้ทันที เช่น "ประชุมทีม พรุ่งนี้ 10:00 #สูง" หรือพิมพ์ "สรุปงานวันนี้"',
+                      text: '💡 พิมพ์สั่งเพิ่มงานในกลุ่มโดยขึ้นต้นด้วยคำว่า "เพิ่มงาน" หรือ "นัดหมาย" เช่น "เพิ่มงาน ประชุมทีม พรุ่งนี้ 10:00 #สูง" หรือพิมพ์ "สรุปงานวันนี้"',
                       size: 'xxs',
                       color: '#059669',
                       wrap: true,
@@ -2203,9 +2393,10 @@ async function startServer() {
         // Case B: Text message in 1-on-1 chat or Group Chat
         if (event.type === 'message' && event.message?.type === 'text') {
           const userText = String(event.message.text || '').trim();
+          if (!userText) continue;
           const lowerText = userText.toLowerCase();
 
-          // Special command to check/link Group ID in LINE Group Chat (supports substring matching e.g. "@bot เชื่อมกลุ่ม" or typos)
+          // Special command to check/link Group ID in LINE Group Chat
           if (
             lowerText.includes('เชื่อมกลุ่ม') ||
             lowerText.includes('รหัสกลุ่ม') ||
@@ -2239,39 +2430,203 @@ async function startServer() {
             continue;
           }
 
-          if (userText) {
-            pendingWebhookMessages.push({
-              id: `wh-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              text: userText,
-              userId: senderId,
-              timestamp: new Date().toISOString(),
+          // Server-side Summary Query handling (works 24/7 even with 0 browser tabs open, and never creates a fake task)
+          const isSummaryCommand =
+            userText === 'สรุปงานตามเวลา' ||
+            userText === 'เช็คเวลางาน' ||
+            userText === 'สรุปงานวันนี้' ||
+            userText === 'งานวันนี้' ||
+            userText === 'งานพรุ่งนี้' ||
+            userText === 'สรุปงานพรุ่งนี้' ||
+            userText === 'งานมะรืน' ||
+            userText === 'สรุปงานมะรืน' ||
+            userText === 'สรุปงาน' ||
+            userText === 'งานค้าง' ||
+            /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่|งานวันที่|ตารางงานวันที่|เช็คงานวันที่)\s*(.+)$/i.test(
+              userText
+            );
+
+          if (isSummaryCommand) {
+            if (runtimeChannelAccessToken && event.replyToken) {
+              const { todayYMD } = getBangkokNowYMDAndHM();
+              const queryDate = extractThaiDate(userText).dateStr || todayYMD;
+              const ws =
+                sharedWorkspaces.get('sheetcal-team-clean') ||
+                sharedWorkspaces.get('team-default') ||
+                Array.from(sharedWorkspaces.values())[0];
+              const wsTasks = Array.isArray(ws?.tasks) ? ws.tasks : [];
+              const wsCats = Array.isArray(ws?.categories)
+                ? (ws.categories as Record<string, unknown>[])
+                : [];
+              const catMap = new Map<string, { name: string; color: string }>();
+              for (const c of wsCats) {
+                if (c && typeof c === 'object' && c.id) {
+                  catMap.set(String(c.id), {
+                    name: String(c.name || 'ทั่วไป'),
+                    color: String(c.color || '#2563EB'),
+                  });
+                }
+              }
+
+              const matchingDigestItems: DigestTaskItem[] = [];
+              for (const rawT of wsTasks) {
+                if (!rawT || typeof rawT !== 'object') continue;
+                const t = rawT as Record<string, unknown>;
+                const tid = String(t.id || '').trim();
+                if (!tid || deletedTaskIds.has(tid)) continue;
+                const tDate = String(t.date || '').slice(0, 10);
+                const tEnd = String(t.endDate || tDate).slice(0, 10);
+                const statusVal = String(t.status || 'pending') as
+                  | 'pending'
+                  | 'in_progress'
+                  | 'completed';
+                const matches =
+                  userText === 'งานค้าง'
+                    ? statusVal !== 'completed'
+                    : tDate <= queryDate && tEnd >= queryDate;
+                if (!matches) continue;
+                const catInfo = catMap.get(String(t.categoryId || ''));
+                matchingDigestItems.push({
+                  title: String(t.title || 'งาน'),
+                  date: tDate,
+                  endDate: t.endDate ? String(t.endDate).slice(0, 10) : undefined,
+                  time: String(t.time || '09:00').slice(0, 5),
+                  categoryName: catInfo?.name || 'ทั่วไป',
+                  categoryColor: catInfo?.color || '#2563EB',
+                  priority: (String(t.priority || 'medium') as 'low' | 'medium' | 'high'),
+                  status: statusVal,
+                  description: String(t.description || ''),
+                  assigneeName: t.assigneeName ? String(t.assigneeName) : undefined,
+                });
+              }
+
+              const digestFlex = buildDailyDigestFlexMessage(
+                queryDate,
+                matchingDigestItems,
+                appUrl
+              );
+              await fetch('https://api.line.me/v2/bot/message/reply', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${runtimeChannelAccessToken}`,
+                },
+                body: JSON.stringify({
+                  replyToken: event.replyToken,
+                  messages: [digestFlex],
+                }),
+              }).catch(() => {});
+            }
+            continue;
+          }
+
+          // In LINE Group Chats, require an explicit task command keyword so casual group chat messages don't become bogus tasks
+          if (
+            senderGroupId &&
+            !/^(?:@[^\s]+\s*)?(?:น้องเลขา\s*[:：-]?\s*)?(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\b/i.test(
+              userText
+            )
+          ) {
+            continue;
+          }
+
+          // Server-Authoritative Task Creation: persist directly on the server & GAS once (never via client browser polling!)
+          const { todayYMD: todayStr } = getBangkokNowYMDAndHM();
+          const strippedPrefix = userText
+            .replace(/^(?:@[^\s]+\s*)?(?:น้องเลขา\s*[:：-]?\s*)?/i, '')
+            .replace(
+              /^(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\s*[:：-]?\s*/i,
+              ''
+            )
+            .trim();
+          const dateResult = extractThaiDate(strippedPrefix);
+          const timeResult = extractThaiTime(dateResult.cleanedText);
+          const parsedTitle =
+            timeResult.cleanedText
+              .replace(/#(สูง|ด่วนมาก|ด่วน|high|ต่ำ|low|กลาง|ทั่วไป|medium)/gi, ' ')
+              .replace(/\b(เวลา|วันที่|ตอน|น\.|ของ)\b/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim() ||
+            strippedPrefix ||
+            userText;
+          const resolvedDate = dateResult.dateStr || todayStr;
+          const resolvedTime = timeResult.timeStr || '09:00';
+          const resolvedPriority =
+            /#(สูง|ด่วนมาก|ด่วน|high)/i.test(userText)
+              ? 'high'
+              : /#(ต่ำ|low)/i.test(userText)
+              ? 'low'
+              : 'medium';
+          const resolvedEndDate =
+            dateResult.endDateStr ||
+            inferTaskEndDate({
+              date: resolvedDate,
+              title: parsedTitle,
+              description: userText,
             });
+
+          const newServerTask: Record<string, unknown> = {
+            id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            title: parsedTitle,
+            description: senderGroupId
+              ? `บันทึกผ่านห้องแชทกลุ่ม LINE ("${userText}")`
+              : `บันทึกผ่านแชท LINE OA ("${userText}")`,
+            date: resolvedDate,
+            ...(resolvedEndDate && resolvedEndDate > resolvedDate
+              ? { endDate: resolvedEndDate }
+              : {}),
+            time: resolvedTime,
+            categoryId: 'cat-work',
+            priority: resolvedPriority,
+            status: 'pending',
+            remindMinutesBefore: runtimeScheduleConfig.defaultRemindMinutes || 1,
+            lineNotified: false,
+            source: 'line',
+            updatedAt: new Date().toISOString(),
+          };
+
+          const existingWs =
+            sharedWorkspaces.get('sheetcal-team-clean') ||
+            sharedWorkspaces.get('team-default') ||
+            Array.from(sharedWorkspaces.values())[0];
+          const existingTasks = Array.isArray(existingWs?.tasks)
+            ? extractGasMetadataFromTasks(existingWs.tasks).tasks
+            : [];
+          const nextTasks = mergeTasksById([newServerTask], existingTasks);
+          const nextWsState: CollaborativeWorkspaceState = {
+            workspaceId: existingWs?.workspaceId || 'sheetcal-team-clean',
+            updatedAt: new Date().toISOString(),
+            updatedBy: senderGroupId ? 'สมาชิกกลุ่ม LINE' : 'LINE OA Webhook',
+            spreadsheetId: existingWs?.spreadsheetId,
+            spreadsheetUrl: existingWs?.spreadsheetUrl,
+            tasks: nextTasks,
+            categories: existingWs?.categories || [],
+            teamMembers: existingWs?.teamMembers || [],
+          };
+          sharedWorkspaces.set('sheetcal-team-clean', nextWsState);
+          sharedWorkspaces.set('team-default', nextWsState);
+          savePersistedWorkspaceCache();
+
+          const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+          if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+            syncWorkspaceToGasSafely(cleanGas, 'sheetcal-team-clean').catch(() => {});
           }
 
           if (runtimeChannelAccessToken && event.replyToken) {
-            const { todayYMD: todayStr } = getBangkokNowYMDAndHM();
-            const stripped = userText.replace(
-              /^(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\s*[:：-]?\s*/i,
-              ''
-            );
-            const dateResult = extractThaiDate(stripped);
-            const timeResult = extractThaiTime(dateResult.cleanedText);
-            const parsedTitle =
-              timeResult.cleanedText
-                .replace(/#(สูง|ด่วนมาก|ด่วน|high|ต่ำ|low|กลาง|ทั่วไป|medium)/gi, ' ')
-                .replace(/\b(เวลา|วันที่|ตอน|น\.|ของ)\b/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim() || stripped || userText;
+            const dateLabelForCard = formatTaskDateRangeLabel({
+              date: resolvedDate,
+              endDate: resolvedEndDate,
+            });
             const flexReply = buildSingleTaskReminderFlexMessage({
               taskTitle: parsedTitle,
               description: senderGroupId
-                ? `บันทึกลงปฏิทินทีมเรียบร้อยแล้ว (🔑 Group ID: ${senderGroupId})`
+                ? `บันทึกลงปฏิทินทีมเรียบร้อยแล้ว (${dateLabelForCard})`
                 : 'บันทึกลงปฏิทินระบบน้องเลขา และซิงค์เข้า Google Sheets เรียบร้อยแล้ว',
-              date: dateResult.dateStr || todayStr,
-              time: timeResult.timeStr || '09:00',
+              date: resolvedDate,
+              time: resolvedTime,
               categoryName: senderGroupId ? 'งานกลุ่ม LINE ของทีม' : 'บันทึกผ่านแชท LINE OA',
               categoryColor: '#06C755',
-              priority: userText.includes('#สูง') || userText.includes('#ด่วน') ? 'high' : 'medium',
+              priority: resolvedPriority,
               appUrl,
             });
 

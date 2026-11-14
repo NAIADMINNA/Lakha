@@ -751,6 +751,98 @@ export default function App() {
     return true;
   }, []);
 
+  const normalizeTaskSemanticKey = useCallback(
+    (t: Pick<Task, 'title' | 'date' | 'time'>): string => {
+      const normTitle = String(t.title || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+      const normDate = String(t.date || '').trim().slice(0, 10);
+      const normTime = String(t.time || '09:00').trim().slice(0, 5);
+      return `${normTitle}|${normDate}|${normTime}`;
+    },
+    []
+  );
+
+  const deduplicateAndMergeTasks = useCallback(
+    (
+      primaryList: Task[],
+      secondaryList: Task[],
+      extraDeletedSet?: Set<string>
+    ): { tasks: Task[]; discardedIds: string[] } => {
+      const byId = new Map<string, Task>();
+      for (const item of [...secondaryList, ...primaryList]) {
+        if (!item || !item.id || !item.title) continue;
+        if (isTaskPurgedOrDeleted(item, extraDeletedSet)) continue;
+        const existing = byId.get(item.id);
+        if (!existing) {
+          byId.set(item.id, item);
+        } else {
+          const existingMs = existing.updatedAt
+            ? new Date(existing.updatedAt).getTime()
+            : 0;
+          const incomingMs = item.updatedAt
+            ? new Date(item.updatedAt).getTime()
+            : 0;
+          if (incomingMs >= existingMs) {
+            byId.set(item.id, {
+              ...existing,
+              ...item,
+              endDate: item.endDate ?? existing.endDate,
+            });
+          } else if (!existing.endDate && item.endDate) {
+            byId.set(item.id, {
+              ...existing,
+              endDate: item.endDate,
+            });
+          }
+        }
+      }
+
+      const discardedIds: string[] = [];
+      const bySig = new Map<string, Task>();
+      for (const candidate of byId.values()) {
+        const sigKey = normalizeTaskSemanticKey(candidate);
+        const existingDup = bySig.get(sigKey);
+        if (!existingDup) {
+          bySig.set(sigKey, candidate);
+          continue;
+        }
+        const existingMs = existingDup.updatedAt
+          ? new Date(existingDup.updatedAt).getTime()
+          : 0;
+        const candidateMs = candidate.updatedAt
+          ? new Date(candidate.updatedAt).getTime()
+          : 0;
+        const existingDone = existingDup.status === TaskStatus.COMPLETED;
+        const candidateDone = candidate.status === TaskStatus.COMPLETED;
+        const preferCandidate =
+          (candidateDone && !existingDone) ||
+          (candidateDone === existingDone && candidateMs >= existingMs);
+
+        const winner = preferCandidate ? candidate : existingDup;
+        const loser = preferCandidate ? existingDup : candidate;
+        const mergedWinner: Task = {
+          ...loser,
+          ...winner,
+          endDate: winner.endDate ?? loser.endDate,
+          description:
+            (winner.description || '').trim() || (loser.description || '').trim(),
+        };
+        if (loser.id && loser.id !== mergedWinner.id) {
+          discardedIds.push(loser.id);
+        }
+        bySig.set(sigKey, mergedWinner);
+      }
+
+      return {
+        tasks: Array.from(bySig.values()),
+        discardedIds,
+      };
+    },
+    [isTaskPurgedOrDeleted, normalizeTaskSemanticKey]
+  );
+
   const GAS_META_DELIM = '#SCMETA#';
 
   const isDefaultCategoryList = useCallback((cats: Category[] | undefined | null): boolean => {
@@ -921,7 +1013,7 @@ export default function App() {
       nextCategories: Category[],
       nextMembers: TeamMember[],
       deletedTaskId?: string | string[]
-    ) => {
+    ): Promise<Task[]> => {
       lastLocalMutationMsRef.current = Date.now();
       const explicitDeleted = Array.isArray(deletedTaskId)
         ? deletedTaskId
@@ -931,12 +1023,20 @@ export default function App() {
       if (explicitDeleted.length > 0) {
         recordDeletedTaskIds(explicitDeleted);
       }
-      const allDeletedIds = Array.from(deletedTaskIdsRef.current);
-      const cleanNextTasks = extractGasMetadataFromTasks(nextTasks).tasks.filter(
+      const extractedLocal = extractGasMetadataFromTasks(nextTasks).tasks.filter(
         (t) => !isTaskPurgedOrDeleted(t)
       );
+      const { tasks: cleanNextTasks, discardedIds } = deduplicateAndMergeTasks(
+        extractedLocal,
+        []
+      );
+      if (discardedIds.length > 0) {
+        recordDeletedTaskIds(discardedIds);
+      }
+      const allDeletedIds = Array.from(deletedTaskIdsRef.current);
 
       let workspacePostSucceeded = false;
+      let authoritativeTasks: Task[] = cleanNextTasks;
       try {
         const res = await fetch(
           `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
@@ -949,7 +1049,7 @@ export default function App() {
               spreadsheetUrl: sheetMeta?.spreadsheetUrl,
               deletedTaskId:
                 typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
-              deletedTaskIds: explicitDeleted.length > 0 ? allDeletedIds : undefined,
+              deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
               tasks: cleanNextTasks,
               categories: nextCategories,
               teamMembers: nextMembers,
@@ -959,9 +1059,27 @@ export default function App() {
         if (res.ok) {
           workspacePostSucceeded = true;
           const data = await res.json();
+          if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
+            recordDeletedTaskIds(data.deletedTaskIds);
+          }
           if (data.workspace?.updatedAt) {
             lastSyncedTimestampRef.current = data.workspace.updatedAt;
             setLastCollabSyncAt(data.workspace.updatedAt);
+          }
+          if (Array.isArray(data.workspace?.tasks)) {
+            const decodedServer = extractGasMetadataFromTasks(
+              data.workspace.tasks as Task[]
+            ).tasks.filter((t) => !isTaskPurgedOrDeleted(t));
+            const mergedRes = deduplicateAndMergeTasks(decodedServer, cleanNextTasks);
+            if (mergedRes.discardedIds.length > 0) {
+              recordDeletedTaskIds(mergedRes.discardedIds);
+            }
+            authoritativeTasks = mergedRes.tasks;
+            setTasks((prev) => {
+              if (areTaskListsEqual(prev, authoritativeTasks)) return prev;
+              tasksRef.current = authoritativeTasks;
+              return authoritativeTasks;
+            });
           }
         }
       } catch {
@@ -987,7 +1105,7 @@ export default function App() {
               tasks: gasTasksWithMeta,
               categories: nextCategories,
               teamMembers: nextMembers,
-              deletedTaskIds: explicitDeleted.length > 0 ? allDeletedIds : undefined,
+              deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
             }),
           });
           const ct = proxyRes.headers.get('content-type') || '';
@@ -1008,6 +1126,7 @@ export default function App() {
                 tasks: gasTasksWithMeta,
                 categories: nextCategories,
                 teamMembers: nextMembers,
+                deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
               }),
             });
           } catch {
@@ -1015,17 +1134,22 @@ export default function App() {
           }
         }
       }
+
+      return authoritativeTasks;
     },
     [
+      areTaskListsEqual,
       attachGasMetadataToTasks,
-    extractGasMetadataFromTasks,
-    isTaskPurgedOrDeleted,
-    recordDeletedTaskIds,
-    sheetMeta?.spreadsheetId,
-    sheetMeta?.spreadsheetUrl,
-    user?.email,
-    workspaceId,
-  ]);
+      deduplicateAndMergeTasks,
+      extractGasMetadataFromTasks,
+      isTaskPurgedOrDeleted,
+      recordDeletedTaskIds,
+      sheetMeta?.spreadsheetId,
+      sheetMeta?.spreadsheetUrl,
+      user?.email,
+      workspaceId,
+    ]
+  );
 
   const tasksRef = useRef<Task[]>(tasks);
   const categoriesRef = useRef<Category[]>(categories);
@@ -1122,7 +1246,7 @@ export default function App() {
           ? [deletedTaskId]
           : []
       );
-      await pushCollaborativeWorkspace(
+      const authoritativeTasks = await pushCollaborativeWorkspace(
         nextTasks,
         nextCategories,
         nextTeamMembers,
@@ -1138,7 +1262,7 @@ export default function App() {
       }
       setIsSyncing(true);
       try {
-        const mergedTasks = nextTasks.filter(
+        const mergedTasks = authoritativeTasks.filter(
           (t) => !isTaskPurgedOrDeleted(t, deletedSet)
         );
         const mergedLogs = nextLogs;
@@ -1939,12 +2063,13 @@ export default function App() {
         status: 'delivered',
       };
 
+      const currentTasksSnapshot = tasksRef.current;
       const parsed = parseLineChatMessage(
         rawText,
-        tasks,
-        categories,
+        currentTasksSnapshot,
+        categoriesRef.current,
         lineSettings.defaultRemindMinutes,
-        teamMembers
+        teamMembersRef.current
       );
 
       const outgoingLog: LineMessageLog = {
@@ -1961,11 +2086,34 @@ export default function App() {
       const nextLogs = [...lineLogs, incomingLog, outgoingLog];
 
       if (parsed.action === 'add_task' && parsed.createdTask) {
-        const created = parsed.createdTask;
-        const nextTasks = [created, ...tasks];
+        const created: Task = {
+          ...parsed.createdTask,
+          id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        };
+        const createdSig = normalizeTaskSemanticKey(created);
+        const existingDup = currentTasksSnapshot.find(
+          (t) => !isTaskPurgedOrDeleted(t) && normalizeTaskSemanticKey(t) === createdSig
+        );
+        const canonicalCreated: Task = existingDup
+          ? {
+              ...existingDup,
+              ...created,
+              id: existingDup.id,
+              endDate: created.endDate ?? existingDup.endDate,
+              updatedAt: new Date().toISOString(),
+            }
+          : created;
+
+        const nextTasks = existingDup
+          ? currentTasksSnapshot.map((t) =>
+              t.id === existingDup.id ? canonicalCreated : t
+            )
+          : [canonicalCreated, ...currentTasksSnapshot];
+
+        tasksRef.current = nextTasks;
         setTasks(nextTasks);
         setLineLogs(nextLogs);
-        setSelectedCalendarDate(created.date);
+        setSelectedCalendarDate(canonicalCreated.date);
         setTaskFilter('all');
         setCategoryFilter('all');
         setSearchQuery('');
@@ -1973,23 +2121,31 @@ export default function App() {
         if (sheetMeta && accessToken && lineSettings.autoSyncOnLineCommand) {
           syncAllToConnectedSheet(
             nextTasks,
-            categories,
+            categoriesRef.current,
             nextLogs,
-            `บันทึกงาน "${created.title}"${
-              created.assigneeName ? ` (มอบหมายให้ ${created.assigneeName})` : ''
+            `บันทึกงาน "${canonicalCreated.title}"${
+              canonicalCreated.assigneeName
+                ? ` (มอบหมายให้ ${canonicalCreated.assigneeName})`
+                : ''
             } ลงปฏิทินและ Google Sheets เรียบร้อยแล้ว!`,
-            created.date,
+            canonicalCreated.date,
             undefined,
-            teamMembers
+            teamMembersRef.current
           );
         } else {
-          pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+          pushCollaborativeWorkspace(
+            nextTasks,
+            categoriesRef.current,
+            teamMembersRef.current
+          );
           showNotice(
             'success',
-            `บันทึกงาน "${created.title}"${
-              created.assigneeName ? ` (มอบหมายให้ ${created.assigneeName})` : ''
-            } (วันที่ ${formatTaskDateRangeLabel(created)} เวลา ${created.time} น.) ลงปฏิทินเรียบร้อยแล้ว!`,
-            created.date
+            `บันทึกงาน "${canonicalCreated.title}"${
+              canonicalCreated.assigneeName
+                ? ` (มอบหมายให้ ${canonicalCreated.assigneeName})`
+                : ''
+            } (วันที่ ${formatTaskDateRangeLabel(canonicalCreated)} เวลา ${canonicalCreated.time} น.) ลงปฏิทินเรียบร้อยแล้ว!`,
+            canonicalCreated.date
           );
         }
         return;
@@ -1997,25 +2153,30 @@ export default function App() {
 
       if (parsed.action === 'complete_task' && parsed.targetTaskId) {
         const targetId = parsed.targetTaskId;
-        const nextTasks = tasks.map((t) =>
+        const nextTasks = currentTasksSnapshot.map((t) =>
           t.id === targetId
             ? { ...t, status: TaskStatus.COMPLETED, updatedAt: new Date().toISOString() }
             : t
         );
+        tasksRef.current = nextTasks;
         setTasks(nextTasks);
         setLineLogs(nextLogs);
         if (sheetMeta && accessToken) {
           syncAllToConnectedSheet(
             nextTasks,
-            categories,
+            categoriesRef.current,
             nextLogs,
             `อัปเดตสถานะงาน "${parsed.targetTaskTitle}" เป็นเสร็จสิ้นลงปฏิทินและ Google Sheets แล้ว`,
             undefined,
             undefined,
-            teamMembers
+            teamMembersRef.current
           );
         } else {
-          pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+          pushCollaborativeWorkspace(
+            nextTasks,
+            categoriesRef.current,
+            teamMembersRef.current
+          );
           showNotice(
             'success',
             `อัปเดตสถานะงาน "${parsed.targetTaskTitle}" เป็นเสร็จสิ้นเรียบร้อยแล้ว`
@@ -2025,7 +2186,7 @@ export default function App() {
       }
 
       if (parsed.action === 'delete_task' && parsed.targetTaskId) {
-        const targetTask = tasks.find((t) => t.id === parsed.targetTaskId);
+        const targetTask = currentTasksSnapshot.find((t) => t.id === parsed.targetTaskId);
         if (targetTask) {
           setLineLogs(nextLogs);
           handleDeleteTask(targetTask);
@@ -2104,8 +2265,8 @@ export default function App() {
     },
     [
       accessToken,
-      categories,
       handleDeleteTask,
+      isTaskPurgedOrDeleted,
       lineLogs,
       lineSettings.autoSyncOnLineCommand,
       lineSettings.channelAccessToken,
@@ -2116,13 +2277,12 @@ export default function App() {
       lineSettings.targetGroupId,
       lineSettings.targetUserId,
       lineSettings.teamNotificationMode,
+      normalizeTaskSemanticKey,
       pushCollaborativeWorkspace,
       sheetMeta,
       showNotice,
       spreadsheetInput,
       syncAllToConnectedSheet,
-      tasks,
-      teamMembers,
       workspaceId,
     ]
   );
@@ -2268,37 +2428,23 @@ export default function App() {
                 workspaceHandled = true;
                 if (
                   showFeedback ||
-                  Date.now() - lastLocalMutationMsRef.current > 12000
+                  Date.now() - lastLocalMutationMsRef.current > 2000
                 ) {
+                  let newlyDiscarded: string[] = [];
                   setTasks((prev) => {
-                    const mergedById = new Map<string, Task>();
-                    for (const rt of cleanWsTasks) {
-                      if (rt && rt.id && !isTaskPurgedOrDeleted(rt, delSet)) {
-                        mergedById.set(rt.id, rt);
-                      }
-                    }
-                    for (const lt of prev) {
-                      if (!lt || !lt.id || isTaskPurgedOrDeleted(lt, delSet)) continue;
-                      const existingRemote = mergedById.get(lt.id);
-                      if (!existingRemote) {
-                        mergedById.set(lt.id, lt);
-                      } else {
-                        const localMs = lt.updatedAt ? new Date(lt.updatedAt).getTime() : 0;
-                        const remoteMs = existingRemote.updatedAt
-                          ? new Date(existingRemote.updatedAt).getTime()
-                          : 0;
-                        if (localMs > remoteMs) {
-                          mergedById.set(lt.id, {
-                            ...existingRemote,
-                            ...lt,
-                            endDate: lt.endDate ?? existingRemote.endDate,
-                          });
-                        }
-                      }
-                    }
-                    const mergedList = Array.from(mergedById.values());
-                    return areTaskListsEqual(prev, mergedList) ? prev : mergedList;
+                    const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
+                      cleanWsTasks,
+                      prev,
+                      delSet
+                    );
+                    newlyDiscarded = discardedIds;
+                    if (areTaskListsEqual(prev, mergedList)) return prev;
+                    tasksRef.current = mergedList;
+                    return mergedList;
                   });
+                  if (newlyDiscarded.length > 0) {
+                    recordDeletedTaskIds(newlyDiscarded);
+                  }
                 }
               }
               const wsCats = Array.isArray(wsData.workspace.categories)
@@ -2315,7 +2461,7 @@ export default function App() {
                 );
               } else if (
                 wsCats.length > 0 &&
-                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
               ) {
                 setCategories((prev) =>
                   JSON.stringify(prev) === JSON.stringify(wsCats) ? prev : wsCats
@@ -2324,7 +2470,7 @@ export default function App() {
               if (
                 Array.isArray(wsData.workspace.teamMembers) &&
                 wsData.workspace.teamMembers.length > 0 &&
-                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
               ) {
                 const wsMembers = wsData.workspace.teamMembers as TeamMember[];
                 setTeamMembers((prev) =>
@@ -2445,7 +2591,7 @@ export default function App() {
             if (
               Array.isArray(remoteGasCats) &&
               remoteGasCats.length > 0 &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
             ) {
               setCategories((prev) =>
                 JSON.stringify(prev) === JSON.stringify(remoteGasCats)
@@ -2457,7 +2603,7 @@ export default function App() {
             if (
               Array.isArray(remoteGasMembers) &&
               remoteGasMembers.length > 0 &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
             ) {
               setTeamMembers((prev) =>
                 JSON.stringify(prev) === JSON.stringify(remoteGasMembers)
@@ -2469,8 +2615,9 @@ export default function App() {
             if (
               !workspaceHandled &&
               Array.isArray(data.tasks) &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 12000)
+              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
             ) {
+              let newlyDiscardedGas: string[] = [];
               setTasks((prev) => {
                 const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
                 const nextRemoteTasks: Task[] = [];
@@ -2523,15 +2670,18 @@ export default function App() {
                   });
                 }
 
-                for (const lt of prev) {
-                  if (!lt || !lt.id || isTaskPurgedOrDeleted(lt)) continue;
-                  if (!nextRemoteTasks.some((rt) => rt.id === lt.id)) {
-                    nextRemoteTasks.unshift(lt);
-                  }
-                }
-
-                return areTaskListsEqual(prev, nextRemoteTasks) ? prev : nextRemoteTasks;
+                const { tasks: mergedGasTasks, discardedIds } = deduplicateAndMergeTasks(
+                  nextRemoteTasks,
+                  prev
+                );
+                newlyDiscardedGas = discardedIds;
+                if (areTaskListsEqual(prev, mergedGasTasks)) return prev;
+                tasksRef.current = mergedGasTasks;
+                return mergedGasTasks;
               });
+              if (newlyDiscardedGas.length > 0) {
+                recordDeletedTaskIds(newlyDiscardedGas);
+              }
             }
           }
         }
@@ -2555,6 +2705,7 @@ export default function App() {
     },
     [
       areTaskListsEqual,
+      deduplicateAndMergeTasks,
       extractGasMetadataFromTasks,
       isDefaultCategoryList,
       isTaskPurgedOrDeleted,
@@ -2577,7 +2728,7 @@ export default function App() {
     sheetAutoSyncConfig.autoPullIntervalSec,
   ]);
 
-  // When Admin signs in with Google OAuth, automatically clean up any stale deleted rows in Google Sheets after initial pull completes
+  // When Admin signs in with Google OAuth, read & merge remote Google Sheets first before writing back (prevents overwriting LINE/team tasks!)
   const hasCleanedConnectedSheetRef = useRef<boolean>(false);
   useEffect(() => {
     if (!sheetMeta?.spreadsheetId || !accessToken) {
@@ -2591,22 +2742,54 @@ export default function App() {
       try {
         const token = await getAccessToken();
         if (!token || !sheetMeta?.spreadsheetId) return;
-        const cleanTasks = tasksRef.current.filter((t) => !isTaskPurgedOrDeleted(t));
-        if (cleanTasks.length === 0) return;
+        let remoteSheetTasks: Task[] = [];
+        try {
+          const sheetData = await fetchDatabaseFromSheet(token, sheetMeta.spreadsheetId);
+          remoteSheetTasks = sheetData.tasks.filter((t) => !isTaskPurgedOrDeleted(t));
+        } catch {
+          remoteSheetTasks = [];
+        }
+        const localCleanTasks = tasksRef.current.filter((t) => !isTaskPurgedOrDeleted(t));
+        const { tasks: mergedTasks, discardedIds } = deduplicateAndMergeTasks(
+          localCleanTasks,
+          remoteSheetTasks
+        );
+        if (discardedIds.length > 0) {
+          recordDeletedTaskIds(discardedIds);
+        }
+        if (mergedTasks.length === 0) return;
+
+        tasksRef.current = mergedTasks;
+        setTasks((prev) => (areTaskListsEqual(prev, mergedTasks) ? prev : mergedTasks));
+
+        const authoritativeTasks = await pushCollaborativeWorkspace(
+          mergedTasks,
+          categoriesRef.current,
+          teamMembersRef.current
+        );
         await writeDatabaseToSheet(
           token,
           sheetMeta.spreadsheetId,
-          cleanTasks,
+          authoritativeTasks,
           categoriesRef.current,
           lineLogs,
           teamMembersRef.current
         );
       } catch {
-        // Silent background cleanup
+        // Silent background reconcile
       }
     }, 3000);
     return () => clearTimeout(timer);
-  }, [accessToken, isTaskPurgedOrDeleted, lineLogs, sheetMeta?.spreadsheetId]);
+  }, [
+    accessToken,
+    areTaskListsEqual,
+    deduplicateAndMergeTasks,
+    isTaskPurgedOrDeleted,
+    lineLogs,
+    pushCollaborativeWorkspace,
+    recordDeletedTaskIds,
+    sheetMeta?.spreadsheetId,
+  ]);
 
   // Save (Create or Edit) Task
   const handleSaveTask = (
@@ -2614,8 +2797,10 @@ export default function App() {
     existingId?: string
   ) => {
     lastLocalMutationMsRef.current = Date.now();
+    const currentList = tasksRef.current;
+
     if (existingId) {
-      const target = tasks.find((t) => t.id === existingId);
+      const target = currentList.find((t) => t.id === existingId);
       const scheduleChanged =
         !target ||
         target.date !== taskData.date ||
@@ -2629,7 +2814,7 @@ export default function App() {
         lineNotified: scheduleChanged ? false : target?.lineNotified || false,
         updatedAt: new Date().toISOString(),
       };
-      const nextTasks = tasks.map((t) => (t.id === existingId ? updatedTask : t));
+      const nextTasks = currentList.map((t) => (t.id === existingId ? updatedTask : t));
 
       if (sheetMeta && accessToken) {
         setConfirmDialog({
@@ -2642,22 +2827,31 @@ export default function App() {
           isDestructive: false,
           onConfirm: async () => {
             lastLocalMutationMsRef.current = Date.now();
-            setTasks(nextTasks);
+            const latestList = tasksRef.current.map((t) =>
+              t.id === existingId ? updatedTask : t
+            );
+            tasksRef.current = latestList;
+            setTasks(latestList);
             await syncAllToConnectedSheet(
-              nextTasks,
-              categories,
+              latestList,
+              categoriesRef.current,
               lineLogs,
               `แก้ไขงาน "${updatedTask.title}" และอัปเดตลง Google Sheets เรียบร้อยแล้ว`,
               updatedTask.date,
               undefined,
-              teamMembers
+              teamMembersRef.current
             );
             closeConfirmDialog();
           },
         });
       } else {
+        tasksRef.current = nextTasks;
         setTasks(nextTasks);
-        pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+        pushCollaborativeWorkspace(
+          nextTasks,
+          categoriesRef.current,
+          teamMembersRef.current
+        );
         showNotice(
           'success',
           `บันทึกการแก้ไขงาน "${updatedTask.title}" เรียบร้อยแล้ว`,
@@ -2665,28 +2859,51 @@ export default function App() {
         );
       }
     } else {
-      const newTask: Task = {
-        ...taskData,
-        id: `task-${Date.now()}`,
-        lineNotified: false,
-        updatedAt: new Date().toISOString(),
-      };
+      const candidateSig = normalizeTaskSemanticKey(taskData);
+      const existingSameTask = currentList.find(
+        (t) => !isTaskPurgedOrDeleted(t) && normalizeTaskSemanticKey(t) === candidateSig
+      );
+
+      const newTask: Task = existingSameTask
+        ? {
+            ...existingSameTask,
+            ...taskData,
+            id: existingSameTask.id,
+            endDate: taskData.endDate ?? existingSameTask.endDate,
+            lineNotified: false,
+            updatedAt: new Date().toISOString(),
+          }
+        : {
+            ...taskData,
+            id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            lineNotified: false,
+            updatedAt: new Date().toISOString(),
+          };
+
       deletedTaskIdsRef.current.delete(newTask.id);
-      const nextTasks = [newTask, ...tasks];
+      const nextTasks = existingSameTask
+        ? currentList.map((t) => (t.id === existingSameTask.id ? newTask : t))
+        : [newTask, ...currentList];
+
+      tasksRef.current = nextTasks;
       setTasks(nextTasks);
       setSelectedCalendarDate(newTask.date);
       if (sheetMeta && accessToken) {
         syncAllToConnectedSheet(
           nextTasks,
-          categories,
+          categoriesRef.current,
           lineLogs,
           `เพิ่มงาน "${newTask.title}" ลงปฏิทินและบันทึกเข้า Google Sheets เรียบร้อยแล้ว`,
           newTask.date,
           undefined,
-          teamMembers
+          teamMembersRef.current
         );
       } else {
-        pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+        pushCollaborativeWorkspace(
+          nextTasks,
+          categoriesRef.current,
+          teamMembersRef.current
+        );
         showNotice(
           'success',
           `เพิ่มงาน "${newTask.title}" ลงปฏิทินเรียบร้อยแล้ว`,
@@ -2705,17 +2922,19 @@ export default function App() {
 
   // Update Task Status (Pending / In Progress / Completed)
   const handleUpdateTaskStatus = (task: Task, nextStatus: TaskStatus) => {
-    const nextTasks = tasks.map((t) =>
+    lastLocalMutationMsRef.current = Date.now();
+    const nextTasks = tasksRef.current.map((t) =>
       t.id === task.id
         ? { ...t, status: nextStatus, updatedAt: new Date().toISOString() }
         : t
     );
 
+    tasksRef.current = nextTasks;
     setTasks(nextTasks);
     if (sheetMeta && accessToken) {
       syncAllToConnectedSheet(
         nextTasks,
-        categories,
+        categoriesRef.current,
         lineLogs,
         `อัปเดตสถานะงาน "${task.title}" เป็น "${
           nextStatus === TaskStatus.COMPLETED
@@ -2726,10 +2945,14 @@ export default function App() {
         }" เรียบร้อยแล้ว`,
         undefined,
         undefined,
-        teamMembers
+        teamMembersRef.current
       );
     } else {
-      pushCollaborativeWorkspace(nextTasks, categories, teamMembers);
+      pushCollaborativeWorkspace(
+        nextTasks,
+        categoriesRef.current,
+        teamMembersRef.current
+      );
       showNotice(
         'success',
         `อัปเดตสถานะงาน "${task.title}" เป็น "${

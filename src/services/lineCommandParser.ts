@@ -3023,15 +3023,63 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // บันทึก/อัปเดตรายการงานลง Google Sheets ผ่าน Apps Script โดยไม่ต้องล็อกอิน Gmail ซ้ำ
+    // บันทึก/อัปเดตรายการงานลง Google Sheets ผ่าน Apps Script โดยผสานข้อมูลเดิมและตัดรายการซ้ำซ้อนอัตโนมัติ
     if (payload.action === 'sync_tasks') {
-      var savedOk = writeSheetTasksFromWeb(payload.tasks || []);
+      var incomingTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+      var delIdsList = Array.isArray(payload.deletedTaskIds) ? payload.deletedTaskIds : [];
+      var delSet = {};
+      for (var di = 0; di < delIdsList.length; di++) {
+        if (delIdsList[di]) delSet[String(delIdsList[di]).trim()] = true;
+      }
+      var currentSheetTasks = readSheetTasksForWeb() || [];
+      var byIdMap = {};
+      var combinedList = currentSheetTasks.concat(incomingTasks);
+      for (var ci = 0; ci < combinedList.length; ci++) {
+        var item = combinedList[ci];
+        if (!item || !item.id || !item.title) continue;
+        var itemId = String(item.id).trim();
+        if (!itemId || delSet[itemId]) continue;
+        var prevItem = byIdMap[itemId];
+        if (!prevItem) {
+          byIdMap[itemId] = item;
+        } else {
+          var prevMs = prevItem.updatedAt ? new Date(String(prevItem.updatedAt)).getTime() : 0;
+          var nextMs = item.updatedAt ? new Date(String(item.updatedAt)).getTime() : 0;
+          if (nextMs >= prevMs) {
+            if (!item.endDate && prevItem.endDate) item.endDate = prevItem.endDate;
+            byIdMap[itemId] = item;
+          }
+        }
+      }
+      var bySigMap = {};
+      var idKeys = Object.keys(byIdMap);
+      for (var ki = 0; ki < idKeys.length; ki++) {
+        var tObj = byIdMap[idKeys[ki]];
+        var normTitle = String(tObj.title || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+        var normDate = String(tObj.date || '').trim().slice(0, 10);
+        var normTime = String(tObj.time || '09:00').trim().slice(0, 5);
+        var sigKey = normTitle + '|' + normDate + '|' + normTime;
+        var existingSig = bySigMap[sigKey];
+        if (!existingSig) {
+          bySigMap[sigKey] = tObj;
+        } else {
+          var exMs = existingSig.updatedAt ? new Date(String(existingSig.updatedAt)).getTime() : 0;
+          var nwMs = tObj.updatedAt ? new Date(String(tObj.updatedAt)).getTime() : 0;
+          if (nwMs >= exMs) {
+            if (!tObj.endDate && existingSig.endDate) tObj.endDate = existingSig.endDate;
+            bySigMap[sigKey] = tObj;
+          }
+        }
+      }
+      var mergedToSave = Object.keys(bySigMap).map(function(sk) { return bySigMap[sk]; });
+      var savedOk = writeSheetTasksFromWeb(mergedToSave);
       return ContentService.createTextOutput(JSON.stringify({
         status: savedOk ? 'ok' : 'error',
         mode: 'gas_sync_tasks',
-        version: '2.7-group-portal-clean',
+        version: '2.8-group-portal-safe-merge',
         detectedGroupId: getSavedGroupId(),
-        ok: savedOk
+        ok: savedOk,
+        count: mergedToSave.length
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -3554,6 +3602,17 @@ function doPost(e) {
     }
 
     events.forEach(function(event) {
+      var evDedupId = String(event.webhookEventId || (event.message && event.message.id) || '').trim();
+      if (evDedupId) {
+        try {
+          var scriptCache = CacheService.getScriptCache();
+          if (scriptCache.get('wh_' + evDedupId)) {
+            return;
+          }
+          scriptCache.put('wh_' + evDedupId, '1', 600);
+        } catch (cacheErr) {}
+      }
+
       var srcGroupId = (event.source && (event.source.groupId || event.source.roomId))
         ? String(event.source.groupId || event.source.roomId).trim()
         : '';
@@ -3572,7 +3631,7 @@ function doPost(e) {
       if ((event.type === 'join' || event.type === 'memberJoined') && srcGroupId && event.replyToken) {
         replyLineMessages(event.replyToken, [{
           type: 'text',
-          text: '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat) สำเร็จแล้ว!\\n\\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\\n' + srcGroupId + '\\n\\n💡 คุณสามารถคัดลอกรหัส C... ด้านบนไปวางในหน้าเว็บ หรือกดปุ่ม "ดึงรหัสกลุ่ม C... อัตโนมัติ" บนหน้าเว็บได้ทันทีครับ!'
+          text: '✅ เชื่อมต่อห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat) สำเร็จแล้ว!\\n\\n🔑 รหัส Group ID ของกลุ่มนี้คือ:\\n' + srcGroupId + '\\n\\n💡 พิมพ์เพิ่มงานในกลุ่มโดยขึ้นต้นด้วยคำว่า "เพิ่มงาน" หรือ "นัดหมาย" เช่น "เพิ่มงาน ประชุมทีม พรุ่งนี้ 10:00"'
         }]);
         return;
       }
@@ -3632,11 +3691,29 @@ function doPost(e) {
           return;
         }
 
-        var parsed = parseThaiCommand(userMessage);
-        var newId = 'task-' + now.getTime();
-        var existingAll = readSheetTasksForWeb();
+        // ในห้องแชทกลุ่ม LINE บันทึกเฉพาะข้อความที่ขึ้นต้นด้วยคำสั่งเพิ่มงานเท่านั้น (ป้องกันข้อความคุยเล่นทั่วไปกลายเป็นตารางงาน)
+        if (srcGroupId && !/^(?:@[^\\s]+\\s*)?(?:น้องเลขา\\s*[:：-]?\\s*)?(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\\b/i.test(userMessage)) {
+          return;
+        }
+
+        var cleanedGroupMsg = userMessage.replace(/^(?:@[^\\s]+\\s*)?(?:น้องเลขา\\s*[:：-]?\\s*)?/i, '').trim();
+        var parsed = parseThaiCommand(cleanedGroupMsg);
+        var randSuffix = Math.random().toString(36).slice(2, 6);
+        var newId = 'task-' + now.getTime() + '-' + randSuffix;
+        var existingAll = readSheetTasksForWeb() || [];
+        var normNewTitle = String(parsed.title || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+        var duplicateIdx = -1;
+        for (var ei = 0; ei < existingAll.length; ei++) {
+          var ex = existingAll[ei];
+          if (!ex) continue;
+          var exTitle = String(ex.title || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+          if (exTitle === normNewTitle && String(ex.date || '').slice(0, 10) === String(parsed.date || '').slice(0, 10) && String(ex.time || '09:00').slice(0, 5) === String(parsed.time || '09:00').slice(0, 5)) {
+            duplicateIdx = ei;
+            break;
+          }
+        }
         var createdObj = {
-          id: newId,
+          id: duplicateIdx !== -1 ? existingAll[duplicateIdx].id : newId,
           title: parsed.title,
           description: 'บันทึกผ่านแชท LINE OA ("' + userMessage + '")',
           date: parsed.date,
@@ -3649,8 +3726,11 @@ function doPost(e) {
           source: 'line',
           updatedAt: now.toISOString()
         };
-        var updatedAll = [createdObj].concat(existingAll);
+        var updatedAll = duplicateIdx !== -1
+          ? existingAll.map(function(item, idx) { return idx === duplicateIdx ? createdObj : item; })
+          : [createdObj].concat(existingAll);
         writeSheetTasksFromWeb(updatedAll);
+        pushTasksToMainWebApp(updatedAll);
         var sameDayAll = updatedAll.filter(function(t) { return String(t.date) === String(parsed.date); });
         var dayTotalCount = sameDayAll.length;
         var dayPendingCount = sameDayAll.filter(function(t) { return t.status !== 'completed'; }).length;

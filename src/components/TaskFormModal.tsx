@@ -81,12 +81,15 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   const [remindMinutesBefore, setRemindMinutesBefore] = useState<number>(defaultRemindMinutes);
 
   const prevOpenSessionKeyRef = useRef<string>('');
+  const isSubmittingRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!isOpen) {
       prevOpenSessionKeyRef.current = '';
+      isSubmittingRef.current = false;
       return;
     }
+    isSubmittingRef.current = false;
 
     const sessionKey = `${editingTask?.id || 'new'}:${initialDate || ''}`;
     if (prevOpenSessionKeyRef.current === sessionKey) {
@@ -159,7 +162,9 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current) return;
     if (!title.trim()) return;
+    isSubmittingRef.current = true;
 
     const cleanLoc = location.trim();
     const cleanNotes = description.trim();
