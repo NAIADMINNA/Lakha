@@ -1094,6 +1094,15 @@ let runtimeScheduleConfig: {
   cardTitleWeight: 'bold',
   cardLineSpacing: 'relaxed',
 };
+let runtimeDirectorPresence: {
+  mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
+  customNote: string;
+  updatedAt: string;
+} = {
+  mode: 'auto',
+  customNote: '',
+  updatedAt: new Date().toISOString(),
+};
 const pendingWebhookMessages: IncomingLineWebhookItem[] = [];
 const sharedWorkspaces = new Map<string, CollaborativeWorkspaceState>();
 const PERMANENTLY_PURGED_TASK_IDS = [
@@ -1141,6 +1150,20 @@ function loadPersistedWorkspaceCache(): void {
           ...parsed.runtimeScheduleConfig,
         };
       }
+      if (parsed.runtimeDirectorPresence && typeof parsed.runtimeDirectorPresence === 'object') {
+        const dp = parsed.runtimeDirectorPresence as Record<string, unknown>;
+        const validModes = ['auto', 'in_office', 'in_meeting', 'offsite', 'unavailable'];
+        if (typeof dp.mode === 'string' && validModes.includes(dp.mode)) {
+          runtimeDirectorPresence = {
+            mode: dp.mode as typeof runtimeDirectorPresence.mode,
+            customNote: typeof dp.customNote === 'string' ? dp.customNote : '',
+            updatedAt:
+              typeof dp.updatedAt === 'string' && dp.updatedAt
+                ? dp.updatedAt
+                : new Date().toISOString(),
+          };
+        }
+      }
       if (Array.isArray(parsed.deletedTaskIds)) {
         for (const id of parsed.deletedTaskIds) {
           if (id) persistedDeletedTaskIds.add(String(id));
@@ -1183,6 +1206,7 @@ function savePersistedWorkspaceCache(): void {
           runtimeGasUrl: resolveCleanGasUrl(runtimeGasUrl),
           lastMorningDigestSentDate,
           runtimeScheduleConfig,
+          runtimeDirectorPresence,
           deletedTaskIds: Array.from(persistedDeletedTaskIds),
           workspaces: workspacesObj,
         },
@@ -1762,6 +1786,31 @@ async function startServer() {
     gasSyncChain = nextOp.catch(() => ({ ok: false }));
     return nextOp;
   }
+
+  // Real-time Director Front-Office Presence Status Endpoints
+  app.get('/api/collab/director-presence', (_req, res) => {
+    res.json({
+      ok: true,
+      presence: runtimeDirectorPresence,
+    });
+  });
+
+  app.post('/api/collab/director-presence', (req, res) => {
+    const { mode, customNote } = req.body || {};
+    const validModes = ['auto', 'in_office', 'in_meeting', 'offsite', 'unavailable'];
+    if (typeof mode === 'string' && validModes.includes(mode)) {
+      runtimeDirectorPresence.mode = mode as typeof runtimeDirectorPresence.mode;
+    }
+    if (typeof customNote === 'string') {
+      runtimeDirectorPresence.customNote = customNote.trim().slice(0, 160);
+    }
+    runtimeDirectorPresence.updatedAt = new Date().toISOString();
+    savePersistedWorkspaceCache();
+    res.json({
+      ok: true,
+      presence: runtimeDirectorPresence,
+    });
+  });
 
   // Real-time Collaborative Shared Calendar Workspace Endpoints
   app.get('/api/collab/workspace/:workspaceId', async (req, res) => {

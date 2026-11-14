@@ -1,11 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Ban,
+  Building2,
   Calendar as CalendarIcon,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Circle,
   Clock,
+  Edit3,
+  MapPin,
   Maximize2,
   Minimize2,
   MonitorPlay,
@@ -13,8 +20,11 @@ import {
   Pause,
   Play,
   Plus,
-  Printer,
   Search,
+  SlidersHorizontal,
+  Sun,
+  Sunset,
+  Users,
   X,
 } from 'lucide-react';
 import { Category, Task, TaskPriority, TaskStatus } from '../types';
@@ -48,6 +58,25 @@ interface ScheduleBoardViewProps {
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
 type BoardLayoutMode = 'grouped_by_day' | 'split_two_column' | 'single_day' | 'master_table';
 type BoardThemeMode = 'light' | 'dark' | 'navy_gold' | 'emerald_exec';
+type DirectorPresenceMode = 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
+
+interface DirectorPresenceState {
+  mode: DirectorPresenceMode;
+  customNote: string;
+  updatedAt: string;
+}
+
+const DIRECTOR_PRESENCE_STORAGE_KEY = 'sheetcal_director_presence_v1';
+
+function isExternalOffsiteTask(task: Task): boolean {
+  const text = `${task.title || ''} ${task.description || ''}`;
+  if (/สบต\.|สำนักบริหารแรงงานต่างด้าว|ห้องประชุมเทียน/i.test(text)) {
+    return false;
+  }
+  return /เดินทางไป|ไปราชการ|ต่างประเทศ|ต่างจังหวัด|นอกสถานที่|ลงพื้นที่|ตรวจเยี่ยม|ศรีลังกา|ลาว|ญี่ปุ่น|กัมพูชา|เมียนมา|เวียดนาม|ร้อยเอ็ด|เชียงใหม่|ภูเก็ต|ชลบุรี|สนามบิน|ทำเนียบรัฐบาล|รัฐสภา|โรงแรม/i.test(
+    text
+  );
+}
 
 const THAI_WEEKDAY_FULL = [
   'วันอาทิตย์',
@@ -307,7 +336,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [boardTheme, setBoardTheme] = useState<BoardThemeMode>('light');
   const [isLargeText, setIsLargeText] = useState<boolean>(false);
   const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
+  const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
+    useState<boolean>(false);
   const [isAutoScroll, setIsAutoScroll] = useState<boolean>(false);
+
+  const isToolbarCollapsed = isPresentationMode && isToolbarCollapsedInFullscreen;
 
   const isDarkDisplay = boardTheme === 'dark' || boardTheme === 'navy_gold';
   const isNavyGold = boardTheme === 'navy_gold';
@@ -357,6 +390,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         // Ignore iframe fullscreen restrictions; in-page presentation mode still expands
       }
     } else {
+      setIsToolbarCollapsedInFullscreen(false);
       try {
         if (document.fullscreenElement && document.exitFullscreen) {
           await document.exitFullscreen();
@@ -638,7 +672,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         autoScrollTrackRef.current.style.transform = '';
       }
     };
-  }, [isAutoScroll, isPresentationMode, layoutMode, rangeMode, scheduleByDate.length]);
+  }, [
+    isAutoScroll,
+    isPresentationMode,
+    isToolbarCollapsed,
+    layoutMode,
+    rangeMode,
+    scheduleByDate.length,
+  ]);
 
   const todayTasksSummary = useMemo(() => {
     const parseHM = (hm: string): number | null => {
@@ -703,8 +744,219 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       nextCountdownLabel,
       highPriorityCount,
       allSchedulesCount,
+      activeToday,
     };
   }, [tasks, todayStr, nowHM]);
+
+  const [directorPresence, setDirectorPresence] = useState<DirectorPresenceState>(() => {
+    try {
+      const raw = window.localStorage.getItem(DIRECTOR_PRESENCE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const validModes: DirectorPresenceMode[] = [
+          'auto',
+          'in_office',
+          'in_meeting',
+          'offsite',
+          'unavailable',
+        ];
+        if (parsed && validModes.includes(parsed.mode)) {
+          return {
+            mode: parsed.mode,
+            customNote: typeof parsed.customNote === 'string' ? parsed.customNote : '',
+            updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+          };
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return { mode: 'auto', customNote: '', updatedAt: '' };
+  });
+
+  const [isEditingPresenceNote, setIsEditingPresenceNote] = useState<boolean>(false);
+  const [presenceNoteDraft, setPresenceNoteDraft] = useState<string>('');
+  const lastPresenceWriteMsRef = useRef<number>(0);
+
+  const persistPresenceLocally = useCallback((nextState: DirectorPresenceState) => {
+    try {
+      window.localStorage.setItem(DIRECTOR_PRESENCE_STORAGE_KEY, JSON.stringify(nextState));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const pullDirectorPresence = async () => {
+      if (Date.now() - lastPresenceWriteMsRef.current < 2500) return;
+      try {
+        const res = await fetch('/api/collab/director-presence', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const remote = data?.presence;
+        if (!remote || typeof remote.mode !== 'string') return;
+        setDirectorPresence((prev) => {
+          if (
+            remote.updatedAt &&
+            remote.updatedAt === prev.updatedAt &&
+            remote.mode === prev.mode &&
+            (remote.customNote || '') === prev.customNote
+          ) {
+            return prev;
+          }
+          const merged: DirectorPresenceState = {
+            mode: remote.mode as DirectorPresenceMode,
+            customNote: typeof remote.customNote === 'string' ? remote.customNote : '',
+            updatedAt: typeof remote.updatedAt === 'string' ? remote.updatedAt : '',
+          };
+          persistPresenceLocally(merged);
+          return merged;
+        });
+      } catch {
+        // silent fallback to local state when offline
+      }
+    };
+
+    pullDirectorPresence();
+    const intervalId = window.setInterval(pullDirectorPresence, 4000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        pullDirectorPresence();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [persistPresenceLocally]);
+
+  const updateDirectorPresence = useCallback(
+    async (nextMode: DirectorPresenceMode, nextCustomNote?: string) => {
+      lastPresenceWriteMsRef.current = Date.now();
+      const resolvedNote =
+        nextCustomNote !== undefined ? nextCustomNote.trim().slice(0, 160) : directorPresence.customNote;
+      const optimistic: DirectorPresenceState = {
+        mode: nextMode,
+        customNote: resolvedNote,
+        updatedAt: new Date().toISOString(),
+      };
+      setDirectorPresence(optimistic);
+      persistPresenceLocally(optimistic);
+
+      try {
+        const res = await fetch('/api/collab/director-presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: nextMode,
+            customNote: resolvedNote,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.presence) {
+            const confirmed: DirectorPresenceState = {
+              mode: data.presence.mode as DirectorPresenceMode,
+              customNote:
+                typeof data.presence.customNote === 'string' ? data.presence.customNote : resolvedNote,
+              updatedAt:
+                typeof data.presence.updatedAt === 'string'
+                  ? data.presence.updatedAt
+                  : optimistic.updatedAt,
+            };
+            setDirectorPresence(confirmed);
+            persistPresenceLocally(confirmed);
+          }
+        }
+      } catch {
+        // keep optimistic local state
+      }
+    },
+    [directorPresence.customNote, persistPresenceLocally]
+  );
+
+  const resolvedDirectorPresence = useMemo(() => {
+    const multiDayOffsiteToday = todayTasksSummary.activeToday.find(
+      (t) =>
+        t.status !== TaskStatus.COMPLETED &&
+        Boolean(t.endDate && t.endDate > t.date) &&
+        isExternalOffsiteTask(t)
+    );
+    const activeInProgress = todayTasksSummary.inProgressTask;
+
+    let effectiveStatus: Exclude<DirectorPresenceMode, 'auto'> = 'in_office';
+    let autoDetail = '';
+
+    if (directorPresence.mode === 'auto') {
+      if (activeInProgress && isExternalOffsiteTask(activeInProgress)) {
+        effectiveStatus = 'offsite';
+        autoDetail = `${activeInProgress.time} น. — ${activeInProgress.title}`;
+      } else if (multiDayOffsiteToday) {
+        effectiveStatus = 'offsite';
+        autoDetail = multiDayOffsiteToday.title;
+      } else if (activeInProgress) {
+        effectiveStatus = 'in_meeting';
+        autoDetail = `${activeInProgress.time} น. — ${activeInProgress.title}`;
+      } else {
+        effectiveStatus = 'in_office';
+        if (todayTasksSummary.nextUpcoming) {
+          autoDetail = `นัดหมายถัดไป เวลา ${todayTasksSummary.nextUpcoming.time} น.${
+            todayTasksSummary.nextCountdownLabel ? ` (${todayTasksSummary.nextCountdownLabel})` : ''
+          }`;
+        } else {
+          autoDetail = 'พร้อมปฏิบัติราชการตามปกติ';
+        }
+      }
+    } else {
+      effectiveStatus = directorPresence.mode;
+    }
+
+    const statusMeta: Record<
+      Exclude<DirectorPresenceMode, 'auto'>,
+      {
+        label: string;
+        shortButtonLabel: string;
+        tone: 'emerald' | 'amber' | 'sky' | 'rose';
+      }
+    > = {
+      in_office: {
+        label: 'ปฏิบัติราชการ ณ ห้องทำงาน',
+        shortButtonLabel: 'ณ ห้องทำงาน',
+        tone: 'emerald',
+      },
+      in_meeting: {
+        label: 'ติดประชุม / พบผู้มาติดต่อ',
+        shortButtonLabel: 'ติดประชุม',
+        tone: 'amber',
+      },
+      offsite: {
+        label: 'ไปราชการนอกสถานที่',
+        shortButtonLabel: 'ไปราชการ',
+        tone: 'sky',
+      },
+      unavailable: {
+        label: 'งดรับนัดชั่วคราว',
+        shortButtonLabel: 'งดรับนัด',
+        tone: 'rose',
+      },
+    };
+
+    return {
+      effectiveStatus,
+      isAuto: directorPresence.mode === 'auto',
+      meta: statusMeta[effectiveStatus],
+      autoDetail,
+      customNote: directorPresence.customNote,
+    };
+  }, [directorPresence, todayTasksSummary]);
 
   const bannerRef = useRef<HTMLDivElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
@@ -767,6 +1019,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     isLargeText,
     boardTheme,
     isPresentationMode,
+    isToolbarCollapsed,
     isAutoScroll,
     layoutMode,
     rangeMode,
@@ -824,6 +1077,487 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       (i) => i.task.status === TaskStatus.COMPLETED
     ).length;
     const pendingInDay = group.items.length - doneInDay;
+
+    const shouldSplitPeriods =
+      layoutMode === 'single_day' || rangeMode === 'today' || isTodayGroup;
+    const morningItems = shouldSplitPeriods
+      ? group.items.filter((entry) => (entry.task.time || '00:00') < '12:00')
+      : [];
+    const afternoonItems = shouldSplitPeriods
+      ? group.items.filter((entry) => (entry.task.time || '00:00') >= '12:00')
+      : [];
+    const isNowMorning = nowHM < '12:00';
+
+    const renderTaskRow = (
+      entry: DayGroupEntry['items'][number],
+      idxKey: string | number
+    ) => {
+      const {
+        task,
+        displayDate,
+        dayIndexOfSpan,
+        totalSpanDays,
+        timeRangeLabel,
+      } = entry;
+      const cat = categoryMap[task.categoryId];
+      const catColor = cat?.color || '#2563EB';
+      const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
+      const isDone = task.status === TaskStatus.COMPLETED;
+      const isHigh = task.priority === TaskPriority.HIGH;
+      const isCurrentDayPassed =
+        displayDate === todayStr && task.time <= nowHM && !isDone;
+      const isNextUpcomingRow =
+        displayDate === todayStr &&
+        !isDone &&
+        todayTasksSummary.nextUpcoming?.id === task.id;
+      const detectedVenue = extractLocationFromText(task.title, task.description);
+      const displayDescription = task.description
+        ? detectedVenue
+          ? task.description
+              .split('\n')
+              .filter((line) => !/^\s*สถานที่\s*:/i.test(line))
+              .join('\n')
+              .trim()
+          : task.description
+        : '';
+
+      return (
+        <div
+          key={`${displayDate}-${task.id}-${idxKey}`}
+          className={`px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+            isNextUpcomingRow
+              ? isDarkDisplay
+                ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                : 'bg-amber-50/70 hover:bg-amber-50'
+              : isDarkDisplay
+              ? 'hover:bg-slate-800/40'
+              : 'hover:bg-slate-50/70'
+          }`}
+        >
+          {/* Left: Time Column + Task Details */}
+          <div className="flex items-start gap-5 min-w-0">
+            {/* Distinct Time Slot Column */}
+            <div className="w-36 sm:w-44 shrink-0">
+              <div
+                className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
+                  isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
+                } ${
+                  isDone
+                    ? 'text-slate-400 line-through'
+                    : isNextUpcomingRow
+                    ? isDarkDisplay
+                      ? 'text-amber-300'
+                      : 'text-amber-800'
+                    : isDarkDisplay
+                    ? 'text-emerald-400'
+                    : 'text-indigo-950'
+                }`}
+              >
+                <Clock
+                  className={`h-5 w-5 shrink-0 ${
+                    isDone
+                      ? 'text-slate-400'
+                      : isNextUpcomingRow
+                      ? isDarkDisplay
+                        ? 'text-amber-300'
+                        : 'text-amber-600'
+                      : isDarkDisplay
+                      ? 'text-emerald-400'
+                      : 'text-indigo-500'
+                  }`}
+                />
+                <span>{timeRangeLabel || task.time} น.</span>
+              </div>
+            </div>
+
+            {/* Task Content */}
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onEditTask(task)}
+                  className={`font-bold text-left hover:underline break-words ${
+                    isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
+                  } ${
+                    isDone
+                      ? 'line-through text-slate-400'
+                      : isDarkDisplay
+                      ? 'text-white'
+                      : 'text-slate-900'
+                  }`}
+                >
+                  {task.title}
+                </button>
+                {isHigh && !isDone && (
+                  <span
+                    className={`${
+                      isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                    } font-bold ${
+                      isDarkDisplay ? 'text-rose-400' : 'text-rose-600'
+                    }`}
+                  >
+                    · ด่วนมาก
+                  </span>
+                )}
+                {isNextUpcomingRow && (
+                  <span
+                    className={`${
+                      isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                    } font-bold ${
+                      isDarkDisplay ? 'text-amber-300' : 'text-amber-700'
+                    }`}
+                  >
+                    · กำลังจะถึงกำหนด (คิวถัดไป)
+                  </span>
+                )}
+              </div>
+
+              {displayDescription && (
+                <p
+                  className={`leading-relaxed break-words ${
+                    isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
+                  } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
+                >
+                  {displayDescription}
+                </p>
+              )}
+
+              <div
+                className={`flex flex-wrap items-center gap-2.5 ${
+                  isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'} pt-1`}
+              >
+                <span
+                  className="inline-flex items-center gap-2 font-bold"
+                  style={{ color: displayCatColor }}
+                >
+                  <span
+                    className="h-3 w-3 rounded-xs shrink-0"
+                    style={{ backgroundColor: displayCatColor }}
+                  />
+                  <span>{cat?.name || 'ทั่วไป'}</span>
+                </span>
+
+                {totalSpanDays > 1 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className={`font-bold ${
+                        isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
+                      }`}
+                    >
+                      {!expandMultiDay
+                        ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
+                            task,
+                            'long'
+                          )}`
+                        : `งานต่อเนื่อง ${formatTaskDateRangeLabel(
+                            task,
+                            'short'
+                          ).replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
+                    </span>
+                  </>
+                )}
+
+                {detectedVenue && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className={`font-semibold ${
+                        isDarkDisplay ? 'text-amber-200' : 'text-slate-700'
+                      }`}
+                    >
+                      สถานที่: {detectedVenue}
+                    </span>
+                  </>
+                )}
+
+                {task.assigneeName && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span
+                      className={`font-medium ${
+                        isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
+                      }`}
+                    >
+                      ผู้รับผิดชอบ: {task.assigneeName}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Status & Quick Action */}
+          <div className="flex items-center justify-end gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => onToggleStatus(task)}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
+                isLargeText ? 'text-base' : 'text-sm'
+              } font-bold transition-colors whitespace-nowrap shrink-0 ${
+                isDone
+                  ? isDarkDisplay
+                    ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : isCurrentDayPassed
+                  ? isDarkDisplay
+                    ? 'bg-amber-950/60 border-amber-700 text-amber-300'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                  : isDarkDisplay
+                  ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {isDone ? (
+                <>
+                  <CheckCircle2
+                    className={`h-4 w-4 ${
+                      isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                    }`}
+                  />
+                  <span>เสร็จสิ้นแล้ว</span>
+                </>
+              ) : (
+                <>
+                  <Circle
+                    className="h-4 w-4"
+                    style={{ color: displayCatColor }}
+                  />
+                  <span>
+                    {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    const renderLiveTimeMarker = () => {
+      const markerStatusText = todayTasksSummary.inProgressTask
+        ? `กำลังดำเนินการ: ${todayTasksSummary.inProgressTask.time} น. — ${todayTasksSummary.inProgressTask.title}`
+        : todayTasksSummary.nextUpcoming
+        ? `ภารกิจถัดไป เวลา ${todayTasksSummary.nextUpcoming.time} น.${
+            todayTasksSummary.nextCountdownLabel
+              ? ` (${todayTasksSummary.nextCountdownLabel})`
+              : ''
+          }`
+        : group.items.length > 0
+        ? 'ผ่านกำหนดการตามเวลาของวันนี้แล้ว'
+        : 'ไม่มีนัดหมายในขณะนี้ — ว่างปฏิบัติราชการ';
+
+      return (
+        <div
+          key={`live-time-marker-${group.date}`}
+          className={`px-6 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-5 ${
+            isNavyGold
+              ? 'bg-amber-400/10 text-amber-200'
+              : isDarkDisplay
+              ? 'bg-sky-500/10 text-sky-200'
+              : isEmeraldExec
+              ? 'bg-emerald-50/85 text-emerald-900'
+              : 'bg-indigo-50/75 text-indigo-950'
+          }`}
+        >
+          <div className="w-36 sm:w-44 shrink-0 flex items-center gap-2">
+            <Clock
+              className={`h-4 w-4 shrink-0 ${
+                isNavyGold
+                  ? 'text-amber-300'
+                  : isDarkDisplay
+                  ? 'text-sky-300'
+                  : isEmeraldExec
+                  ? 'text-emerald-700'
+                  : 'text-indigo-600'
+              }`}
+            />
+            <span
+              className={`font-sans tabular-nums font-extrabold whitespace-nowrap ${
+                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+              }`}
+            >
+              ขณะนี้ {nowHM} น.
+            </span>
+          </div>
+
+          <div className="flex-1 min-w-0 flex items-center gap-3">
+            <div
+              aria-hidden="true"
+              className={`h-px flex-1 min-w-[24px] ${
+                isNavyGold
+                  ? 'bg-amber-400/45'
+                  : isDarkDisplay
+                  ? 'bg-sky-400/40'
+                  : isEmeraldExec
+                  ? 'bg-emerald-400/70'
+                  : 'bg-indigo-300/80'
+              }`}
+            />
+            <span
+              className={`font-semibold truncate ${
+                isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
+              } ${
+                isNavyGold
+                  ? 'text-amber-100'
+                  : isDarkDisplay
+                  ? 'text-sky-100'
+                  : isEmeraldExec
+                  ? 'text-emerald-800'
+                  : 'text-indigo-800'
+              }`}
+            >
+              {markerStatusText}
+            </span>
+          </div>
+        </div>
+      );
+    };
+
+    const renderPeriodSubHeader = (
+      period: 'morning' | 'afternoon',
+      periodItems: DayGroupEntry['items']
+    ) => {
+      const isMorning = period === 'morning';
+      const pendingPeriodCount = periodItems.filter(
+        (entry) => entry.task.status !== TaskStatus.COMPLETED
+      ).length;
+
+      return (
+        <div
+          key={`period-header-${group.date}-${period}`}
+          className={`px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 ${
+            isMorning
+              ? isNavyGold
+                ? 'bg-[#0B1930] text-amber-200'
+                : isDarkDisplay
+                ? 'bg-slate-950/90 text-amber-300'
+                : isEmeraldExec
+                ? 'bg-emerald-50/55 text-emerald-950'
+                : 'bg-slate-50/95 text-slate-800'
+              : isNavyGold
+              ? 'bg-[#0B1930] text-sky-200'
+              : isDarkDisplay
+              ? 'bg-slate-950/90 text-sky-300'
+              : isEmeraldExec
+              ? 'bg-teal-50/55 text-teal-950'
+              : 'bg-indigo-50/45 text-indigo-950'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {isMorning ? (
+              <Sun
+                className={`h-4 w-4 shrink-0 ${
+                  isNavyGold || isDarkDisplay ? 'text-amber-300' : 'text-amber-600'
+                }`}
+              />
+            ) : (
+              <Sunset
+                className={`h-4 w-4 shrink-0 ${
+                  isNavyGold || isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
+                }`}
+              />
+            )}
+            <span
+              className={`font-extrabold tracking-tight ${
+                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+              }`}
+            >
+              {isMorning ? 'ภารกิจภาคเช้า' : 'ภารกิจภาคบ่าย'}
+            </span>
+            <span
+              className={`font-medium ${
+                isLargeText ? 'text-sm sm:text-base' : 'text-xs'
+              } ${
+                isNavyGold || isDarkDisplay ? 'text-slate-300' : 'text-slate-500'
+              }`}
+            >
+              {isMorning ? '(ก่อน 12:00 น.)' : '(ตั้งแต่ 12:00 น. เป็นต้นไป)'}
+            </span>
+          </div>
+
+          <div
+            className={`font-sans tabular-nums font-bold ${
+              isLargeText ? 'text-sm sm:text-base' : 'text-xs'
+            } ${
+              periodItems.length === 0
+                ? isNavyGold || isDarkDisplay
+                  ? 'text-slate-400'
+                  : 'text-slate-500'
+                : isNavyGold || isDarkDisplay
+                ? 'text-slate-200'
+                : 'text-slate-700'
+            }`}
+          >
+            {periodItems.length === 0
+              ? 'ว่างปฏิบัติราชการ'
+              : `${periodItems.length} รายการ${
+                  pendingPeriodCount > 0
+                    ? ` · รอดำเนินการ ${pendingPeriodCount}`
+                    : ' · เสร็จสิ้นครบ'
+                }`}
+          </div>
+        </div>
+      );
+    };
+
+    const renderPeriodRows = (
+      period: 'morning' | 'afternoon',
+      periodItems: DayGroupEntry['items']
+    ) => {
+      const showLiveMarkerHere =
+        isTodayGroup &&
+        ((period === 'morning' && isNowMorning) ||
+          (period === 'afternoon' && !isNowMorning));
+
+      if (periodItems.length === 0) {
+        return (
+          <>
+            {showLiveMarkerHere && renderLiveTimeMarker()}
+            <div
+              key={`empty-period-${group.date}-${period}`}
+              className={`px-6 py-3.5 flex items-center gap-5 ${
+                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+              } ${isDarkDisplay ? 'text-slate-400' : 'text-slate-500'}`}
+            >
+              <div className="w-36 sm:w-44 shrink-0 font-sans tabular-nums font-semibold opacity-75">
+                {period === 'morning' ? '08:30 – 12:00 น.' : '13:00 – 16:30 น.'}
+              </div>
+              <div className="font-medium">
+                {period === 'morning'
+                  ? 'ไม่มีนัดหมายในช่วงเช้า — ว่างปฏิบัติราชการ'
+                  : 'ไม่มีนัดหมายในช่วงบ่าย — ว่างปฏิบัติราชการ'}
+              </div>
+            </div>
+          </>
+        );
+      }
+
+      if (!showLiveMarkerHere) {
+        return periodItems.map((entry, idx) =>
+          renderTaskRow(entry, `${period}-${idx}`)
+        );
+      }
+
+      const nodes: React.ReactNode[] = [];
+      let markerInserted = false;
+
+      periodItems.forEach((entry, idx) => {
+        const itemTime = entry.task.time || '00:00';
+        if (!markerInserted && itemTime > nowHM) {
+          nodes.push(renderLiveTimeMarker());
+          markerInserted = true;
+        }
+        nodes.push(renderTaskRow(entry, `${period}-${idx}`));
+      });
+
+      if (!markerInserted) {
+        nodes.push(renderLiveTimeMarker());
+      }
+
+      return nodes;
+    };
 
     return (
       <section
@@ -931,7 +1665,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             scrollRowsOnly && !isPresentationMode
               ? { maxHeight: `${autoScrollMaxHeight}px` }
               : scrollRowsOnly && isPresentationMode
-              ? { maxHeight: 'calc(100vh - 340px)' }
+              ? { maxHeight: isToolbarCollapsed ? 'calc(100vh - 260px)' : 'calc(100vh - 380px)' }
               : undefined
           }
           className={`${
@@ -957,249 +1691,16 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               isDarkDisplay ? 'divide-slate-800' : 'divide-slate-200'
             }`}
           >
-          {group.items.map((entry, idx) => {
-            const {
-              task,
-              displayDate,
-              dayIndexOfSpan,
-              totalSpanDays,
-              timeRangeLabel,
-            } = entry;
-            const cat = categoryMap[task.categoryId];
-            const catColor = cat?.color || '#2563EB';
-            const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
-            const isDone = task.status === TaskStatus.COMPLETED;
-            const isHigh = task.priority === TaskPriority.HIGH;
-            const isCurrentDayPassed =
-              displayDate === todayStr && task.time <= nowHM && !isDone;
-            const isNextUpcomingRow =
-              displayDate === todayStr &&
-              !isDone &&
-              todayTasksSummary.nextUpcoming?.id === task.id;
-            const detectedVenue = extractLocationFromText(task.title, task.description);
-            const displayDescription = task.description
-              ? detectedVenue
-                ? task.description
-                    .split('\n')
-                    .filter((line) => !/^\s*สถานที่\s*:/i.test(line))
-                    .join('\n')
-                    .trim()
-                : task.description
-              : '';
-
-            return (
-              <div
-                key={`${displayDate}-${task.id}-${idx}`}
-                className={`px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
-                  isNextUpcomingRow
-                    ? isDarkDisplay
-                      ? 'bg-amber-500/10 hover:bg-amber-500/15'
-                      : 'bg-amber-50/70 hover:bg-amber-50'
-                    : isDarkDisplay
-                    ? 'hover:bg-slate-800/40'
-                    : 'hover:bg-slate-50/70'
-                }`}
-              >
-                {/* Left: Time Column + Task Details */}
-                <div className="flex items-start gap-5 min-w-0">
-                  {/* Distinct Time Slot Column */}
-                  <div className="w-36 sm:w-44 shrink-0">
-                    <div
-                      className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
-                        isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
-                      } ${
-                        isDone
-                          ? 'text-slate-400 line-through'
-                          : isNextUpcomingRow
-                          ? isDarkDisplay
-                            ? 'text-amber-300'
-                            : 'text-amber-800'
-                          : isDarkDisplay
-                          ? 'text-emerald-400'
-                          : 'text-indigo-950'
-                      }`}
-                    >
-                      <Clock
-                        className={`h-5 w-5 shrink-0 ${
-                          isDone
-                            ? 'text-slate-400'
-                            : isNextUpcomingRow
-                            ? isDarkDisplay
-                              ? 'text-amber-300'
-                              : 'text-amber-600'
-                            : isDarkDisplay
-                            ? 'text-emerald-400'
-                            : 'text-indigo-500'
-                        }`}
-                      />
-                      <span>{timeRangeLabel || task.time} น.</span>
-                    </div>
-                  </div>
-
-                  {/* Task Content */}
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => onEditTask(task)}
-                        className={`font-bold text-left hover:underline break-words ${
-                          isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
-                        } ${
-                          isDone
-                            ? 'line-through text-slate-400'
-                            : isDarkDisplay
-                            ? 'text-white'
-                            : 'text-slate-900'
-                        }`}
-                      >
-                        {task.title}
-                      </button>
-                      {isHigh && !isDone && (
-                        <span
-                          className={`${
-                            isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                          } font-bold ${
-                            isDarkDisplay ? 'text-rose-400' : 'text-rose-600'
-                          }`}
-                        >
-                          · ด่วนมาก
-                        </span>
-                      )}
-                      {isNextUpcomingRow && (
-                        <span
-                          className={`${
-                            isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                          } font-bold ${
-                            isDarkDisplay ? 'text-amber-300' : 'text-amber-700'
-                          }`}
-                        >
-                          · กำลังจะถึงกำหนด (คิวถัดไป)
-                        </span>
-                      )}
-                    </div>
-
-                    {displayDescription && (
-                      <p
-                        className={`leading-relaxed break-words ${
-                          isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
-                        } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'}`}
-                      >
-                        {displayDescription}
-                      </p>
-                    )}
-
-                    <div
-                      className={`flex flex-wrap items-center gap-2.5 ${
-                        isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
-                      } ${isDarkDisplay ? 'text-slate-200' : 'text-slate-600'} pt-1`}
-                    >
-                      <span
-                        className="inline-flex items-center gap-2 font-bold"
-                        style={{ color: displayCatColor }}
-                      >
-                        <span
-                          className="h-3 w-3 rounded-xs shrink-0"
-                          style={{ backgroundColor: displayCatColor }}
-                        />
-                        <span>{cat?.name || 'ทั่วไป'}</span>
-                      </span>
-
-                      {totalSpanDays > 1 && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            className={`font-bold ${
-                              isDarkDisplay ? 'text-sky-300' : 'text-indigo-600'
-                            }`}
-                          >
-                            {!expandMultiDay
-                              ? `🗓️ กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
-                                  task,
-                                  'long'
-                                )}`
-                              : `งานต่อเนื่อง ${formatTaskDateRangeLabel(
-                                  task,
-                                  'short'
-                                ).replace(/\s*\(\d+\s*วัน\)$/, '')} (วันที่ ${dayIndexOfSpan} จาก ${totalSpanDays} วัน)`}
-                          </span>
-                        </>
-                      )}
-
-                      {detectedVenue && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            className={`font-semibold ${
-                              isDarkDisplay ? 'text-amber-200' : 'text-slate-700'
-                            }`}
-                          >
-                            สถานที่: {detectedVenue}
-                          </span>
-                        </>
-                      )}
-
-                      {task.assigneeName && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span
-                            className={`font-medium ${
-                              isDarkDisplay ? 'text-slate-200' : 'text-slate-600'
-                            }`}
-                          >
-                            ผู้รับผิดชอบ: {task.assigneeName}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right: Status & Quick Action */}
-                <div className="flex items-center justify-end gap-3 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => onToggleStatus(task)}
-                    className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
-                      isLargeText ? 'text-base' : 'text-sm'
-                    } font-bold transition-colors whitespace-nowrap shrink-0 ${
-                      isDone
-                        ? isDarkDisplay
-                          ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                        : isCurrentDayPassed
-                        ? isDarkDisplay
-                          ? 'bg-amber-950/60 border-amber-700 text-amber-300'
-                          : 'bg-amber-50 border-amber-200 text-amber-900'
-                        : isDarkDisplay
-                        ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    {isDone ? (
-                      <>
-                        <CheckCircle2
-                          className={`h-4 w-4 ${
-                            isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
-                          }`}
-                        />
-                        <span>เสร็จสิ้นแล้ว</span>
-                      </>
-                    ) : (
-                      <>
-                        <Circle
-                          className="h-4 w-4"
-                          style={{ color: displayCatColor }}
-                        />
-                        <span>
-                          {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
-                        </span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+            {shouldSplitPeriods ? (
+              <>
+                {renderPeriodSubHeader('morning', morningItems)}
+                {renderPeriodRows('morning', morningItems)}
+                {renderPeriodSubHeader('afternoon', afternoonItems)}
+                {renderPeriodRows('afternoon', afternoonItems)}
+              </>
+            ) : (
+              group.items.map((entry, idx) => renderTaskRow(entry, idx))
+            )}
           </div>
         </div>
       </section>
@@ -1391,9 +1892,254 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
           </div>
 
+          {/* Director Live Presence Status Strip (Front-Office Executive Display) */}
+          <div
+            className={`mt-4 pt-3.5 border-t flex flex-col xl:flex-row xl:items-center justify-between gap-3 ${
+              isNavyGold
+                ? 'border-amber-400/20'
+                : isDarkDisplay
+                ? 'border-slate-800'
+                : isEmeraldExec
+                ? 'border-emerald-200/70'
+                : 'border-slate-200/80'
+            }`}
+          >
+            {/* Left: Current Director Status Readout */}
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <div
+                className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl border flex items-center justify-center shrink-0 ${
+                  resolvedDirectorPresence.meta.tone === 'emerald'
+                    ? isDarkDisplay
+                      ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-300'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                    : resolvedDirectorPresence.meta.tone === 'amber'
+                    ? isDarkDisplay
+                      ? 'bg-amber-500/15 border-amber-400/50 text-amber-300'
+                      : 'bg-amber-50 border-amber-200 text-amber-700'
+                    : resolvedDirectorPresence.meta.tone === 'sky'
+                    ? isDarkDisplay
+                      ? 'bg-sky-500/15 border-sky-400/50 text-sky-300'
+                      : 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                    : isDarkDisplay
+                    ? 'bg-rose-500/15 border-rose-400/50 text-rose-300'
+                    : 'bg-rose-50 border-rose-200 text-rose-700'
+                }`}
+              >
+                {resolvedDirectorPresence.effectiveStatus === 'in_office' ? (
+                  <Building2 className="h-5 w-5" />
+                ) : resolvedDirectorPresence.effectiveStatus === 'in_meeting' ? (
+                  <Users className="h-5 w-5" />
+                ) : resolvedDirectorPresence.effectiveStatus === 'offsite' ? (
+                  <MapPin className="h-5 w-5" />
+                ) : (
+                  <Ban className="h-5 w-5" />
+                )}
+              </div>
+
+              <div className="min-w-0 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                <span
+                  className={`font-semibold whitespace-nowrap ${
+                    isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
+                  } ${
+                    isNavyGold
+                      ? 'text-amber-200/90'
+                      : isDarkDisplay
+                      ? 'text-slate-300'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  สถานะผู้อำนวยการ:
+                </span>
+
+                <span
+                  className={`font-extrabold tracking-tight ${
+                    isLargeText ? 'text-lg sm:text-2xl' : 'text-sm sm:text-lg'
+                  } ${
+                    resolvedDirectorPresence.meta.tone === 'emerald'
+                      ? isDarkDisplay
+                        ? 'text-emerald-300'
+                        : 'text-emerald-800'
+                      : resolvedDirectorPresence.meta.tone === 'amber'
+                      ? isDarkDisplay
+                        ? 'text-amber-300'
+                        : 'text-amber-800'
+                      : resolvedDirectorPresence.meta.tone === 'sky'
+                      ? isDarkDisplay
+                        ? 'text-sky-300'
+                        : 'text-indigo-800'
+                      : isDarkDisplay
+                      ? 'text-rose-300'
+                      : 'text-rose-700'
+                  }`}
+                >
+                  {resolvedDirectorPresence.meta.label}
+                </span>
+
+                {resolvedDirectorPresence.customNote ? (
+                  <span
+                    className={`font-semibold break-words ${
+                      isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+                    } ${
+                      isNavyGold
+                        ? 'text-amber-100'
+                        : isDarkDisplay
+                        ? 'text-slate-200'
+                        : 'text-slate-700'
+                    }`}
+                  >
+                    · {resolvedDirectorPresence.customNote}
+                  </span>
+                ) : resolvedDirectorPresence.isAuto &&
+                  resolvedDirectorPresence.autoDetail ? (
+                  <span
+                    className={`font-medium break-words ${
+                      isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
+                    } ${
+                      isNavyGold
+                        ? 'text-slate-300'
+                        : isDarkDisplay
+                        ? 'text-slate-300'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    · {resolvedDirectorPresence.autoDetail}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Right: Quick 1-Click Secretary Controls (Hidden when fullscreen toolbar is collapsed) */}
+            {!isToolbarCollapsed && (
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                {isEditingPresenceNote ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      updateDirectorPresence(directorPresence.mode, presenceNoteDraft);
+                      setIsEditingPresenceNote(false);
+                    }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <input
+                      type="text"
+                      value={presenceNoteDraft}
+                      onChange={(e) => setPresenceNoteDraft(e.target.value)}
+                      placeholder="เช่น กลับเข้าสำนักฯ เวลา 15:00 น."
+                      maxLength={160}
+                      autoFocus
+                      className={`h-8 w-52 sm:w-64 rounded-lg border px-2.5 text-xs font-medium focus:outline-none ${
+                        isNavyGold
+                          ? 'bg-[#091526] border-amber-400/50 text-white placeholder:text-slate-400'
+                          : isDarkDisplay
+                          ? 'bg-slate-950 border-slate-700 text-white placeholder:text-slate-500'
+                          : 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400'
+                      }`}
+                    />
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-1 h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap shrink-0"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      <span>บันทึก</span>
+                    </button>
+                    {directorPresence.customNote && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPresenceNoteDraft('');
+                          updateDirectorPresence(directorPresence.mode, '');
+                          setIsEditingPresenceNote(false);
+                        }}
+                        className={`inline-flex items-center h-8 px-2 rounded-lg border text-xs font-semibold whitespace-nowrap shrink-0 ${
+                          isDarkDisplay
+                            ? 'bg-slate-800 border-slate-700 text-rose-300 hover:bg-slate-700'
+                            : 'bg-white border-slate-200 text-rose-600 hover:bg-rose-50'
+                        }`}
+                      >
+                        ล้าง
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingPresenceNote(false)}
+                      className={`inline-flex items-center justify-center h-8 w-8 rounded-lg border shrink-0 ${
+                        isDarkDisplay
+                          ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                      aria-label="ปิดช่องแก้ไขหมายเหตุ"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    {(
+                      [
+                        { id: 'auto', label: 'อัตโนมัติ' },
+                        { id: 'in_office', label: 'ณ ห้องทำงาน' },
+                        { id: 'in_meeting', label: 'ติดประชุม' },
+                        { id: 'offsite', label: 'ไปราชการ' },
+                        { id: 'unavailable', label: 'งดรับนัด' },
+                      ] as Array<{ id: DirectorPresenceMode; label: string }>
+                    ).map((opt) => {
+                      const active = directorPresence.mode === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => updateDirectorPresence(opt.id)}
+                          className={`inline-flex items-center h-7 px-2.5 rounded-lg border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                            active
+                              ? isNavyGold
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold'
+                                : isEmeraldExec
+                                ? 'bg-emerald-700 text-white border-emerald-700 font-bold'
+                                : 'bg-indigo-600 text-white border-indigo-600 font-bold'
+                              : isNavyGold
+                              ? 'bg-[#091526]/75 text-slate-200 border-amber-400/25 hover:border-amber-400/55'
+                              : isDarkDisplay
+                              ? 'bg-slate-800/85 text-slate-200 border-slate-700 hover:bg-slate-700'
+                              : 'bg-white text-slate-600 border-slate-200/90 hover:bg-slate-50 hover:text-slate-900'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPresenceNoteDraft(directorPresence.customNote || '');
+                        setIsEditingPresenceNote(true);
+                      }}
+                      className={`inline-flex items-center gap-1 h-7 px-2.5 rounded-lg border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        directorPresence.customNote
+                          ? isNavyGold || isDarkDisplay
+                            ? 'bg-amber-400/15 border-amber-400/50 text-amber-200'
+                            : 'bg-amber-50 border-amber-200 text-amber-800'
+                          : isNavyGold
+                          ? 'bg-[#091526]/75 text-slate-300 border-amber-400/25 hover:border-amber-400/55'
+                          : isDarkDisplay
+                          ? 'bg-slate-800/85 text-slate-300 border-slate-700 hover:bg-slate-700'
+                          : 'bg-white text-slate-600 border-slate-200/90 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Edit3 className="h-3 w-3" />
+                      <span>
+                        {directorPresence.customNote ? 'แก้หมายเหตุ' : 'หมายเหตุ'}
+                      </span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Today's Highlight Strip + Compact Presentation Action Buttons */}
           <div
-            className={`mt-5 pt-3.5 border-t flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 text-xs ${
+            className={`mt-3.5 pt-3.5 border-t flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 text-xs ${
               isNavyGold
                 ? 'border-amber-400/20 text-slate-200'
                 : isDarkDisplay
@@ -1588,21 +2334,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => window.print()}
-                className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                  isNavyGold
-                    ? 'bg-[#091526]/80 text-slate-100 border-amber-400/30 hover:border-amber-400/60'
-                    : isDarkDisplay
-                    ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                <Printer className="h-3.5 w-3.5" />
-                <span>พิมพ์ตารางงาน</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={handleTogglePresentationFullscreen}
                 className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0"
               >
@@ -1623,10 +2354,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         </div>
       </div>
 
-      {/* Filter & View Mode Toolbar (100% Solid Opaque) */}
+      {/* Filter & View Mode Toolbar (100% Solid Opaque, Collapsible in Fullscreen Mode) */}
       <div
         ref={toolbarRef}
-        className={`rounded-2xl border p-3.5 sm:p-4 space-y-3 shadow-xs transition-colors ${
+        className={`rounded-2xl border shadow-xs transition-all ${
+          isToolbarCollapsed ? 'px-3.5 py-2' : 'p-3.5 sm:p-4 space-y-3'
+        } ${
           isNavyGold
             ? 'bg-[#0F213C] border-amber-400/40 text-white'
             : isDarkDisplay
@@ -1636,8 +2369,76 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             : 'bg-white border-slate-200/90 text-slate-900'
         }`}
       >
-        {/* Toolbar Tier 1: Layout Switcher & Timeframe Navigation */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
+        {isToolbarCollapsed ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold min-w-0">
+              <SlidersHorizontal
+                className={`h-3.5 w-3.5 shrink-0 ${
+                  isNavyGold
+                    ? 'text-amber-300'
+                    : isDarkDisplay
+                    ? 'text-sky-400'
+                    : isEmeraldExec
+                    ? 'text-emerald-600'
+                    : 'text-indigo-600'
+                }`}
+              />
+              <span className={isDarkDisplay ? 'text-slate-200' : 'text-slate-700'}>
+                แถบมุมมองและตัวกรองถูกย่อไว้:
+              </span>
+              <span
+                className={`font-bold ${
+                  isNavyGold
+                    ? 'text-amber-300'
+                    : isDarkDisplay
+                    ? 'text-white'
+                    : isEmeraldExec
+                    ? 'text-emerald-800'
+                    : 'text-indigo-700'
+                }`}
+              >
+                {layoutMode === 'grouped_by_day'
+                  ? 'แยกตารางตามวัน'
+                  : layoutMode === 'split_two_column'
+                  ? 'แบ่ง 2 คอลัมน์'
+                  : layoutMode === 'single_day'
+                  ? `เจาะจงรายวัน (${formatThaiDateDisplay(focusDate)})`
+                  : 'ตารางรวมเรียงลำดับเวลา'}
+              </span>
+              {selectedCategoryId !== 'all' && (
+                <span className="opacity-80">
+                  · หมวด: {categoryMap[selectedCategoryId]?.name || 'ทั่วไป'}
+                </span>
+              )}
+              {searchQuery.trim() && (
+                <span className="opacity-80 truncate max-w-[200px]">
+                  · ค้นหา: &ldquo;{searchQuery.trim()}&rdquo;
+                </span>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsToolbarCollapsedInFullscreen(false)}
+              className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap shrink-0 ${
+                isNavyGold
+                  ? 'bg-amber-400 text-slate-950 border-amber-400 hover:bg-amber-300'
+                  : isDarkDisplay
+                  ? 'bg-slate-800 text-sky-300 border-slate-700 hover:bg-slate-700'
+                  : isEmeraldExec
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+              }`}
+              title="แสดงแถบตัวกรองและสลับมุมมอง"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+              <span>ขยายแถบเครื่องมือ</span>
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Toolbar Tier 1: Layout Switcher & Timeframe Navigation */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
           {/* Segmented Layout Mode Tabs */}
           <div
             className={`inline-flex flex-wrap items-center gap-1 p-1 rounded-xl border ${
@@ -1786,6 +2587,26 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               </button>
             </div>
           ) : null}
+
+          {isPresentationMode && (
+            <button
+              type="button"
+              onClick={() => setIsToolbarCollapsedInFullscreen(true)}
+              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap shrink-0 ml-auto ${
+                isNavyGold
+                  ? 'bg-[#091526]/90 text-amber-300 border-amber-400/40 hover:border-amber-400/80 hover:bg-[#091526]'
+                  : isDarkDisplay
+                  ? 'bg-slate-800 text-sky-300 border-slate-700 hover:bg-slate-700'
+                  : isEmeraldExec
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/80'
+              }`}
+              title="ย่อแถบตัวกรองและสลับมุมมองเพื่อเพิ่มพื้นที่แสดงตารางงาน"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+              <span>ย่อแถบเครื่องมือ</span>
+            </button>
+          )}
         </div>
 
         {/* Toolbar Tier 2: Search, Category & Priority Filters, and Display Toggles */}
@@ -2032,6 +2853,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </label>
           </div>
         </div>
+          </>
+        )}
       </div>
 
         {/* Pinned Today's Schedule inside the Unified Solid Top Stack (when grouped_by_day has upcoming days below) */}
@@ -2040,8 +2863,22 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           renderDaySection(todayGroupInSchedule, { isPinnedInStack: true })}
       </div>
 
-      {/* Empty State */}
-      {scheduleByDate.length === 0 ? (
+      {/* Empty State (in single_day or today view with no active filters, still show Morning/Afternoon slots & Live Timeline) */}
+      {scheduleByDate.length === 0 &&
+      (layoutMode === 'single_day' || rangeMode === 'today') &&
+      !searchQuery.trim() &&
+      selectedCategoryId === 'all' &&
+      selectedPriority === 'all' ? (
+        <div className="space-y-6">
+          {renderDaySection(
+            {
+              date: layoutMode === 'single_day' ? focusDate : todayStr,
+              items: [],
+            },
+            { scrollRowsOnly: isClippedScrollActive }
+          )}
+        </div>
+      ) : scheduleByDate.length === 0 ? (
         <div
           className={`rounded-2xl border p-12 text-center space-y-3 ${surfaceCardClasses}`}
         >
