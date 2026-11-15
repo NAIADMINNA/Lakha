@@ -1429,6 +1429,30 @@ export function resolveTeamCalendarAppUrl(options?: {
   }
 }
 
+export function isLineQuotaLimitError(rawError: unknown): boolean {
+  const text = String(rawError || '').toLowerCase();
+  return (
+    text.includes('monthly limit') ||
+    text.includes('reached your monthly limit') ||
+    text.includes('โควต้าข้อความรายเดือน') ||
+    text.includes('โควต้าส่งข้อความ')
+  );
+}
+
+export function formatLineDeliveryErrorThai(
+  rawError: unknown,
+  bridgeLabel = 'LINE Messaging API'
+): string {
+  const rawStr = String(rawError || '').trim();
+  if (isLineQuotaLimitError(rawStr)) {
+    return 'โควต้าส่งข้อความอัตโนมัติ (Push/Broadcast) รายเดือนของบัญชี LINE OA เต็มแล้ว (แพ็กเกจฟรีส่งได้ 300 ข้อความ/เดือน นับตามจำนวนผู้รับ และรีเซ็ตวันที่ 1 ของเดือนถัดไป) — สมาชิกยังพิมพ์ถามบอทใน LINE เช่น "สรุปงานวันนี้" หรือ "งานพรุ่งนี้" ได้ฟรีไม่จำกัดตามปกติครับ';
+  }
+  if (!rawStr) {
+    return `ส่งผ่าน ${bridgeLabel} ไม่สำเร็จ กรุณาตรวจสอบ LINE Channel Access Token`;
+  }
+  return `ส่งผ่าน ${bridgeLabel} ไม่สำเร็จ: ${rawStr}`;
+}
+
 export function generateGoogleAppsScriptCode(
   spreadsheetId: string,
   channelAccessToken?: string,
@@ -1886,27 +1910,37 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
     return tA.localeCompare(tB);
   });
 
-  function renderAgendaCard(r, idx) {
-    var rDate = String(r[3] || cleanDateYMD).replace(/^'/, '');
+  function mapGasCategoryName(rawCat) {
+    var c = String(rawCat || '').trim();
+    if (!c || c === 'cat-work') return 'งานบริหาร & โปรเจกต์';
+    if (c === 'cat-client') return 'นัดหมาย & ประสานงาน';
+    if (c === 'cat-urgent') return 'ภารกิจเร่งด่วน';
+    if (c === 'cat-finance') return 'เอกสาร & งบประมาณ';
+    if (c === 'cat-personal') return 'ภารกิจทั่วไป';
+    return c;
+  }
+
+  function renderAgendaCard(r, isFirstInGroup) {
     var rTime = String(r[4] || '09:00').replace(/^'/, '');
-    var isPassedPhase = (rDate < todayStr) || (rDate === todayStr && rTime <= nowHM);
-    var isDone = String(r[7]) === 'completed';
+    var rawStatus = String(r[7] || 'pending');
+    var isDone = rawStatus === 'completed';
+    var isInProg = rawStatus === 'in_progress';
     var isHigh = String(r[6]) === 'high';
-    var catName = String(r[5] || 'ทั่วไป');
-    var catColor = /^#[0-9A-Fa-f]{6}$/.test(String(r[8] || '')) ? String(r[8]) : (isHigh ? '#DC2626' : '#2563EB');
+    var catName = mapGasCategoryName(r[5]);
 
     var badgeLabel = isDone
-      ? '✓ เสร็จแล้ว'
-      : (isHigh ? '🔥 ด่วนมาก' : (isPassedPhase ? '⚠️ เลยเวลา' : '⏳ รอถึงเวลา'));
+      ? 'เสร็จสิ้น'
+      : (isInProg ? 'กำลังดำเนินการ' : (isHigh ? 'ด่วนมาก' : 'ตามกำหนดการ'));
     var badgeColor = isDone
-      ? '#15803D'
-      : (isHigh ? '#B91C1C' : (isPassedPhase ? '#B45309' : '#1D4ED8'));
+      ? '#047857'
+      : (isInProg ? '#1D4ED8' : (isHigh ? '#B91C1C' : '#475569'));
     var badgeBg = isDone
-      ? '#DCFCE7'
-      : (isHigh ? '#FEE2E2' : (isPassedPhase ? '#FEF3C7' : '#DBEAFE'));
+      ? '#ECFDF5'
+      : (isInProg ? '#EFF6FF' : (isHigh ? '#FEF2F2' : '#F1F5F9'));
 
     var descText = String(r[2] || '').trim();
     var hasDesc = Boolean(descText) &&
+      descText !== String(r[1] || '').trim() &&
       descText.indexOf('เพิ่มผ่านแชท LINE') !== 0 &&
       descText.indexOf('บันทึกผ่านแชท LINE') !== 0 &&
       descText.indexOf('เพิ่มผ่านหน้าปฏิทิน') !== 0;
@@ -1922,16 +1956,16 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
             type: 'box',
             layout: 'vertical',
             backgroundColor: isDone ? '#E2E8F0' : '#0F172A',
-            cornerRadius: '6px',
-            paddingStart: '8px',
-            paddingEnd: '8px',
+            cornerRadius: '5px',
+            paddingStart: '9px',
+            paddingEnd: '9px',
             paddingTop: '3px',
             paddingBottom: '3px',
             flex: 0,
             contents: [
               {
                 type: 'text',
-                text: '⏰ ' + rTime + ' น.',
+                text: rTime + ' น.',
                 weight: 'bold',
                 size: 'xs',
                 color: isDone ? '#64748B' : '#FFFFFF'
@@ -1940,10 +1974,9 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
           },
           {
             type: 'text',
-            text: '• ' + catName,
+            text: catName,
             size: 'xxs',
-            weight: 'bold',
-            color: isDone ? '#94A3B8' : catColor,
+            color: '#64748B',
             flex: 1,
             wrap: false
           },
@@ -1951,7 +1984,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
             type: 'box',
             layout: 'vertical',
             backgroundColor: badgeBg,
-            cornerRadius: '6px',
+            cornerRadius: '5px',
             paddingStart: '7px',
             paddingEnd: '7px',
             paddingTop: '3px',
@@ -1971,9 +2004,10 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       },
       {
         type: 'text',
-        text: (idx + 1) + '. ' + String(r[1] || 'งาน'),
+        text: String(r[1] || 'รายการภารกิจ'),
         weight: 'bold',
         size: 'md',
+        lineSpacing: '3px',
         color: isDone ? '#94A3B8' : '#0F172A',
         wrap: true,
         margin: 'sm'
@@ -1982,9 +2016,15 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
 
     if (hasDesc) {
       innerContents.push({
+        type: 'separator',
+        color: '#F1F5F9',
+        margin: 'sm'
+      });
+      innerContents.push({
         type: 'text',
         text: descText,
         size: 'xs',
+        lineSpacing: '3px',
         color: isDone ? '#94A3B8' : '#475569',
         wrap: true,
         margin: 'xs'
@@ -1993,30 +2033,47 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
 
     return {
       type: 'box',
-      layout: 'horizontal',
-      margin: idx === 0 ? 'none' : 'md',
+      layout: 'vertical',
+      margin: isFirstInGroup ? 'sm' : 'md',
       backgroundColor: '#FFFFFF',
-      cornerRadius: '12px',
+      cornerRadius: '10px',
       borderWidth: '1px',
-      borderColor: (!isDone && isHigh) ? '#FCA5A5' : '#E2E8F0',
+      borderColor: (!isDone && isHigh) ? '#FECACA' : '#E2E8F0',
+      paddingAll: '13px',
+      contents: innerContents
+    };
+  }
+
+  function appendPeriodGroup(targetArr, periodLabel, items, isFirstSection) {
+    if (!items || items.length === 0) return;
+    targetArr.push({
+      type: 'box',
+      layout: 'horizontal',
+      alignItems: 'center',
+      margin: isFirstSection ? 'none' : 'lg',
       contents: [
         {
-          type: 'box',
-          layout: 'vertical',
-          width: '6px',
-          flex: 0,
-          backgroundColor: isDone ? '#CBD5E1' : catColor,
-          contents: [{ type: 'filler' }]
+          type: 'text',
+          text: periodLabel,
+          size: 'xs',
+          weight: 'bold',
+          color: '#334155',
+          flex: 1
         },
         {
-          type: 'box',
-          layout: 'vertical',
-          flex: 1,
-          paddingAll: '12px',
-          contents: innerContents
+          type: 'text',
+          text: String(items.length) + ' รายการ',
+          size: 'xxs',
+          weight: 'bold',
+          color: '#64748B',
+          align: 'end',
+          flex: 0
         }
       ]
-    };
+    });
+    for (var pi = 0; pi < items.length; pi++) {
+      targetArr.push(renderAgendaCard(items[pi], pi === 0));
+    }
   }
 
   var sectionContents = [];
@@ -2026,13 +2083,13 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       layout: 'vertical',
       paddingAll: '20px',
       backgroundColor: '#FFFFFF',
-      cornerRadius: '12px',
+      cornerRadius: '10px',
       borderWidth: '1px',
       borderColor: '#E2E8F0',
       contents: [
         {
           type: 'text',
-          text: '🎉 วันนี้ไม่มีรายการงานในตารางของคุณ',
+          text: 'ไม่มีภารกิจหรือนัดหมายในวันนี้',
           size: 'sm',
           color: '#475569',
           align: 'center',
@@ -2041,22 +2098,29 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       ]
     });
   } else {
-    sortedRows.forEach(function(r, idx) {
-      sectionContents.push(renderAgendaCard(r, idx));
+    var morningRows = sortedRows.filter(function(r) {
+      return String(r[4] || '09:00').replace(/^'/, '') < '12:00';
     });
+    var afternoonRows = sortedRows.filter(function(r) {
+      return String(r[4] || '09:00').replace(/^'/, '') >= '12:00';
+    });
+    appendPeriodGroup(sectionContents, 'ภารกิจภาคเช้า (ก่อน 12:00 น.)', morningRows, true);
+    appendPeriodGroup(sectionContents, 'ภารกิจภาคบ่าย (ตั้งแต่ 12:00 น.)', afternoonRows, morningRows.length === 0);
   }
+
+  var isPendingQuery = String(titleText || '').indexOf('งานค้าง') !== -1;
 
   return {
     type: 'flex',
-    altText: '📋 ตารางงานประจำวัน (' + fullThaiDate + ') — รวม ' + total + ' งาน',
+    altText: 'กำหนดการปฏิบัติราชการ (' + fullThaiDate + ') — รวม ' + total + ' ภารกิจ',
     contents: {
       type: 'bubble',
       size: 'mega',
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#0F172A',
-        paddingAll: '20px',
+        backgroundColor: '#0B192C',
+        paddingAll: '18px',
         contents: [
           {
             type: 'box',
@@ -2064,32 +2128,21 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
             alignItems: 'center',
             contents: [
               {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: '#06C755',
-                cornerRadius: '6px',
-                paddingStart: '8px',
-                paddingEnd: '8px',
-                paddingTop: '4px',
-                paddingBottom: '4px',
-                flex: 0,
-                contents: [
-                  {
-                    type: 'text',
-                    text: '📋 สรุปตารางงานประจำวัน',
-                    color: '#FFFFFF',
-                    size: 'xxs',
-                    weight: 'bold'
-                  }
-                ]
+                type: 'text',
+                text: isPendingQuery ? 'สรุปภารกิจค้างดำเนินการ' : 'กำหนดการปฏิบัติราชการ',
+                color: '#FBBF24',
+                size: 'xxs',
+                weight: 'bold',
+                flex: 1
               },
               {
                 type: 'text',
-                text: 'เวลา ' + nowHM + ' น.',
+                text: 'รวม ' + String(total) + ' ภารกิจ',
                 color: '#94A3B8',
                 size: 'xxs',
                 align: 'end',
-                weight: 'bold'
+                weight: 'bold',
+                flex: 0
               }
             ]
           },
@@ -2099,37 +2152,52 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
             color: '#FFFFFF',
             size: 'lg',
             weight: 'bold',
-            margin: 'md',
+            margin: 'xs',
             wrap: true
+          },
+          {
+            type: 'text',
+            text: 'สำนักบริหารแรงงานต่างด้าว',
+            color: '#94A3B8',
+            size: 'xxs',
+            margin: 'xs'
           },
           {
             type: 'box',
             layout: 'horizontal',
-            backgroundColor: '#1E293B',
-            cornerRadius: '10px',
+            backgroundColor: '#132640',
+            cornerRadius: '8px',
             paddingAll: '10px',
             margin: 'md',
-            spacing: 'sm',
+            alignItems: 'center',
             contents: [
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
-                  { type: 'text', text: 'ทั้งหมด ' + String(total), weight: 'bold', size: 'xs', color: '#38BDF8', align: 'center' }
+                  { type: 'text', text: String(total), weight: 'bold', size: 'md', color: '#FFFFFF', align: 'center' },
+                  { type: 'text', text: 'ทั้งหมด', size: 'xxs', color: '#94A3B8', align: 'center' }
                 ]
               },
+              { type: 'separator', color: '#1E3A5F' },
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
-                  { type: 'text', text: 'รอดำเนินการ ' + String(pending), weight: 'bold', size: 'xs', color: '#FBBF24', align: 'center' }
+                  { type: 'text', text: String(pending), weight: 'bold', size: 'md', color: '#FBBF24', align: 'center' },
+                  { type: 'text', text: 'รอดำเนินการ', size: 'xxs', color: '#94A3B8', align: 'center' }
                 ]
               },
+              { type: 'separator', color: '#1E3A5F' },
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
-                  { type: 'text', text: 'เสร็จแล้ว ' + String(completed), weight: 'bold', size: 'xs', color: '#34D399', align: 'center' }
+                  { type: 'text', text: String(completed), weight: 'bold', size: 'md', color: '#34D399', align: 'center' },
+                  { type: 'text', text: 'เสร็จสิ้นแล้ว', size: 'xxs', color: '#94A3B8', align: 'center' }
                 ]
               }
             ]
@@ -2139,7 +2207,7 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
       body: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#F1F5F9',
+        backgroundColor: '#F8FAFC',
         paddingAll: '16px',
         contents: sectionContents
       },
@@ -2160,15 +2228,15 @@ function buildSummaryFlexBubble(titleText, dateLabel, rowsList, customOriginUrl)
             {
               type: 'button',
               style: 'primary',
-              color: '#06C755',
+              color: '#0F172A',
               height: 'sm',
-              action: { type: 'uri', label: '📅 เปิดดูปฏิทินและจัดการงาน', uri: targetCalUrl }
+              action: { type: 'uri', label: 'เปิดตารางงานนำเสนอ (รายวัน)', uri: scheduleUrl }
             },
             {
               type: 'button',
               style: 'secondary',
               height: 'sm',
-              action: { type: 'uri', label: '📺 เปิดตารางงานนำเสนอ (รายวัน)', uri: scheduleUrl }
+              action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCalUrl }
             }
           ];
         })()
@@ -3108,12 +3176,70 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // ตรวจสอบโควต้าข้อความรายเดือนของ LINE OA (GET /v2/bot/message/quota ไม่เสียโควต้า)
+    if (payload.action === 'check_quota') {
+      var qToken = String(payload.channelAccessToken || getSavedLineToken() || '').replace(/^Bearer\\s+/i, '').trim();
+      if (!qToken || qToken.indexOf('วาง_LINE_') !== -1) {
+        return ContentService.createTextOutput(JSON.stringify({
+          status: 'error',
+          mode: 'gas_check_quota',
+          ok: false,
+          message: 'Missing LINE Channel Access Token'
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var quotaResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/quota', {
+        method: 'get',
+        headers: { 'Authorization': 'Bearer ' + qToken },
+        muteHttpExceptions: true
+      });
+      var usageResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/quota/consumption', {
+        method: 'get',
+        headers: { 'Authorization': 'Bearer ' + qToken },
+        muteHttpExceptions: true
+      });
+      var qCode = quotaResp.getResponseCode();
+      var qJson = {};
+      var uJson = {};
+      try { qJson = JSON.parse(quotaResp.getContentText() || '{}'); } catch (e) {}
+      try { uJson = JSON.parse(usageResp.getContentText() || '{}'); } catch (e) {}
+      var limitVal = typeof qJson.value === 'number' ? qJson.value : null;
+      var usedVal = typeof uJson.totalUsage === 'number' ? uJson.totalUsage : 0;
+      var remVal = limitVal !== null ? Math.max(0, limitVal - usedVal) : null;
+      return ContentService.createTextOutput(JSON.stringify({
+        status: qCode >= 200 && qCode < 300 ? 'ok' : 'error',
+        mode: 'gas_check_quota',
+        ok: qCode >= 200 && qCode < 300,
+        quotaType: qJson.type || 'none',
+        limit: limitVal,
+        totalUsage: usedVal,
+        remaining: remVal,
+        isExhausted: limitVal !== null && usedVal >= limitVal
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // รองรับการส่งแจ้งเตือน LINE Push (ทั้งเข้าห้องแชทกลุ่ม Group ID C... และรายบุคคล U...) หรือ Broadcast
     if (payload.action === 'push_line') {
+      var dedupKey = String(payload.dedupKey || '').trim();
+      if (dedupKey) {
+        try {
+          var pushCache = CacheService.getScriptCache();
+          if (pushCache.get('push_dedup_' + dedupKey)) {
+            return ContentService.createTextOutput(JSON.stringify({
+              status: 'ok',
+              mode: 'gas_push_line',
+              version: '2.7-quota-guard',
+              ok: true,
+              deduplicated: true,
+              deliveryMethod: 'deduplicated'
+            })).setMimeType(ContentService.MimeType.JSON);
+          }
+          pushCache.put('push_dedup_' + dedupKey, '1', 2700);
+        } catch (dedupErr) {}
+      }
+
       var token = String(payload.channelAccessToken || getSavedLineToken() || '').replace(/^Bearer\\s+/i, '').trim();
       var targetId = String(payload.to || '').trim();
       var explicitGroupId = String(payload.targetGroupId || '').trim();
-      var notifyMode = String(payload.teamNotificationMode || 'both');
 
       if (/^[CR][0-9a-fA-F]{32}$/.test(explicitGroupId)) {
         setSavedGroupId(explicitGroupId);
@@ -3124,6 +3250,7 @@ function doPost(e) {
       var effectiveGroupId = /^[CR][0-9a-fA-F]{32}$/.test(explicitGroupId)
         ? explicitGroupId
         : (/^[CR][0-9a-fA-F]{32}$/.test(targetId) ? targetId : getSavedGroupId());
+      var notifyMode = String(payload.teamNotificationMode || (effectiveGroupId ? 'group' : 'broadcast'));
 
       clearAllRichMenusFromLine(token, targetId);
       var msgText = payload.text || 'แจ้งเตือนตารางงานจากระบบน้องเลขา';
@@ -3503,6 +3630,8 @@ function doPost(e) {
         }];
       }
 
+      var quotaExceeded = false;
+
       // 1. ส่งเข้าห้องแชทกลุ่ม LINE ของทีม (รูปแบบที่ 2: Group Chat C... / R...) หากมีรหัสกลุ่ม
       if (effectiveGroupId && (notifyMode === 'group' || notifyMode === 'both')) {
         var grpResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
@@ -3524,11 +3653,14 @@ function doPost(e) {
           deliveryMethod = 'group_push';
         } else {
           lastError = grpResp.getContentText();
+          if (lastCode === 429 || String(lastError).toLowerCase().indexOf('monthly limit') !== -1) {
+            quotaExceeded = true;
+          }
         }
       }
 
-      // 2. ส่งเข้าแชทส่วนตัว U... (กรณีระบุ User ID)
-      if (isValidUserTarget && notifyMode !== 'group') {
+      // 2. ส่งเข้าแชทส่วนตัว U... (กรณีระบุ User ID และโควต้ายังไม่เต็ม)
+      if (!quotaExceeded && isValidUserTarget && notifyMode !== 'group') {
         var pushResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
           method: 'post',
           headers: {
@@ -3547,11 +3679,14 @@ function doPost(e) {
           deliveryMethod = sentGroupSuccess ? 'group_and_user_push' : 'push';
         } else {
           lastError = pushResp.getContentText();
+          if (lastCode === 429 || String(lastError).toLowerCase().indexOf('monthly limit') !== -1) {
+            quotaExceeded = true;
+          }
         }
       }
 
-      // 3. ส่งแบบ Broadcast หาเพื่อนทุกคน (รูปแบบที่ 1 หรือเมื่อยังไม่ได้ส่งสำเร็จ)
-      if ((!sentSuccess || (notifyMode === 'both' && !isValidUserTarget)) && notifyMode !== 'group') {
+      // 3. ส่งแบบ Broadcast หาเพื่อนทุกคน (เฉพาะเมื่อโควต้ายังไม่เต็ม)
+      if (!quotaExceeded && (!sentSuccess || (notifyMode === 'both' && !isValidUserTarget)) && notifyMode !== 'group') {
         var bcResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
           method: 'post',
           headers: {
@@ -3567,24 +3702,29 @@ function doPost(e) {
         if (lastCode >= 200 && lastCode < 300) {
           sentSuccess = true;
           deliveryMethod = sentGroupSuccess ? 'group_and_broadcast' : 'broadcast';
-        } else if (!sentSuccess) {
-          var bcTextResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
-            method: 'post',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer ' + token
-            },
-            payload: JSON.stringify({
-              messages: [{ type: 'text', text: msgText }]
-            }),
-            muteHttpExceptions: true
-          });
-          lastCode = bcTextResp.getResponseCode();
-          if (lastCode >= 200 && lastCode < 300) {
-            sentSuccess = true;
-            deliveryMethod = 'broadcast_text';
-          } else {
-            lastError = bcTextResp.getContentText();
+        } else {
+          lastError = bcResp.getContentText();
+          if (lastCode === 429 || String(lastError).toLowerCase().indexOf('monthly limit') !== -1) {
+            quotaExceeded = true;
+          } else if (!sentSuccess) {
+            var bcTextResp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/broadcast', {
+              method: 'post',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+              },
+              payload: JSON.stringify({
+                messages: [{ type: 'text', text: msgText }]
+              }),
+              muteHttpExceptions: true
+            });
+            lastCode = bcTextResp.getResponseCode();
+            if (lastCode >= 200 && lastCode < 300) {
+              sentSuccess = true;
+              deliveryMethod = 'broadcast_text';
+            } else {
+              lastError = bcTextResp.getContentText();
+            }
           }
         }
       }
@@ -3592,8 +3732,9 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: sentSuccess ? 'ok' : 'error',
         mode: 'gas_push_line',
-        version: '2.6-group-bridge',
+        version: '2.7-quota-guard',
         ok: sentSuccess,
+        quotaExceeded: quotaExceeded,
         deliveryMethod: deliveryMethod,
         detectedGroupId: effectiveGroupId || getSavedGroupId(),
         botName: botName,
@@ -3700,13 +3841,18 @@ function doPost(e) {
           /^(สรุปงานตามเวลา|เช็คเวลางาน|สรุปงานวันนี้|สรุปงาน|ดูงานวันที่|งานวันที่|ตารางงานวันที่|เช็คงานวันที่)\\s*(.+)$/i.test(userMessage)
         ) {
           var currentList = readSheetTasksForWeb();
-          var rows = currentList.map(function(t) {
-            return [t.id, t.title, t.description || '', t.date, t.time || '09:00', t.categoryId || 'cat-work', t.priority || 'medium', t.status || 'pending'];
-          });
           var queryDate = parseThaiCommand(userMessage).date || todayStr;
-          var filtered = userMessage === 'งานค้าง'
-            ? rows.filter(function(r) { return String(r[7]) !== 'completed'; })
-            : rows.filter(function(r) { return String(r[3]).replace(/^'/, '') === queryDate; });
+          var matchedTasks = userMessage === 'งานค้าง'
+            ? currentList.filter(function(t) { return String(t.status || 'pending') !== 'completed'; })
+            : currentList.filter(function(t) {
+                var s = String(t.date || '').replace(/^'/, '').slice(0, 10);
+                var e = String(t.endDate || s).replace(/^'/, '').slice(0, 10);
+                if (e < s) e = s;
+                return s <= queryDate && e >= queryDate;
+              });
+          var filtered = matchedTasks.map(function(t) {
+            return [t.id, t.title, t.description || '', t.date, t.time || '09:00', t.categoryName || t.categoryId || 'cat-work', t.priority || 'medium', t.status || 'pending'];
+          });
           var flexBubble = buildSummaryFlexBubble(
             userMessage === 'งานค้าง' ? 'สรุปงานค้างทั้งหมด' : ('สรุปตารางงานวันที่ ' + queryDate),
             queryDate,

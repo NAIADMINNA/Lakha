@@ -31,6 +31,7 @@ import {
   REMINDER_TIMING_OPTIONS,
   consolidateContinuousTasks,
   doesTaskTriggerNotification,
+  formatLineDeliveryErrorThai,
   formatLocalDateYMD,
   formatRemindMinutesLabel,
   formatSummaryCardHeaderDate,
@@ -38,6 +39,7 @@ import {
   formatThaiDateDisplay,
   generateGoogleAppsScriptCode,
   getPriorityHeaderTheme,
+  isLineQuotaLimitError,
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
@@ -125,7 +127,83 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     message: string;
   } | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<'checking' | 'fullstack' | 'static_web'>('checking');
+  const [lineQuotaInfo, setLineQuotaInfo] = useState<{
+    loading: boolean;
+    limit: number | null;
+    totalUsage: number;
+    remaining: number | null;
+    isExhausted: boolean;
+    checked: boolean;
+  }>({
+    loading: false,
+    limit: null,
+    totalUsage: 0,
+    remaining: null,
+    isExhausted: false,
+    checked: false,
+  });
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchLineQuota = async () => {
+    const token = lineSettings.channelAccessToken.trim();
+    const trimmedGas = gasUrl.trim();
+    if (token.length < 40) return;
+
+    setLineQuotaInfo((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await fetch('/api/line/quota', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelAccessToken: token }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = await res.json();
+        if (data.ok) {
+          setLineQuotaInfo({
+            loading: false,
+            limit: typeof data.limit === 'number' ? data.limit : null,
+            totalUsage: typeof data.totalUsage === 'number' ? data.totalUsage : 0,
+            remaining: typeof data.remaining === 'number' ? data.remaining : null,
+            isExhausted: Boolean(data.isExhausted),
+            checked: true,
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fallback to Google Apps Script on static hosting
+    }
+
+    if (trimmedGas.startsWith('https://script.google.com/macros/s/')) {
+      try {
+        const gasRes = await fetch(trimmedGas, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'check_quota',
+            channelAccessToken: token,
+          }),
+        });
+        const gasData = JSON.parse(await gasRes.text());
+        if (gasData && gasData.mode === 'gas_check_quota' && gasData.ok) {
+          setLineQuotaInfo({
+            loading: false,
+            limit: typeof gasData.limit === 'number' ? gasData.limit : null,
+            totalUsage: typeof gasData.totalUsage === 'number' ? gasData.totalUsage : 0,
+            remaining: typeof gasData.remaining === 'number' ? gasData.remaining : null,
+            isExhausted: Boolean(gasData.isExhausted),
+            checked: true,
+          });
+          return;
+        }
+      } catch {
+        // Ignore if older GAS version does not yet have check_quota
+      }
+    }
+
+    setLineQuotaInfo((prev) => ({ ...prev, loading: false }));
+  };
 
   const handleClearLineRichMenu = async (silent = false) => {
     const token = lineSettings.channelAccessToken.trim();
@@ -230,6 +308,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   useEffect(() => {
     if (lineSettings.channelAccessToken.trim().length >= 80) {
       handleClearLineRichMenu(true).catch(() => {});
+      fetchLineQuota().catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineSettings.channelAccessToken]);
@@ -458,10 +537,14 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             });
             setLineDiagnosticResult({ ok: true, steps });
           } else {
+            const isMonthlyFull =
+              Boolean(gasData.quotaExceeded) || isLineQuotaLimitError(gasData.lineError);
             steps.push({
               step: '3. ผลส่งข้อความเข้า LINE ผ่าน Google Apps Script Bridge',
               status: 'error',
-              detail: `Google Apps Script เชื่อมต่อได้แล้ว แต่ LINE API ปฏิเสธคำขอ (HTTP ${gasData.lineHttpCode}): ${String(gasData.lineError || 'ตรวจสอบ Channel Access Token หรือการแอดเพื่อนบอท')}`,
+              detail: isMonthlyFull
+                ? formatLineDeliveryErrorThai(gasData.lineError, 'Google Apps Script')
+                : `Google Apps Script เชื่อมต่อได้แล้ว แต่ LINE API ปฏิเสธคำขอ (HTTP ${gasData.lineHttpCode}): ${String(gasData.lineError || 'ตรวจสอบ Channel Access Token หรือการแอดเพื่อนบอท')}`,
             });
             setLineDiagnosticResult({ ok: false, steps });
           }
@@ -1081,166 +1164,187 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                   {/* Exact 1:1 Simulated LINE Phone Bubble (Daily Summary) */}
                   <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
-                    {/* Header */}
-                    <div className="bg-[#0F172A] p-5 text-white">
+                    {/* Royal Navy Executive Header */}
+                    <div className="bg-[#0B192C] p-4.5 text-white">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
-                          📋 สรุปตารางงานประจำวัน
+                        <span className="text-[11px] font-bold text-amber-400">
+                          กำหนดการปฏิบัติราชการ
                         </span>
                         <span className="text-[11px] font-mono-tabular text-slate-400 font-bold">
-                          เวลา {lineSettings.dailyDigestTime || '08:00'} น.
+                          รวม {previewDigestTasks.length} ภารกิจ
                         </span>
                       </div>
-                      <div className="text-lg font-bold mt-3 text-white leading-snug">
+                      <div className="text-lg font-bold mt-1.5 text-white leading-snug">
                         {formatSummaryCardHeaderDate(selectedPreviewDate, previewDigestTasks)}
                       </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        สำนักบริหารแรงงานต่างด้าว
+                      </div>
 
-                      {/* 3-Column Dark Summary Strip */}
-                      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] p-2.5 text-center">
+                      {/* 3-Column Executive KPI Strip */}
+                      <div className="mt-3 grid grid-cols-3 rounded-lg bg-[#132640] py-2.5 px-2 text-center">
                         <div>
-                          <span className="text-xs font-bold text-sky-400 font-mono-tabular">
-                            ทั้งหมด {previewDigestTasks.length}
-                          </span>
+                          <div className="text-base font-extrabold text-white tabular-nums">
+                            {previewDigestTasks.length}
+                          </div>
+                          <div className="text-[10px] text-slate-400">ทั้งหมด</div>
                         </div>
-                        <div className="border-x border-slate-700">
-                          <span className="text-xs font-bold text-amber-400 font-mono-tabular">
-                            รอดำเนินการ{' '}
+                        <div className="border-x border-[#1E3A5F]">
+                          <div className="text-base font-extrabold text-amber-400 tabular-nums">
                             {
                               previewDigestTasks.filter(
                                 (t) => t.status !== TaskStatus.COMPLETED
                               ).length
                             }
-                          </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400">รอดำเนินการ</div>
                         </div>
                         <div>
-                          <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
-                            เสร็จแล้ว{' '}
+                          <div className="text-base font-extrabold text-emerald-400 tabular-nums">
                             {
                               previewDigestTasks.filter(
                                 (t) => t.status === TaskStatus.COMPLETED
                               ).length
                             }
-                          </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400">เสร็จสิ้นแล้ว</div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Body: Chronological Agenda Cards */}
-                    <div className="p-4 bg-[#F1F5F9] space-y-3">
+                    {/* Body: Morning / Afternoon Grouped Agenda Cards */}
+                    <div className="p-4 bg-[#F8FAFC] space-y-3">
                       {previewDigestTasks.length > 0 ? (
-                        previewDigestTasks.map((t, idx) => {
-                          const cat = categories.find((c) => c.id === t.categoryId);
-                          const catColor = cat?.color || '#2563EB';
-                          const isDone = t.status === TaskStatus.COMPLETED;
-                          const isHigh = t.priority === TaskPriority.HIGH;
-                          const cleanDesc = (t.description || '').trim();
-                          const showDesc =
-                            Boolean(cleanDesc) &&
-                            !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
-                            !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
-                            !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
-
+                        (['morning', 'afternoon'] as const).map((period) => {
+                          const periodItems = previewDigestTasks.filter((t) =>
+                            period === 'morning' ? t.time < '12:00' : t.time >= '12:00'
+                          );
+                          if (periodItems.length === 0) return null;
                           return (
-                            <div
-                              key={`preview-card-${t.id}-${idx}`}
-                              style={{
-                                borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
-                              }}
-                              className={`bg-white border rounded-xl p-3 shadow-2xs ${
-                                !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
-                              }`}
-                            >
-                              {/* Top Row */}
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span
-                                    className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
-                                      isDone
-                                        ? 'bg-slate-200 text-slate-600'
-                                        : 'bg-[#0F172A] text-white'
-                                    }`}
-                                  >
-                                    ⏰ {t.time} น.
-                                  </span>
-                                  <span
-                                    className="text-[11px] font-bold truncate"
-                                    style={{
-                                      color: isDone ? '#94A3B8' : catColor,
-                                    }}
-                                  >
-                                    • {cat?.name || 'ทั่วไป'}
-                                  </span>
-                                </div>
-
-                                <span
-                                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                    isDone
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : isHigh
-                                      ? 'bg-rose-100 text-rose-700'
-                                      : 'bg-blue-100 text-blue-800'
-                                  }`}
-                                >
-                                  {isDone
-                                    ? '✓ เสร็จแล้ว'
-                                    : isHigh
-                                    ? '🔥 ด่วนมาก'
-                                    : '⏳ รอถึงเวลา'}
+                            <div key={period} className="space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-700">
+                                  {period === 'morning'
+                                    ? 'ภารกิจภาคเช้า (ก่อน 12:00 น.)'
+                                    : 'ภารกิจภาคบ่าย (ตั้งแต่ 12:00 น.)'}
+                                </span>
+                                <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+                                  {periodItems.length} รายการ
                                 </span>
                               </div>
+                              {periodItems.map((t, idx) => {
+                                const cat = categories.find((c) => c.id === t.categoryId);
+                                const isDone = t.status === TaskStatus.COMPLETED;
+                                const isInProg = t.status === TaskStatus.IN_PROGRESS;
+                                const isHigh = t.priority === TaskPriority.HIGH;
+                                const cleanDesc = (t.description || '').trim();
+                                const showDesc =
+                                  Boolean(cleanDesc) &&
+                                  cleanDesc !== t.title.trim() &&
+                                  !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                                  !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                                  !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+                                const hasExtraMeta =
+                                  Boolean(t.endDate && t.endDate > t.date) ||
+                                  showDesc ||
+                                  Boolean(t.assigneeName);
 
-                              {/* Full-width Title */}
-                              <div
-                                className={`text-sm font-bold mt-2 break-words leading-snug ${
-                                  isDone ? 'line-through text-slate-400' : 'text-slate-900'
-                                }`}
-                              >
-                                {idx + 1}. {t.title}
-                              </div>
+                                return (
+                                  <div
+                                    key={`preview-card-${t.id}-${idx}`}
+                                    className={`bg-white border rounded-xl p-3.5 shadow-2xs ${
+                                      !isDone && isHigh ? 'border-rose-200' : 'border-slate-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span
+                                          className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold tabular-nums shrink-0 ${
+                                            isDone
+                                              ? 'bg-slate-200 text-slate-600'
+                                              : 'bg-[#0F172A] text-white'
+                                          }`}
+                                        >
+                                          {t.time} น.
+                                        </span>
+                                        <span className="text-[11px] text-slate-500 truncate">
+                                          {cat?.name || 'ภารกิจทั่วไป'}
+                                        </span>
+                                      </div>
 
-                              {/* Multi-day Continuous Range Badge */}
-                              {t.endDate && t.endDate > t.date && (
-                                <div className="mt-1.5">
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
-                                    🗓️ ต่อเนื่อง: {formatTaskDateRangeLabel(t, 'short')}
-                                  </span>
-                                </div>
-                              )}
+                                      <span
+                                        className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                          isDone
+                                            ? 'bg-emerald-50 text-emerald-700'
+                                            : isInProg
+                                            ? 'bg-blue-50 text-blue-700'
+                                            : isHigh
+                                            ? 'bg-rose-50 text-rose-700'
+                                            : 'bg-slate-100 text-slate-600'
+                                        }`}
+                                      >
+                                        {isDone
+                                          ? 'เสร็จสิ้น'
+                                          : isInProg
+                                          ? 'กำลังดำเนินการ'
+                                          : isHigh
+                                          ? 'ด่วนมาก'
+                                          : 'ตามกำหนดการ'}
+                                      </span>
+                                    </div>
 
-                              {/* Description */}
-                              {showDesc && (
-                                <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
-                                  {cleanDesc}
-                                </div>
-                              )}
+                                    <div
+                                      className={`text-sm font-bold mt-2 break-words leading-relaxed ${
+                                        isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                      }`}
+                                    >
+                                      {t.title}
+                                    </div>
 
-                              {t.assigneeName && (
-                                <div className="text-[11px] text-slate-500 mt-1">
-                                  👤 ผู้รับผิดชอบ: {t.assigneeName}
-                                </div>
-                              )}
+                                    {hasExtraMeta && (
+                                      <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                                        {t.endDate && t.endDate > t.date && (
+                                          <div className="text-[11px] font-bold text-indigo-700">
+                                            กำหนดการต่อเนื่อง: {formatTaskDateRangeLabel(t, 'short')}
+                                          </div>
+                                        )}
+                                        {showDesc && (
+                                          <div className="text-xs text-slate-600 break-words leading-relaxed">
+                                            {cleanDesc}
+                                          </div>
+                                        )}
+                                        {t.assigneeName && (
+                                          <div className="text-[11px] text-slate-500">
+                                            ผู้รับผิดชอบ: {t.assigneeName}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
                         })
                       ) : (
                         <div className="bg-white border border-slate-200 rounded-xl p-5 text-center text-xs text-slate-600 font-semibold">
-                          🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
+                          ไม่มีภารกิจหรือนัดหมายในวันนี้
                         </div>
                       )}
                     </div>
 
                     {/* Footer */}
                     <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
+                      <div className="w-full py-2 px-3 rounded-lg bg-[#0F172A] text-white text-center text-xs font-bold">
+                        เปิดตารางงานนำเสนอ (รายวัน)
+                      </div>
                       <button
                         type="button"
                         onClick={() => onOpenDateInCalendar(selectedPreviewDate)}
-                        className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
+                        className="w-full py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-center text-xs font-semibold transition-colors"
                       >
-                        📅 เปิดดูปฏิทินและจัดการงาน
+                        เปิดดูปฏิทินและจัดการงาน
                       </button>
-                      <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
-                        📺 เปิดตารางงานนำเสนอ (รายวัน)
-                      </div>
                     </div>
                   </div>
                 </>
@@ -1649,19 +1753,19 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       {/* CASE 1: FULL DAILY / PENDING TASK SUMMARY FLEX CARD */}
                       {flex && hasDigest ? (
                         <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
-                          {/* Executive Dark Slate Header */}
-                          <div className="bg-[#0F172A] px-5 py-4 text-white">
+                          {/* Executive Royal Navy Header */}
+                          <div className="bg-[#0B192C] px-4.5 py-4 text-white">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold">
-                                {flex.badge && !flex.badge.includes('TIME-SPLIT')
-                                  ? flex.badge
-                                  : '📋 สรุปตารางงานประจำวัน'}
+                              <span className="text-[11px] font-bold text-amber-400">
+                                {flex.title && flex.title.includes('งานค้าง')
+                                  ? 'สรุปภารกิจค้างดำเนินการ'
+                                  : 'กำหนดการปฏิบัติราชการ'}
                               </span>
-                              <span className="text-[11px] font-mono-tabular text-slate-400 font-semibold">
-                                {flex.time ? `เวลา ${flex.time} น.` : flex.dateTime}
+                              <span className="text-[11px] tabular-nums text-slate-400 font-bold">
+                                รวม {flex.stats?.total ?? flex.digestItems?.length ?? 0} ภารกิจ
                               </span>
                             </div>
-                            <div className="text-base font-bold mt-2.5 text-white">
+                            <div className="text-base font-bold mt-1.5 text-white">
                               {flex.title &&
                               (flex.title.includes('ทั้งหมด') || flex.title.includes('งานค้าง'))
                                 ? flex.title
@@ -1670,139 +1774,159 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                     flex.digestItems || []
                                   )}
                             </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              สำนักบริหารแรงงานต่างด้าว
+                            </div>
 
-                            {/* Compact Dark Summary Strip */}
-                            <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#1E293B] px-3 py-2.5 text-center">
+                            {/* 3-Column Executive KPI Strip */}
+                            <div className="mt-3 grid grid-cols-3 rounded-lg bg-[#132640] py-2 px-2 text-center">
                               <div>
-                                <span className="text-xs font-bold text-sky-400 font-mono-tabular">
-                                  ทั้งหมด {flex.stats?.total ?? flex.digestItems?.length ?? 0}
-                                </span>
+                                <div className="text-sm font-extrabold text-white tabular-nums">
+                                  {flex.stats?.total ?? flex.digestItems?.length ?? 0}
+                                </div>
+                                <div className="text-[10px] text-slate-400">ทั้งหมด</div>
                               </div>
-                              <div className="border-x border-slate-700/80">
-                                <span className="text-xs font-bold text-amber-400 font-mono-tabular">
-                                  รอดำเนินการ {flex.stats?.pending ?? 0}
-                                </span>
+                              <div className="border-x border-[#1E3A5F]">
+                                <div className="text-sm font-extrabold text-amber-400 tabular-nums">
+                                  {flex.stats?.pending ?? 0}
+                                </div>
+                                <div className="text-[10px] text-slate-400">รอดำเนินการ</div>
                               </div>
                               <div>
-                                <span className="text-xs font-bold text-emerald-400 font-mono-tabular">
-                                  เสร็จแล้ว {flex.stats?.completed ?? 0}
-                                </span>
+                                <div className="text-sm font-extrabold text-emerald-400 tabular-nums">
+                                  {flex.stats?.completed ?? 0}
+                                </div>
+                                <div className="text-[10px] text-slate-400">เสร็จสิ้นแล้ว</div>
                               </div>
                             </div>
                           </div>
 
-                          {/* Chronological Executive Agenda Cards */}
-                          <div className="p-4 bg-[#F1F5F9] space-y-2.5">
+                          {/* Morning / Afternoon Executive Agenda Cards */}
+                          <div className="p-4 bg-[#F8FAFC] space-y-3">
                             {flex.digestItems && flex.digestItems.length > 0 ? (
-                              [...flex.digestItems]
-                                .sort((a, b) =>
+                              (['morning', 'afternoon'] as const).map((period) => {
+                                const sortedDigest = [...(flex.digestItems || [])].sort((a, b) =>
                                   String(a.time || '09:00').localeCompare(String(b.time || '09:00'))
-                                )
-                                .map((item, idx) => {
-                                  const isDone = item.status === 'completed';
-                                  const isHigh = item.priority === 'high';
-                                  const isPassed = item.timePhase === 'passed';
-                                  const catColor = item.categoryColor || '#2563EB';
-                                  const cleanDesc = (item.description || '').trim();
-                                  const showDesc =
-                                    Boolean(cleanDesc) &&
-                                    !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
-                                    !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
-                                    !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+                                );
+                                const periodItems = sortedDigest.filter((item) =>
+                                  period === 'morning'
+                                    ? String(item.time || '09:00') < '12:00'
+                                    : String(item.time || '09:00') >= '12:00'
+                                );
+                                if (periodItems.length === 0) return null;
 
-                                  return (
-                                    <div
-                                      key={`agenda-${item.title}-${idx}`}
-                                      style={{
-                                        borderLeft: `6px solid ${isDone ? '#CBD5E1' : catColor}`,
-                                      }}
-                                      className={`bg-white border rounded-xl p-3 shadow-2xs ${
-                                        !isDone && isHigh ? 'border-rose-300' : 'border-slate-200'
-                                      }`}
-                                    >
-                                      {/* Row 1: Time Badge + Category + Status Pill */}
-                                      <div className="flex items-center justify-between gap-2">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                          <span
-                                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold font-mono-tabular shrink-0 ${
-                                              isDone
-                                                ? 'bg-slate-200 text-slate-600'
-                                                : 'bg-[#0F172A] text-white'
-                                            }`}
-                                          >
-                                            ⏰ {item.time} น.
-                                          </span>
-                                          <span
-                                            className="text-[11px] font-bold truncate"
-                                            style={{
-                                              color: isDone ? '#94A3B8' : catColor,
-                                            }}
-                                          >
-                                            • {item.categoryName || 'ทั่วไป'}
-                                          </span>
-                                        </div>
+                                return (
+                                  <div key={period} className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-bold text-slate-700">
+                                        {period === 'morning'
+                                          ? 'ภารกิจภาคเช้า (ก่อน 12:00 น.)'
+                                          : 'ภารกิจภาคบ่าย (ตั้งแต่ 12:00 น.)'}
+                                      </span>
+                                      <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+                                        {periodItems.length} รายการ
+                                      </span>
+                                    </div>
+                                    {periodItems.map((item, idx) => {
+                                      const isDone = item.status === 'completed';
+                                      const isInProg = item.status === 'in_progress';
+                                      const isHigh = item.priority === 'high';
+                                      const cleanDesc = (item.description || '').trim();
+                                      const showDesc =
+                                        Boolean(cleanDesc) &&
+                                        cleanDesc !== (item.title || '').trim() &&
+                                        !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
+                                        !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
+                                        !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
+                                      const hasExtraMeta =
+                                        Boolean(item.endDate && item.date && item.endDate > item.date) ||
+                                        showDesc ||
+                                        Boolean(item.assigneeName);
 
-                                        <span
-                                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap shrink-0 ${
-                                            isDone
-                                              ? 'bg-emerald-100 text-emerald-800'
-                                              : isHigh
-                                              ? 'bg-rose-100 text-rose-700'
-                                              : isPassed
-                                              ? 'bg-amber-100 text-amber-800'
-                                              : 'bg-blue-100 text-blue-800'
+                                      return (
+                                        <div
+                                          key={`agenda-${item.title}-${idx}`}
+                                          className={`bg-white border rounded-xl p-3 shadow-2xs ${
+                                            !isDone && isHigh ? 'border-rose-200' : 'border-slate-200'
                                           }`}
                                         >
-                                          {isDone
-                                            ? '✓ เสร็จแล้ว'
-                                            : isHigh
-                                            ? '🔥 ด่วนมาก'
-                                            : isPassed
-                                            ? '⚠️ เลยเวลา'
-                                            : '⏳ รอถึงเวลา'}
-                                        </span>
-                                      </div>
+                                          <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <span
+                                                className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold tabular-nums shrink-0 ${
+                                                  isDone
+                                                    ? 'bg-slate-200 text-slate-600'
+                                                    : 'bg-[#0F172A] text-white'
+                                                }`}
+                                              >
+                                                {item.time} น.
+                                              </span>
+                                              <span className="text-[11px] text-slate-500 truncate">
+                                                {item.categoryName || 'ภารกิจทั่วไป'}
+                                              </span>
+                                            </div>
 
-                                      {/* Row 2: Full-width Task Title */}
-                                      <div
-                                        className={`text-sm font-bold mt-2 break-words leading-snug ${
-                                          isDone ? 'line-through text-slate-400' : 'text-slate-900'
-                                        }`}
-                                      >
-                                        {idx + 1}. {item.title}
-                                      </div>
+                                            <span
+                                              className={`px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap shrink-0 ${
+                                                isDone
+                                                  ? 'bg-emerald-50 text-emerald-700'
+                                                  : isInProg
+                                                  ? 'bg-blue-50 text-blue-700'
+                                                  : isHigh
+                                                  ? 'bg-rose-50 text-rose-700'
+                                                  : 'bg-slate-100 text-slate-600'
+                                              }`}
+                                            >
+                                              {isDone
+                                                ? 'เสร็จสิ้น'
+                                                : isInProg
+                                                ? 'กำลังดำเนินการ'
+                                                : isHigh
+                                                ? 'ด่วนมาก'
+                                                : 'ตามกำหนดการ'}
+                                            </span>
+                                          </div>
 
-                                      {/* Multi-day Continuous Range Badge */}
-                                      {item.endDate && item.date && item.endDate > item.date && (
-                                        <div className="mt-1.5">
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
-                                            🗓️ ต่อเนื่อง:{' '}
-                                            {formatTaskDateRangeLabel(
-                                              { date: item.date, endDate: item.endDate },
-                                              'short'
-                                            )}
-                                          </span>
+                                          <div
+                                            className={`text-sm font-bold mt-2 break-words leading-relaxed ${
+                                              isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                            }`}
+                                          >
+                                            {item.title}
+                                          </div>
+
+                                          {hasExtraMeta && (
+                                            <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                                              {item.endDate && item.date && item.endDate > item.date && (
+                                                <div className="text-[11px] font-bold text-indigo-700">
+                                                  กำหนดการต่อเนื่อง:{' '}
+                                                  {formatTaskDateRangeLabel(
+                                                    { date: item.date, endDate: item.endDate },
+                                                    'short'
+                                                  )}
+                                                </div>
+                                              )}
+                                              {showDesc && (
+                                                <div className="text-xs text-slate-600 break-words leading-relaxed">
+                                                  {cleanDesc}
+                                                </div>
+                                              )}
+                                              {item.assigneeName && (
+                                                <div className="text-[11px] text-slate-500">
+                                                  ผู้รับผิดชอบ: {item.assigneeName}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
                                         </div>
-                                      )}
-
-                                      {/* Row 3: Task Description (if present) */}
-                                      {showDesc && (
-                                        <div className="text-xs text-slate-600 mt-1 break-words leading-relaxed">
-                                          {cleanDesc}
-                                        </div>
-                                      )}
-
-                                      {item.assigneeName && (
-                                        <div className="text-[11px] text-slate-500 mt-1">
-                                          👤 ผู้รับผิดชอบ: {item.assigneeName}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })
                             ) : (
                               <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-600 font-semibold">
-                                🎉 วันนี้ไม่มีรายการงานในตารางของคุณ
+                                ไม่มีภารกิจหรือนัดหมายในวันนี้
                               </div>
                             )}
                           </div>
@@ -1812,10 +1936,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                             <button
                               type="button"
                               onClick={() => onOpenDateInCalendar(flex.date || todayStr)}
-                              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#06C755] text-white text-xs font-bold hover:bg-[#05b34c] transition-colors"
+                              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#0F172A] text-white text-xs font-bold hover:bg-slate-800 transition-colors"
                             >
                               <CalendarIcon className="h-3.5 w-3.5" />
-                              <span>📅 เปิดดูปฏิทินและจัดการงาน</span>
+                              <span>เปิดดูปฏิทินและจัดการงาน</span>
                             </button>
                           </div>
                         </div>
@@ -3060,6 +3184,96 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                     placeholder="วาง Channel Access Token ของ LINE OA..."
                     className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-mono-tabular text-slate-900"
                   />
+
+                  {/* Live LINE OA Monthly Quota Meter */}
+                  {lineSettings.channelAccessToken.trim().length >= 40 && (
+                    <div
+                      className={`mt-2.5 p-3 rounded-xl border text-xs space-y-2 ${
+                        lineQuotaInfo.isExhausted
+                          ? 'bg-rose-50/90 border-rose-200 text-rose-950'
+                          : 'bg-slate-50 border-slate-200 text-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <BarChart3
+                            className={`h-3.5 w-3.5 shrink-0 ${
+                              lineQuotaInfo.isExhausted ? 'text-rose-600' : 'text-indigo-600'
+                            }`}
+                          />
+                          <span>โควต้าส่งข้อความอัตโนมัติ (Push / Broadcast) รายเดือนของ LINE OA</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchLineQuota()}
+                          disabled={lineQuotaInfo.loading}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 whitespace-nowrap shrink-0 disabled:opacity-60"
+                        >
+                          <RefreshCw
+                            className={`h-3 w-3 ${lineQuotaInfo.loading ? 'animate-spin' : ''}`}
+                          />
+                          <span>เช็กโควต้าล่าสุด</span>
+                        </button>
+                      </div>
+
+                      {lineQuotaInfo.checked && lineQuotaInfo.limit !== null ? (
+                        <>
+                          <div className="flex flex-wrap items-baseline justify-between gap-2 tabular-nums">
+                            <span>
+                              ใช้ไปแล้ว{' '}
+                              <strong className="font-extrabold">
+                                {lineQuotaInfo.totalUsage.toLocaleString()}
+                              </strong>{' '}
+                              / {lineQuotaInfo.limit.toLocaleString()} ข้อความ
+                            </span>
+                            <span
+                              className={`font-bold ${
+                                lineQuotaInfo.isExhausted
+                                  ? 'text-rose-700'
+                                  : (lineQuotaInfo.remaining ?? 0) <= 40
+                                  ? 'text-amber-700'
+                                  : 'text-emerald-700'
+                              }`}
+                            >
+                              {lineQuotaInfo.isExhausted
+                                ? 'เต็มโควต้าเดือนนี้แล้ว (รีเซ็ตวันที่ 1 เดือนถัดไป)'
+                                : `คงเหลือ ${(lineQuotaInfo.remaining ?? 0).toLocaleString()} ข้อความ`}
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded-md bg-slate-200/80 overflow-hidden">
+                            <div
+                              className={`h-full transition-all ${
+                                lineQuotaInfo.isExhausted
+                                  ? 'bg-rose-600'
+                                  : (lineQuotaInfo.remaining ?? 0) <= 40
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-600'
+                              }`}
+                              style={{
+                                width: `${Math.min(
+                                  100,
+                                  Math.round(
+                                    (lineQuotaInfo.totalUsage / Math.max(1, lineQuotaInfo.limit)) *
+                                      100
+                                  )
+                                )}%`,
+                              }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-[11px] text-slate-600">
+                          แพ็กเกจฟรีของ LINE OA ส่ง Push/Broadcast ได้ 300 ข้อความ/เดือน (นับตามจำนวนคนรับในกลุ่ม) กดปุ่ม &ldquo;เช็กโควต้าล่าสุด&rdquo; เพื่อตรวจสอบยอดคงเหลือ
+                        </div>
+                      )}
+
+                      <div className="text-[11px] leading-relaxed opacity-90">
+                        {lineQuotaInfo.isExhausted
+                          ? 'การพิมพ์ถามบอทในแชทกลุ่มหรือแชทส่วนตัว เช่น "สรุปงานวันนี้", "งานพรุ่งนี้", "งานค้าง" หรือ "เพิ่มงาน ..." ใช้ระบบตอบกลับ (Reply API) ซึ่งยังใช้งานได้ฟรีไม่จำกัดตามปกติครับ'
+                          : 'คำแนะนำประหยัดโควต้า: เลือกโหมด "2. ห้องแชทกลุ่ม (C...)" ด้านล่างแทน "ส่งทั้ง 2 รูปแบบ" เพื่อลดการใช้โควต้าลงครึ่งหนึ่ง'}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* รูปแบบที่ 1 & รูปแบบที่ 2: Team Notification Mode + LINE Group ID (C...) */}
@@ -3082,16 +3296,18 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       },
                       {
                         id: 'group' as const,
-                        title: '2. ห้องแชทกลุ่ม (C...)',
-                        desc: 'ส่งรวมในกลุ่ม LINE ของทีม',
+                        title: '2. ห้องแชทกลุ่ม (แนะนำ)',
+                        desc: 'ส่งเฉพาะในกลุ่ม LINE (ประหยัดโควต้า)',
                       },
                       {
                         id: 'both' as const,
                         title: 'ส่งทั้ง 2 รูปแบบ',
-                        desc: 'เข้ากลุ่ม LINE + แชทส่วนตัว',
+                        desc: 'กลุ่ม + แชทส่วนตัว (ใช้โควต้า 2 เท่า)',
                       },
                     ].map((opt) => {
-                      const currentMode = lineSettings.teamNotificationMode || 'both';
+                      const currentMode =
+                        lineSettings.teamNotificationMode ||
+                        ((lineSettings.targetGroupId || '').trim() ? 'group' : 'broadcast');
                       const selected = currentMode === opt.id;
                       return (
                         <button

@@ -116,7 +116,7 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   channelAccessToken: '',
   targetUserId: '',
   targetGroupId: DEFAULT_LINE_GROUP_ID,
-  teamNotificationMode: 'both',
+  teamNotificationMode: 'group',
   autoSyncOnLineCommand: true,
   allowAddTaskFromLine: true,
   publicCalendarUrl: '',

@@ -178,7 +178,7 @@ function buildDailyDigestFlexMessage(
   tasksList: DigestTaskItem[],
   appUrl: string
 ) {
-  const { todayYMD, nowHM } = getBangkokNowYMDAndHM();
+  const { todayYMD } = getBangkokNowYMDAndHM();
   const cleanDateYMD = /^\d{4}-\d{2}-\d{2}/.test(String(dateStr || ''))
     ? String(dateStr).slice(0, 10)
     : todayYMD;
@@ -192,58 +192,45 @@ function buildDailyDigestFlexMessage(
   const completedCount = sortedTasks.filter((t) => t.status === 'completed').length;
   const pendingCount = totalCount - completedCount;
 
-  const classifyItemPhase = (t: DigestTaskItem): 'passed' | 'upcoming' => {
-    if (t.timePhase === 'passed' || t.timePhase === 'upcoming') {
-      return t.timePhase;
-    }
-    const itemDate = t.date || cleanDateYMD;
-    const itemTime = t.time || '09:00';
-    if (itemDate < todayYMD) return 'passed';
-    if (itemDate > todayYMD) return 'upcoming';
-    return itemTime <= nowHM ? 'passed' : 'upcoming';
-  };
-
-  const renderAgendaTaskCard = (t: DigestTaskItem, index: number) => {
+  const renderAgendaTaskCard = (t: DigestTaskItem, isFirstInGroup: boolean) => {
     const isDone = t.status === 'completed';
+    const isInProgress = t.status === 'in_progress';
     const isHigh = t.priority === 'high';
-    const isPassed = classifyItemPhase(t) === 'passed';
-    const catColor = /^#[0-9A-Fa-f]{6}$/.test(t.categoryColor || '')
-      ? t.categoryColor
-      : '#2563EB';
 
     const statusLabel = isDone
-      ? '✓ เสร็จแล้ว'
+      ? 'เสร็จสิ้น'
+      : isInProgress
+      ? 'กำลังดำเนินการ'
       : isHigh
-      ? '🔥 ด่วนมาก'
-      : isPassed
-      ? '⚠️ เลยเวลา'
-      : '⏳ รอถึงเวลา';
+      ? 'ด่วนมาก'
+      : 'ตามกำหนดการ';
 
     const statusColor = isDone
-      ? '#15803D'
+      ? '#047857'
+      : isInProgress
+      ? '#1D4ED8'
       : isHigh
       ? '#B91C1C'
-      : isPassed
-      ? '#B45309'
-      : '#1D4ED8';
+      : '#475569';
 
     const statusBg = isDone
-      ? '#DCFCE7'
+      ? '#ECFDF5'
+      : isInProgress
+      ? '#EFF6FF'
       : isHigh
-      ? '#FEE2E2'
-      : isPassed
-      ? '#FEF3C7'
-      : '#DBEAFE';
+      ? '#FEF2F2'
+      : '#F1F5F9';
 
     const cleanDesc = String(t.description || '').trim();
     const hasMeaningfulDesc =
       Boolean(cleanDesc) &&
+      cleanDesc !== String(t.title || '').trim() &&
       !cleanDesc.startsWith('เพิ่มผ่านแชท LINE') &&
       !cleanDesc.startsWith('บันทึกผ่านแชท LINE') &&
       !cleanDesc.startsWith('เพิ่มผ่านหน้าปฏิทิน');
 
     const cardContents: Record<string, unknown>[] = [
-      // Row 1: Time Badge + Category Pill + Status Badge
+      // Row 1: Crisp Time Badge + Category + Status Tag
       {
         type: 'box',
         layout: 'horizontal',
@@ -254,16 +241,16 @@ function buildDailyDigestFlexMessage(
             type: 'box',
             layout: 'vertical',
             backgroundColor: isDone ? '#E2E8F0' : '#0F172A',
-            cornerRadius: '6px',
-            paddingStart: '8px',
-            paddingEnd: '8px',
+            cornerRadius: '5px',
+            paddingStart: '9px',
+            paddingEnd: '9px',
             paddingTop: '3px',
             paddingBottom: '3px',
             flex: 0,
             contents: [
               {
                 type: 'text',
-                text: `⏰ ${t.time || '09:00'} น.`,
+                text: `${t.time || '09:00'} น.`,
                 weight: 'bold',
                 size: 'xs',
                 color: isDone ? '#64748B' : '#FFFFFF',
@@ -272,10 +259,9 @@ function buildDailyDigestFlexMessage(
           },
           {
             type: 'text',
-            text: `• ${t.categoryName || 'ทั่วไป'}`,
+            text: t.categoryName || 'ภารกิจทั่วไป',
             size: 'xxs',
-            weight: 'bold',
-            color: isDone ? '#94A3B8' : catColor,
+            color: '#64748B',
             flex: 1,
             wrap: false,
           },
@@ -283,7 +269,7 @@ function buildDailyDigestFlexMessage(
             type: 'box',
             layout: 'vertical',
             backgroundColor: statusBg,
-            cornerRadius: '6px',
+            cornerRadius: '5px',
             paddingStart: '7px',
             paddingEnd: '7px',
             paddingTop: '3px',
@@ -301,12 +287,13 @@ function buildDailyDigestFlexMessage(
           },
         ],
       },
-      // Row 2: Full-width Task Title
+      // Row 2: Full-Width Task Title
       {
         type: 'text',
-        text: `${index + 1}. ${t.title || 'รายการงาน'}`,
+        text: t.title || 'รายการภารกิจ',
         weight: 'bold',
         size: 'md',
+        lineSpacing: '3px',
         color: isDone ? '#94A3B8' : '#0F172A',
         wrap: true,
         margin: 'sm',
@@ -322,10 +309,19 @@ function buildDailyDigestFlexMessage(
         description: t.description || '',
       }) || itemStart;
 
+    const hasExtraMeta = itemEnd > itemStart || hasMeaningfulDesc || Boolean(t.assigneeName);
+    if (hasExtraMeta) {
+      cardContents.push({
+        type: 'separator',
+        color: '#F1F5F9',
+        margin: 'sm',
+      });
+    }
+
     if (itemEnd > itemStart) {
       cardContents.push({
         type: 'text',
-        text: `🗓️ ต่อเนื่อง: ${formatTaskDateRangeLabel(
+        text: `กำหนดการต่อเนื่อง: ${formatTaskDateRangeLabel(
           { date: itemStart, endDate: itemEnd },
           'short'
         )}`,
@@ -333,7 +329,7 @@ function buildDailyDigestFlexMessage(
         weight: 'bold',
         color: '#4338CA',
         wrap: true,
-        margin: 'xs',
+        margin: 'sm',
       });
     }
 
@@ -342,6 +338,7 @@ function buildDailyDigestFlexMessage(
         type: 'text',
         text: cleanDesc,
         size: 'xs',
+        lineSpacing: '3px',
         color: isDone ? '#94A3B8' : '#475569',
         wrap: true,
         margin: 'xs',
@@ -351,7 +348,7 @@ function buildDailyDigestFlexMessage(
     if (t.assigneeName) {
       cardContents.push({
         type: 'text',
-        text: `👤 ผู้รับผิดชอบ: ${t.assigneeName}`,
+        text: `ผู้รับผิดชอบ: ${t.assigneeName}`,
         size: 'xxs',
         color: '#64748B',
         margin: 'xs',
@@ -361,31 +358,53 @@ function buildDailyDigestFlexMessage(
 
     return {
       type: 'box',
-      layout: 'horizontal',
-      margin: index === 0 ? 'none' : 'md',
+      layout: 'vertical',
+      margin: isFirstInGroup ? 'sm' : 'md',
       backgroundColor: '#FFFFFF',
-      cornerRadius: '12px',
+      cornerRadius: '10px',
       borderWidth: '1px',
-      borderColor: !isDone && isHigh ? '#FCA5A5' : '#E2E8F0',
+      borderColor: !isDone && isHigh ? '#FECACA' : '#E2E8F0',
+      paddingAll: '13px',
+      contents: cardContents,
+    };
+  };
+
+  const buildPeriodSection = (
+    periodTitle: string,
+    items: DigestTaskItem[],
+    isFirstSection: boolean
+  ): unknown[] => {
+    if (items.length === 0) return [];
+    const headerBox = {
+      type: 'box',
+      layout: 'horizontal',
+      alignItems: 'center',
+      margin: isFirstSection ? 'none' : 'lg',
       contents: [
         {
-          type: 'box',
-          layout: 'vertical',
-          width: '6px',
-          flex: 0,
-          backgroundColor: isDone ? '#CBD5E1' : catColor,
-          contents: [{ type: 'filler' }],
+          type: 'text',
+          text: periodTitle,
+          size: 'xs',
+          weight: 'bold',
+          color: '#334155',
+          flex: 1,
         },
         {
-          type: 'box',
-          layout: 'vertical',
-          flex: 1,
-          paddingAll: '12px',
-          contents: cardContents,
+          type: 'text',
+          text: `${items.length} รายการ`,
+          size: 'xxs',
+          weight: 'bold',
+          color: '#64748B',
+          align: 'end',
+          flex: 0,
         },
       ],
     };
+    return [headerBox, ...items.map((t, idx) => renderAgendaTaskCard(t, idx === 0))];
   };
+
+  const morningItems = sortedTasks.filter((t) => String(t.time || '09:00') < '12:00');
+  const afternoonItems = sortedTasks.filter((t) => String(t.time || '09:00') >= '12:00');
 
   const agendaCards: unknown[] =
     totalCount === 0
@@ -395,13 +414,13 @@ function buildDailyDigestFlexMessage(
             layout: 'vertical',
             paddingAll: '20px',
             backgroundColor: '#FFFFFF',
-            cornerRadius: '12px',
+            cornerRadius: '10px',
             borderWidth: '1px',
             borderColor: '#E2E8F0',
             contents: [
               {
                 type: 'text',
-                text: '🎉 วันนี้ไม่มีรายการงานในตารางของคุณ',
+                text: 'ไม่มีภารกิจหรือนัดหมายในวันนี้',
                 size: 'sm',
                 color: '#475569',
                 align: 'center',
@@ -410,7 +429,14 @@ function buildDailyDigestFlexMessage(
             ],
           },
         ]
-      : sortedTasks.map((t, idx) => renderAgendaTaskCard(t, idx));
+      : [
+          ...buildPeriodSection('ภารกิจภาคเช้า (ก่อน 12:00 น.)', morningItems, true),
+          ...buildPeriodSection(
+            'ภารกิจภาคบ่าย (ตั้งแต่ 12:00 น.)',
+            afternoonItems,
+            morningItems.length === 0
+          ),
+        ];
 
   const scheduleBoardUrl = appUrl.includes('section=calendar')
     ? appUrl.replace('section=calendar', 'section=schedule')
@@ -418,15 +444,15 @@ function buildDailyDigestFlexMessage(
 
   return {
     type: 'flex',
-    altText: `📋 ตารางงานประจำวัน (${readableDate}) — รวม ${totalCount} งาน`,
+    altText: `กำหนดการปฏิบัติราชการ (${readableDate}) — รวม ${totalCount} ภารกิจ`,
     contents: {
       type: 'bubble',
       size: 'mega',
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: '#0F172A',
-        paddingAll: '20px',
+        backgroundColor: '#0B192C',
+        paddingAll: '18px',
         contents: [
           {
             type: 'box',
@@ -434,32 +460,21 @@ function buildDailyDigestFlexMessage(
             alignItems: 'center',
             contents: [
               {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: '#06C755',
-                cornerRadius: '6px',
-                paddingStart: '8px',
-                paddingEnd: '8px',
-                paddingTop: '4px',
-                paddingBottom: '4px',
-                flex: 0,
-                contents: [
-                  {
-                    type: 'text',
-                    text: '📋 สรุปตารางงานประจำวัน',
-                    color: '#FFFFFF',
-                    size: 'xxs',
-                    weight: 'bold',
-                  },
-                ],
+                type: 'text',
+                text: 'กำหนดการปฏิบัติราชการ',
+                color: '#FBBF24',
+                size: 'xxs',
+                weight: 'bold',
+                flex: 1,
               },
               {
                 type: 'text',
-                text: `เวลา ${nowHM} น.`,
+                text: `รวม ${totalCount} ภารกิจ`,
                 color: '#94A3B8',
                 size: 'xxs',
                 align: 'end',
                 weight: 'bold',
+                flex: 0,
               },
             ],
           },
@@ -469,56 +484,95 @@ function buildDailyDigestFlexMessage(
             color: '#FFFFFF',
             size: 'lg',
             weight: 'bold',
-            margin: 'md',
+            margin: 'xs',
             wrap: true,
+          },
+          {
+            type: 'text',
+            text: 'สำนักบริหารแรงงานต่างด้าว',
+            color: '#94A3B8',
+            size: 'xxs',
+            margin: 'xs',
           },
           {
             type: 'box',
             layout: 'horizontal',
-            backgroundColor: '#1E293B',
-            cornerRadius: '10px',
+            backgroundColor: '#132640',
+            cornerRadius: '8px',
             paddingAll: '10px',
             margin: 'md',
-            spacing: 'sm',
+            alignItems: 'center',
             contents: [
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
                   {
                     type: 'text',
-                    text: `ทั้งหมด ${totalCount}`,
-                    size: 'xs',
+                    text: String(totalCount),
+                    size: 'md',
                     weight: 'bold',
-                    color: '#38BDF8',
+                    color: '#FFFFFF',
+                    align: 'center',
+                  },
+                  {
+                    type: 'text',
+                    text: 'ทั้งหมด',
+                    size: 'xxs',
+                    color: '#94A3B8',
                     align: 'center',
                   },
                 ],
               },
               {
+                type: 'separator',
+                color: '#1E3A5F',
+              },
+              {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
                   {
                     type: 'text',
-                    text: `รอดำเนินการ ${pendingCount}`,
-                    size: 'xs',
+                    text: String(pendingCount),
+                    size: 'md',
                     weight: 'bold',
                     color: '#FBBF24',
                     align: 'center',
                   },
+                  {
+                    type: 'text',
+                    text: 'รอดำเนินการ',
+                    size: 'xxs',
+                    color: '#94A3B8',
+                    align: 'center',
+                  },
                 ],
+              },
+              {
+                type: 'separator',
+                color: '#1E3A5F',
               },
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
                   {
                     type: 'text',
-                    text: `เสร็จแล้ว ${completedCount}`,
-                    size: 'xs',
+                    text: String(completedCount),
+                    size: 'md',
                     weight: 'bold',
                     color: '#34D399',
+                    align: 'center',
+                  },
+                  {
+                    type: 'text',
+                    text: 'เสร็จสิ้นแล้ว',
+                    size: 'xxs',
+                    color: '#94A3B8',
                     align: 'center',
                   },
                 ],
@@ -531,7 +585,7 @@ function buildDailyDigestFlexMessage(
         type: 'box',
         layout: 'vertical',
         paddingAll: '16px',
-        backgroundColor: '#F1F5F9',
+        backgroundColor: '#F8FAFC',
         contents: agendaCards,
       },
       footer: {
@@ -546,12 +600,12 @@ function buildDailyDigestFlexMessage(
           {
             type: 'button',
             style: 'primary',
-            color: '#06C755',
+            color: '#0F172A',
             height: 'sm',
             action: {
               type: 'uri',
-              label: '📅 เปิดดูปฏิทินและจัดการงาน',
-              uri: appUrl,
+              label: 'เปิดตารางงานนำเสนอ (รายวัน)',
+              uri: scheduleBoardUrl,
             },
           },
           {
@@ -560,8 +614,8 @@ function buildDailyDigestFlexMessage(
             height: 'sm',
             action: {
               type: 'uri',
-              label: '📺 เปิดตารางงานนำเสนอ (รายวัน)',
-              uri: scheduleBoardUrl,
+              label: 'เปิดดูปฏิทินและจัดการงาน',
+              uri: appUrl,
             },
           },
         ],
@@ -2859,6 +2913,73 @@ async function startServer() {
     });
   });
 
+  const pushDedupMap = new Map<string, number>();
+  const isMonthlyQuotaMessage = (raw: unknown): boolean => {
+    const lower = String(raw || '').toLowerCase();
+    return lower.includes('monthly limit') || lower.includes('reached your monthly limit');
+  };
+  const LINE_QUOTA_EXCEEDED_THAI_MSG =
+    'โควต้าส่งข้อความอัตโนมัติ (Push/Broadcast) รายเดือนของบัญชี LINE OA เต็มแล้ว (แพ็กเกจฟรีส่งได้ 300 ข้อความ/เดือน นับตามจำนวนผู้รับ และรีเซ็ตวันที่ 1 ของเดือนถัดไป) — สมาชิกยังพิมพ์ถามบอทใน LINE เช่น "สรุปงานวันนี้" หรือ "งานพรุ่งนี้" ได้ฟรีไม่จำกัดตามปกติครับ';
+
+  app.post('/api/line/quota', async (req, res) => {
+    try {
+      const token = sanitizeToken(
+        req.body?.channelAccessToken || runtimeChannelAccessToken || ''
+      );
+      if (!token) {
+        res.status(200).json({
+          ok: false,
+          message: 'ยังไม่ได้ระบุ LINE Channel Access Token',
+        });
+        return;
+      }
+
+      const [quotaRes, usageRes] = await Promise.all([
+        fetch('https://api.line.me/v2/bot/message/quota', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch('https://api.line.me/v2/bot/message/quota/consumption', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      if (!quotaRes.ok) {
+        const errJson = await quotaRes.json().catch(() => ({}));
+        res.status(200).json({
+          ok: false,
+          message: errJson?.message || `HTTP ${quotaRes.status}`,
+        });
+        return;
+      }
+
+      const quotaData = (await quotaRes.json().catch(() => ({}))) as {
+        type?: string;
+        value?: number;
+      };
+      const usageData = (await usageRes.json().catch(() => ({}))) as {
+        totalUsage?: number;
+      };
+
+      const limit = typeof quotaData.value === 'number' ? quotaData.value : null;
+      const totalUsage = typeof usageData.totalUsage === 'number' ? usageData.totalUsage : 0;
+      const remaining = limit !== null ? Math.max(0, limit - totalUsage) : null;
+
+      res.status(200).json({
+        ok: true,
+        quotaType: quotaData.type || 'none',
+        limit,
+        totalUsage,
+        remaining,
+        isExhausted: limit !== null && totalUsage >= limit,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      res.status(200).json({ ok: false, message: msg });
+    }
+  });
+
   // Server-side proxy to send rich LINE Official Account Flex Messages or Custom Text (Push to Group/User or Broadcast)
   app.post('/api/line/push', async (req, res) => {
     try {
@@ -2918,6 +3039,27 @@ async function startServer() {
             'แสดงการ์ดแจ้งเตือนและสรุปงานบนห้องแชท LINE OA หน้าเว็บเรียบร้อยแล้ว! (หากต้องการให้เด้งเข้าแอป LINE ในมือถือจริง กรุณาวาง LINE Channel Access Token ในช่องตั้งค่า)',
         });
         return;
+      }
+
+      const dedupKey = String(req.body?.dedupKey || '').trim();
+      if (dedupKey) {
+        const nowMs = Date.now();
+        for (const [k, ts] of pushDedupMap.entries()) {
+          if (nowMs - ts > 45 * 60 * 1000) {
+            pushDedupMap.delete(k);
+          }
+        }
+        const prevSentAt = pushDedupMap.get(dedupKey);
+        if (prevSentAt && nowMs - prevSentAt < 45 * 60 * 1000) {
+          res.status(200).json({
+            ok: true,
+            simulated: false,
+            deduplicated: true,
+            message: 'แจ้งเตือนรายการนี้ถูกส่งเข้า LINE ไปแล้ว (ป้องกันการส่งซ้ำเพื่อประหยัดโควต้า)',
+          });
+          return;
+        }
+        pushDedupMap.set(dedupKey, nowMs);
       }
 
       // Automatically clean up any lingering Messaging API Rich Menu in the background
@@ -2997,12 +3139,17 @@ async function startServer() {
 
       const messages = [flexMessage];
       const mode: 'broadcast' | 'group' | 'both' =
-        teamNotificationMode === 'group' || teamNotificationMode === 'broadcast'
+        teamNotificationMode === 'both'
+          ? 'both'
+          : teamNotificationMode === 'group' || teamNotificationMode === 'broadcast'
           ? teamNotificationMode
-          : 'both';
+          : effectiveGroupId
+          ? 'group'
+          : 'broadcast';
 
       let sentToGroupOk = false;
       let groupErrorDetail = '';
+      let quotaExceeded = false;
 
       // 1. Send to LINE Group Chat (Format 2: Group ID C... or Room ID R...) if configured/detected
       if (effectiveGroupId && (mode === 'group' || mode === 'both')) {
@@ -3024,20 +3171,24 @@ async function startServer() {
           const groupErrJson = await groupPushRes.json().catch(() => ({}));
           groupErrorDetail = groupErrJson?.message || `HTTP ${groupPushRes.status}`;
 
-          // Fallback plain text to Group Chat
-          const groupTextRes = await fetch('https://api.line.me/v2/bot/message/push', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              to: effectiveGroupId,
-              messages: [fallbackTextMessage],
-            }),
-          });
-          if (groupTextRes.ok) {
-            sentToGroupOk = true;
+          if (groupPushRes.status === 429 || isMonthlyQuotaMessage(groupErrorDetail)) {
+            quotaExceeded = true;
+          } else {
+            // Fallback plain text to Group Chat (only when not HTTP 429 quota exhaustion)
+            const groupTextRes = await fetch('https://api.line.me/v2/bot/message/push', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                to: effectiveGroupId,
+                messages: [fallbackTextMessage],
+              }),
+            });
+            if (groupTextRes.ok) {
+              sentToGroupOk = true;
+            }
           }
         }
 
@@ -3056,7 +3207,17 @@ async function startServer() {
         }
       }
 
-      // 2. Send to specific 1-on-1 User ID (U...) if specified and not purely broadcast
+      if (quotaExceeded) {
+        res.status(200).json({
+          ok: false,
+          simulated: true,
+          quotaExceeded: true,
+          message: LINE_QUOTA_EXCEEDED_THAI_MSG,
+        });
+        return;
+      }
+
+      // 2. Send to specific 1-on-1 User ID (U...) if specified and not purely group
       let pushErrorDetail = groupErrorDetail;
       if (effectiveUserId && mode !== 'group') {
         const pushRes = await fetch('https://api.line.me/v2/bot/message/push', {
@@ -3093,6 +3254,16 @@ async function startServer() {
         const pushErrJson = await pushRes.json().catch(() => ({}));
         pushErrorDetail = pushErrJson?.message || `HTTP ${pushRes.status}`;
 
+        if (pushRes.status === 429 || isMonthlyQuotaMessage(pushErrorDetail)) {
+          res.status(200).json({
+            ok: false,
+            simulated: true,
+            quotaExceeded: true,
+            message: LINE_QUOTA_EXCEEDED_THAI_MSG,
+          });
+          return;
+        }
+
         // Retry Push with plain text in case Flex JSON had any issue
         const pushTextRes = await fetch('https://api.line.me/v2/bot/message/push', {
           method: 'POST',
@@ -3118,6 +3289,17 @@ async function startServer() {
         }
       }
 
+      if (mode === 'group' && !sentToGroupOk) {
+        res.status(200).json({
+          ok: false,
+          simulated: true,
+          message: `ไม่สามารถส่งเข้าห้องแชทกลุ่ม LINE ได้ (${
+            groupErrorDetail || 'ตรวจสอบรหัส Group ID C...'
+          }) — กรุณาตรวจสอบว่าเชิญบอทเข้ากลุ่มแล้ว`,
+        });
+        return;
+      }
+
       // 3. Fallback / Format 1: Broadcast API (sends to all 1-on-1 friends of the LINE OA)
       const broadcastRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
         method: 'POST',
@@ -3132,6 +3314,29 @@ async function startServer() {
 
       if (!broadcastRes.ok) {
         const errData = await broadcastRes.json().catch(() => ({}));
+        if (broadcastRes.status === 429 || isMonthlyQuotaMessage(errData?.message)) {
+          if (sentToGroupOk) {
+            res.status(200).json({
+              ok: true,
+              simulated: false,
+              mode: 'group_push',
+              detectedGroupId: effectiveGroupId,
+              message: `ส่งการ์ดแจ้งเตือนเข้า "ห้องแชทกลุ่ม LINE ของทีม" (${effectiveGroupId.slice(
+                0,
+                8
+              )}...) สำเร็จแล้ว! (ส่วน Broadcast ส่วนตัวเต็มโควต้ารายเดือนแล้ว)`,
+            });
+            return;
+          }
+          res.status(200).json({
+            ok: false,
+            simulated: true,
+            quotaExceeded: true,
+            message: LINE_QUOTA_EXCEEDED_THAI_MSG,
+          });
+          return;
+        }
+
         const broadcastTextRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
           method: 'POST',
           headers: {
@@ -3281,6 +3486,44 @@ async function startServer() {
           botInfo.displayName || 'ไม่ระบุ'
         }" (LINE ID บอท: ${botInfo.basicId || '-'})`,
       });
+
+      // Step 1.5: Check Monthly Push/Broadcast Quota
+      try {
+        const [qRes, uRes] = await Promise.all([
+          fetch('https://api.line.me/v2/bot/message/quota', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch('https://api.line.me/v2/bot/message/quota/consumption', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        if (qRes.ok) {
+          const qData = (await qRes.json().catch(() => ({}))) as {
+            type?: string;
+            value?: number;
+          };
+          const uData = (await uRes.json().catch(() => ({}))) as {
+            totalUsage?: number;
+          };
+          const limitVal = typeof qData.value === 'number' ? qData.value : null;
+          const usedVal = typeof uData.totalUsage === 'number' ? uData.totalUsage : 0;
+          if (limitVal !== null) {
+            const remVal = Math.max(0, limitVal - usedVal);
+            steps.push({
+              step: '1.5 ตรวจสอบโควต้าส่งข้อความรายเดือนของ LINE OA',
+              status: remVal === 0 ? 'error' : remVal <= 40 ? 'warn' : 'ok',
+              detail:
+                remVal === 0
+                  ? `โควต้ารายเดือนเต็มแล้ว (${usedVal} / ${limitVal} ข้อความ · คงเหลือ 0) — จะรีเซ็ตใหม่วันที่ 1 ของเดือนถัดไป แต่การพิมพ์ถามบอทใน LINE (เช่น "สรุปงานวันนี้") ยังใช้ได้ฟรีไม่จำกัดตามปกติ`
+                  : `ใช้ไปแล้ว ${usedVal} / ${limitVal} ข้อความ (คงเหลือ ${remVal} ข้อความในเดือนนี้ · นับตามจำนวนคนรับ)`,
+            });
+          }
+        }
+      } catch {
+        // Ignore quota lookup failure in diagnostics
+      }
 
       // Step 2: Check Group ID (Format 2: Team Group Chat) & User ID (Format 1: Broadcast / 1-on-1)
       const isValidGroup = /^[CR][0-9a-fA-F]{32}$/.test(rawGroupId);

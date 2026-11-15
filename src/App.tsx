@@ -63,11 +63,13 @@ import {
 } from './services/sheetsService';
 import {
   doesTaskTriggerNotification,
+  formatLineDeliveryErrorThai,
   formatLocalDateYMD,
   formatLocalTimeHM,
   formatRemindMinutesLabel,
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
+  isLineQuotaLimitError,
   isTaskActiveOnDate,
   parseLineChatMessage,
   renderCustomLineMessage,
@@ -1530,16 +1532,23 @@ export default function App() {
           spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
           date: task.date,
         });
+        const effectiveNotifyMode =
+          lineSettings.teamNotificationMode ||
+          ((lineSettings.targetGroupId || '').trim() ? 'group' : 'broadcast');
+        const autoDedupKey = !isManualTrigger
+          ? `task-remind-${task.id}-${formatLocalDateYMD()}-${task.time || '09:00'}`
+          : undefined;
         let handledByServer = false;
         try {
           const res = await fetch('/api/line/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              dedupKey: autoDedupKey,
               channelAccessToken: lineSettings.channelAccessToken,
               to: lineSettings.targetUserId,
               targetGroupId: lineSettings.targetGroupId || '',
-              teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+              teamNotificationMode: effectiveNotifyMode,
               text: reminderText,
               taskTitle: task.title,
               description: includeDesc ? task.description || '' : '',
@@ -1570,7 +1579,11 @@ export default function App() {
               deliveryChannel = 'line_messaging_api';
               deliveryStatus = 'delivered';
             }
-            apiNotice = data.message || '';
+            apiNotice = data.message
+              ? isLineQuotaLimitError(data.message)
+                ? formatLineDeliveryErrorThai(data.message)
+                : String(data.message)
+              : '';
           }
         } catch {
           handledByServer = false;
@@ -1581,10 +1594,11 @@ export default function App() {
           if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
             const gasPayload = JSON.stringify({
               action: 'push_line',
+              dedupKey: autoDedupKey,
               channelAccessToken: lineSettings.channelAccessToken.trim(),
               to: lineSettings.targetUserId.trim(),
               targetGroupId: (lineSettings.targetGroupId || '').trim(),
-              teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+              teamNotificationMode: effectiveNotifyMode,
               text: reminderText,
               taskTitle: task.title,
               description: includeDesc ? task.description || '' : '',
@@ -1624,7 +1638,10 @@ export default function App() {
                   '⚠️ ลิงก์ Google Apps Script ของคุณยังเป็นโค้ดเวอร์ชันเก่า จึงยังไม่ได้ส่งเข้าแอป LINE จริง — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับแล้วกด Deploy > New version';
               } else {
                 deliveryStatus = 'simulated';
-                apiNotice = String(gasData.lineError || 'ไม่สามารถส่งเข้า LINE ผ่าน Apps Script ได้');
+                apiNotice = formatLineDeliveryErrorThai(
+                  gasData.lineError,
+                  'Google Apps Script'
+                );
               }
             } catch {
               try {
@@ -1797,16 +1814,21 @@ export default function App() {
                 });
                 (async () => {
                 let sentViaServer = false;
+                const morningDedupKey = `morning-digest-${currentBangkokYMD}`;
+                const effectiveNotifyMode =
+                  lineSettings.teamNotificationMode ||
+                  ((lineSettings.targetGroupId || '').trim() ? 'group' : 'broadcast');
                 if (lineSettings.channelAccessToken.trim()) {
                   try {
                     const res = await fetch('/api/line/push', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
+                        dedupKey: morningDedupKey,
                         channelAccessToken: lineSettings.channelAccessToken,
                         to: lineSettings.targetUserId,
                         targetGroupId: (lineSettings.targetGroupId || '').trim(),
-                        teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                        teamNotificationMode: effectiveNotifyMode,
                         text: parsedDigest.replyText,
                         date: currentBangkokYMD,
                         dateTime: `${currentBangkokYMD} · สรุปตอนเช้า ${currentBangkokHM} น.`,
@@ -1830,10 +1852,11 @@ export default function App() {
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify({
                           action: 'push_line',
+                          dedupKey: morningDedupKey,
                           channelAccessToken: lineSettings.channelAccessToken.trim(),
                           to: lineSettings.targetUserId.trim(),
                           targetGroupId: (lineSettings.targetGroupId || '').trim(),
-                          teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                          teamNotificationMode: effectiveNotifyMode,
                           text: parsedDigest.replyText,
                           date: currentBangkokYMD,
                           dateTime: `${currentBangkokYMD} · สรุปตอนเช้า ${currentBangkokHM} น.`,
@@ -3313,6 +3336,9 @@ export default function App() {
         spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
         date: todayStr,
       });
+      const effectiveNotifyMode =
+        lineSettings.teamNotificationMode ||
+        ((lineSettings.targetGroupId || '').trim() ? 'group' : 'broadcast');
       let handledByServer = false;
       try {
         const res = await fetch('/api/line/push', {
@@ -3322,7 +3348,7 @@ export default function App() {
             channelAccessToken: lineSettings.channelAccessToken,
             to: lineSettings.targetUserId,
             targetGroupId: (lineSettings.targetGroupId || '').trim(),
-            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+            teamNotificationMode: effectiveNotifyMode,
             text: summaryText,
             date: todayStr,
             dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
@@ -3336,7 +3362,9 @@ export default function App() {
           const data = await res.json();
           apiOk = Boolean(data.ok);
           if (data.message) {
-            statusMessage = data.message;
+            statusMessage = isLineQuotaLimitError(data.message)
+              ? formatLineDeliveryErrorThai(data.message)
+              : String(data.message);
           }
         }
       } catch {
@@ -3351,7 +3379,7 @@ export default function App() {
             channelAccessToken: lineSettings.channelAccessToken.trim(),
             to: lineSettings.targetUserId.trim(),
             targetGroupId: (lineSettings.targetGroupId || '').trim(),
-            teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+            teamNotificationMode: effectiveNotifyMode,
             text: summaryText,
             date: todayStr,
             dateTime: `${todayStr} · ณ ${nowTimeHM} น.`,
@@ -3382,9 +3410,10 @@ export default function App() {
                 '⚠️ ลิงก์ Google Apps Script ของคุณยังเป็นโค้ดเวอร์ชันเก่า จึงยังไม่ได้ส่งเข้าแอป LINE จริง — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับแล้วกด Deploy > New version';
             } else {
               apiOk = false;
-              statusMessage = `ส่งผ่าน Google Apps Script ไม่สำเร็จ: ${String(
-                gasData.lineError || 'ตรวจสอบ Channel Access Token'
-              )}`;
+              statusMessage = formatLineDeliveryErrorThai(
+                gasData.lineError,
+                'Google Apps Script'
+              );
             }
           } catch {
             statusMessage = 'ส่งการ์ดสรุปตารางงานแยกตามเวลาเข้าห้องแชท LINE OA เรียบร้อยแล้ว';
@@ -3406,7 +3435,11 @@ export default function App() {
     const nextLogs = [...lineLogs, newLog];
     setLineLogs(nextLogs);
     setIsSendingPush(false);
-    showNotice('success', statusMessage, todayStr);
+    showNotice(
+      apiOk || !lineSettings.channelAccessToken.trim() ? 'success' : 'error',
+      statusMessage,
+      todayStr
+    );
   };
 
   // Category CRUD handlers
