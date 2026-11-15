@@ -118,6 +118,7 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   targetGroupId: DEFAULT_LINE_GROUP_ID,
   teamNotificationMode: 'both',
   autoSyncOnLineCommand: true,
+  allowAddTaskFromLine: true,
   publicCalendarUrl: '',
   cardFontSize: 'md',
   cardTitleWeight: 'bold',

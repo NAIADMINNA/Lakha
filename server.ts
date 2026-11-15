@@ -1078,6 +1078,8 @@ let runtimeScheduleConfig: {
   cardFontSize: 'sm' | 'md' | 'lg';
   cardTitleWeight: 'bold' | 'regular';
   cardLineSpacing: 'tight' | 'normal' | 'relaxed';
+  allowAddTaskFromLine: boolean;
+  allowAddTaskFromLineUpdatedAt: string;
 } = {
   enabled: true,
   dailyDigestEnabled: true,
@@ -1093,6 +1095,8 @@ let runtimeScheduleConfig: {
   cardFontSize: 'md',
   cardTitleWeight: 'bold',
   cardLineSpacing: 'relaxed',
+  allowAddTaskFromLine: true,
+  allowAddTaskFromLineUpdatedAt: '',
 };
 let runtimeDirectorPresence: {
   mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
@@ -2193,6 +2197,8 @@ async function startServer() {
       cardFontSize,
       cardTitleWeight,
       cardLineSpacing,
+      allowAddTaskFromLine,
+      explicitAllowAddTaskUpdate,
     } = req.body || {};
     if (typeof channelAccessToken === 'string') {
       runtimeChannelAccessToken = sanitizeToken(channelAccessToken);
@@ -2254,6 +2260,28 @@ async function startServer() {
     )
       runtimeScheduleConfig.cardLineSpacing = cardLineSpacing;
 
+    if (
+      typeof allowAddTaskFromLine === 'boolean' &&
+      (explicitAllowAddTaskUpdate === true ||
+        !runtimeScheduleConfig.allowAddTaskFromLineUpdatedAt)
+    ) {
+      runtimeScheduleConfig.allowAddTaskFromLine = allowAddTaskFromLine;
+      if (explicitAllowAddTaskUpdate === true) {
+        runtimeScheduleConfig.allowAddTaskFromLineUpdatedAt = new Date().toISOString();
+        const cleanGasForConfig = resolveCleanGasUrl(runtimeGasUrl);
+        if (cleanGasForConfig.startsWith('https://script.google.com/macros/s/')) {
+          fetch(cleanGasForConfig, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'set_config',
+              allowAddTaskFromLine,
+            }),
+          }).catch(() => {});
+        }
+      }
+    }
+
     savePersistedWorkspaceCache();
     if (runtimeChannelAccessToken) {
       purgeAllLineRichMenus(runtimeChannelAccessToken, runtimeDefaultUserId).catch(() => {});
@@ -2262,6 +2290,7 @@ async function startServer() {
       ok: true,
       detectedGroupId: runtimeDetectedGroupId || undefined,
       detectedUserId: runtimeDefaultUserId || undefined,
+      allowAddTaskFromLine: runtimeScheduleConfig.allowAddTaskFromLine,
       scheduleConfig: runtimeScheduleConfig,
     });
   });
@@ -2579,6 +2608,29 @@ async function startServer() {
             continue;
           }
 
+          // Guard: Respect admin toggle allowing/blocking task creation from LINE
+          if (runtimeScheduleConfig.allowAddTaskFromLine === false) {
+            if (runtimeChannelAccessToken && event.replyToken) {
+              await fetch('https://api.line.me/v2/bot/message/reply', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${runtimeChannelAccessToken}`,
+                },
+                body: JSON.stringify({
+                  replyToken: event.replyToken,
+                  messages: [
+                    {
+                      type: 'text',
+                      text: '⛔ ขณะนี้ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE ชั่วคราวครับ\n\n💡 คุณยังสามารถพิมพ์ "สรุปงานวันนี้", "งานพรุ่งนี้" หรือ "งานค้าง" เพื่อดูตารางงานได้ตามปกติ หรือเพิ่มนัดหมายผ่านหน้าเว็บแอปได้โดยตรงครับ',
+                    },
+                  ],
+                }),
+              }).catch(() => {});
+            }
+            continue;
+          }
+
           // Server-Authoritative Task Creation: persist directly on the server & GAS once (never via client browser polling!)
           const { todayYMD: todayStr } = getBangkokNowYMDAndHM();
           const strippedPrefix = userText
@@ -2803,6 +2855,7 @@ async function startServer() {
       events: items,
       detectedUserId: runtimeDefaultUserId || undefined,
       detectedGroupId: runtimeDetectedGroupId || undefined,
+      allowAddTaskFromLine: runtimeScheduleConfig.allowAddTaskFromLine,
     });
   });
 

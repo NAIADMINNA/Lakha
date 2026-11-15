@@ -569,6 +569,64 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
               </button>
             </div>
 
+            {/* Toggle: Allow / Disable Adding Calendar Tasks from LINE Group & OA Chat */}
+            <div
+              className={`rounded-xl border p-3.5 flex flex-wrap items-center justify-between gap-3 transition-colors ${
+                lineSettings.allowAddTaskFromLine !== false
+                  ? 'bg-emerald-50/55 border-emerald-200'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900">
+                  อนุญาตให้เพิ่มงานลงปฏิทินผ่านแชท / กลุ่ม LINE
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                  {lineSettings.allowAddTaskFromLine !== false
+                    ? 'เปิดใช้งานอยู่ — สมาชิกในกลุ่ม LINE พิมพ์ขึ้นต้นด้วย "เพิ่มงาน" หรือ "นัดหมาย" เพื่อบันทึกเข้าปฏิทินได้ทันที'
+                    : 'ปิดชั่วคราว — ระบบจะไม่สร้างรายการงานใหม่จากข้อความใน LINE แต่ยังส่งแจ้งเตือนเข้ากลุ่มและขอดูสรุปงานได้ตามปกติ'}
+                </p>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap shrink-0">
+                <input
+                  type="checkbox"
+                  checked={lineSettings.allowAddTaskFromLine !== false}
+                  onChange={(e) =>
+                    onUpdateLineSettings({
+                      ...lineSettings,
+                      allowAddTaskFromLine: e.target.checked,
+                    })
+                  }
+                  className="sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    lineSettings.allowAddTaskFromLine !== false
+                      ? 'bg-[#06C755]'
+                      : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-2xs transition-transform ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'translate-x-4.5'
+                        : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+                <span
+                  className={`text-xs font-bold ${
+                    lineSettings.allowAddTaskFromLine !== false
+                      ? 'text-emerald-800'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  {lineSettings.allowAddTaskFromLine !== false ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}
+                </span>
+              </label>
+            </div>
+
             {/* Interactive Group ID Input & Auto-Detect Box */}
             <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">

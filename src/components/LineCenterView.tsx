@@ -1559,20 +1559,59 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                   ห้องแชทแจ้งเตือน & การ์ดสรุปงาน LINE OA
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  พิมพ์สั่งเพิ่มงาน หรือกดดูสรุปงานเพื่อรับการ์ดแจ้งเตือนสีสันสดใสพร้อมสรุปยอดงาน
+                  {lineSettings.allowAddTaskFromLine !== false
+                    ? 'พิมพ์สั่งเพิ่มงาน หรือกดดูสรุปงานเพื่อรับการ์ดแจ้งเตือนสีสันสดใสพร้อมสรุปยอดงาน'
+                    : 'ขณะนี้ปิดรับการเพิ่มงานจาก LINE ชั่วคราว (ยังขอดูสรุปงานและรับแจ้งเตือนได้ตามปกติ)'}
                 </p>
               </div>
-              {hasSheet && onPullFromSheets && (
-                <button
-                  type="button"
-                  disabled={isSyncing}
-                  onClick={onPullFromSheets}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'กำลังดึงงาน...' : 'ดึงงานจาก LINE'}</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white cursor-pointer select-none whitespace-nowrap shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={lineSettings.allowAddTaskFromLine !== false}
+                    onChange={(e) =>
+                      onUpdateSettings({
+                        ...lineSettings,
+                        allowAddTaskFromLine: e.target.checked,
+                      })
+                    }
+                    className="sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'bg-[#06C755]'
+                        : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
+                        lineSettings.allowAddTaskFromLine !== false
+                          ? 'translate-x-3.5'
+                          : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                  <span className="text-xs font-semibold text-slate-800">
+                    {lineSettings.allowAddTaskFromLine !== false
+                      ? 'เพิ่มงานจาก LINE: เปิด'
+                      : 'เพิ่มงานจาก LINE: ปิด'}
+                  </span>
+                </label>
+
+                {hasSheet && onPullFromSheets && (
+                  <button
+                    type="button"
+                    disabled={isSyncing}
+                    onClick={onPullFromSheets}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'กำลังดึงงาน...' : 'ดึงงานจาก LINE'}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Colorful LINE Chat Stream with Rich Flex Summary & Notification Cards */}
@@ -2000,15 +2039,17 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               >
                 ⏳ งานค้างทั้งหมด
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  onSendChatCommand('ประชุมวางแผนโปรเจกต์ทีม พรุ่งนี้ 10:30 #สูง')
-                }
-                className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
-              >
-                + ตัวอย่างเพิ่มงานใหม่
-              </button>
+              {lineSettings.allowAddTaskFromLine !== false && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSendChatCommand('ประชุมวางแผนโปรเจกต์ทีม พรุ่งนี้ 10:30 #สูง')
+                  }
+                  className="px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold hover:bg-emerald-100 transition-colors whitespace-nowrap shrink-0"
+                >
+                  + ตัวอย่างเพิ่มงานใหม่
+                </button>
+              )}
             </div>
 
             {/* Chat Input Form */}
@@ -2020,7 +2061,11 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder='พิมพ์ "สรุปงานตามเวลา", "สรุปงานวันนี้", "สรุปงาน 28/10" หรือพิมพ์สั่งเพิ่มงาน...'
+                placeholder={
+                  lineSettings.allowAddTaskFromLine !== false
+                    ? 'พิมพ์ "สรุปงานตามเวลา", "สรุปงานวันนี้", "สรุปงาน 28/10" หรือพิมพ์สั่งเพิ่มงาน...'
+                    : 'พิมพ์ "สรุปงานตามเวลา", "สรุปงานวันนี้", "งานค้าง" (ปิดการสั่งเพิ่มงานจาก LINE ชั่วคราว)...'
+                }
                 className="flex-1 rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none"
               />
               <button
@@ -2107,7 +2152,65 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                   }
                   className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
                 />
-                <span className="text-xs font-semibold text-slate-800">เปิดใช้งาน</span>
+                <span className="text-xs font-semibold text-slate-800">เปิดแจ้งเตือน</span>
+              </label>
+            </div>
+
+            {/* Dedicated Toggle: Allow / Block Adding Tasks to Calendar from LINE */}
+            <div
+              className={`mt-3.5 rounded-xl border p-3 flex items-center justify-between gap-3 transition-colors ${
+                lineSettings.allowAddTaskFromLine !== false
+                  ? 'bg-emerald-50/60 border-emerald-200'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900">
+                  ฟังก์ชันเพิ่มงานลงปฏิทินจาก LINE (แชทส่วนตัว & กลุ่ม LINE)
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                  {lineSettings.allowAddTaskFromLine !== false
+                    ? 'เปิดอยู่ — สมาชิกสามารถพิมพ์คำสั่ง เช่น "เพิ่มงาน ประชุมพรุ่งนี้ 10:00" เพื่อบันทึกลงปฏิทินอัตโนมัติ'
+                    : 'ปิดชั่วคราว — บอทจะไม่สร้างนัดหมายใหม่จากข้อความใน LINE (ยังรับแจ้งเตือนและดูสรุปงานได้ตามปกติ)'}
+                </p>
+              </div>
+              <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap shrink-0">
+                <input
+                  type="checkbox"
+                  checked={lineSettings.allowAddTaskFromLine !== false}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      ...lineSettings,
+                      allowAddTaskFromLine: e.target.checked,
+                    })
+                  }
+                  className="sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                    lineSettings.allowAddTaskFromLine !== false
+                      ? 'bg-[#06C755]'
+                      : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-2xs transition-transform ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'translate-x-4.5'
+                        : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+                <span
+                  className={`text-xs font-bold ${
+                    lineSettings.allowAddTaskFromLine !== false
+                      ? 'text-emerald-800'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  {lineSettings.allowAddTaskFromLine !== false ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}
+                </span>
               </label>
             </div>
 

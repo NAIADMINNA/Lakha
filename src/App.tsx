@@ -600,6 +600,8 @@ export default function App() {
     }
   }, [lineLogs]);
 
+  const lastAllowAddTaskWriteMsRef = useRef<number>(0);
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.LINE_SETTINGS, JSON.stringify(lineSettings));
@@ -630,7 +632,22 @@ export default function App() {
         cardTitleWeight: lineSettings.cardTitleWeight || 'bold',
         cardLineSpacing: lineSettings.cardLineSpacing || 'relaxed',
       }),
-    }).catch(() => {});
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (
+          data &&
+          typeof data.allowAddTaskFromLine === 'boolean' &&
+          Date.now() - lastAllowAddTaskWriteMsRef.current > 2500
+        ) {
+          setLineSettings((prev) =>
+            (prev.allowAddTaskFromLine !== false) === data.allowAddTaskFromLine
+              ? prev
+              : { ...prev, allowAddTaskFromLine: data.allowAddTaskFromLine }
+          );
+        }
+      })
+      .catch(() => {});
   }, [lineSettings]);
 
   useEffect(() => {
@@ -1190,6 +1207,46 @@ export default function App() {
       setStatusBanner({ type, message, calendarDateToOpen });
     },
     []
+  );
+
+  const handleUpdateLineSettings = useCallback(
+    (nextSettings: LineSettings) => {
+      const prevAllow = lineSettings.allowAddTaskFromLine !== false;
+      const nextAllow = nextSettings.allowAddTaskFromLine !== false;
+      setLineSettings(nextSettings);
+
+      if (prevAllow !== nextAllow) {
+        lastAllowAddTaskWriteMsRef.current = Date.now();
+        fetch('/api/line/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            allowAddTaskFromLine: nextAllow,
+            explicitAllowAddTaskUpdate: true,
+          }),
+        }).catch(() => {});
+
+        const savedGasUrl = getEffectiveGasUrl();
+        if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          fetch(savedGasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'set_config',
+              allowAddTaskFromLine: nextAllow,
+            }),
+          }).catch(() => {});
+        }
+
+        showNotice(
+          nextAllow ? 'success' : 'info',
+          nextAllow
+            ? 'เปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE เรียบร้อยแล้ว'
+            : 'ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE ชั่วคราวแล้ว (ยังส่งแจ้งเตือนและขอดูสรุปงานได้ตามปกติ)'
+        );
+      }
+    },
+    [lineSettings.allowAddTaskFromLine, showNotice]
   );
 
   // Google Sign-In handler
@@ -2086,6 +2143,23 @@ export default function App() {
       const nextLogs = [...lineLogs, incomingLog, outgoingLog];
 
       if (parsed.action === 'add_task' && parsed.createdTask) {
+        if (lineSettings.allowAddTaskFromLine === false) {
+          const blockedOutgoingLog: LineMessageLog = {
+            id: `log-out-${Date.now() + 1}-${Math.random().toString(36).slice(2, 5)}`,
+            timestamp: new Date().toISOString(),
+            direction: 'outgoing_reply',
+            text: '⛔ ขณะนี้ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE อยู่ครับ\n\n💡 หากต้องการสั่งเพิ่มงานผ่าน LINE กรุณาเปิดสวิตช์ "เพิ่มงานลงปฏิทินจาก LINE" ก่อน หรือยังสามารถพิมพ์ "สรุปงานวันนี้" เพื่อดูตารางงานได้ตามปกติครับ',
+            deliveryChannel: 'simulator',
+            status: 'delivered',
+          };
+          setLineLogs([...lineLogs, incomingLog, blockedOutgoingLog]);
+          showNotice(
+            'info',
+            'ขณะนี้ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE อยู่ (สามารถกดเปิดสวิตช์ได้ทุกเมื่อ)'
+          );
+          return;
+        }
+
         const created: Task = {
           ...parsed.createdTask,
           id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -2268,6 +2342,7 @@ export default function App() {
       handleDeleteTask,
       isTaskPurgedOrDeleted,
       lineLogs,
+      lineSettings.allowAddTaskFromLine,
       lineSettings.autoSyncOnLineCommand,
       lineSettings.channelAccessToken,
       lineSettings.defaultRemindMinutes,
@@ -2350,6 +2425,16 @@ export default function App() {
         const res = await fetch('/api/line/webhook-events');
         if (!res.ok) return;
         const data = await res.json();
+        if (
+          typeof data.allowAddTaskFromLine === 'boolean' &&
+          Date.now() - lastAllowAddTaskWriteMsRef.current > 2500
+        ) {
+          setLineSettings((prev) =>
+            (prev.allowAddTaskFromLine !== false) === data.allowAddTaskFromLine
+              ? prev
+              : { ...prev, allowAddTaskFromLine: data.allowAddTaskFromLine }
+          );
+        }
         if (
           typeof data.detectedGroupId === 'string' &&
           /^[CR][0-9a-fA-F]{32}$/.test(data.detectedGroupId.trim()) &&
@@ -2938,9 +3023,9 @@ export default function App() {
         lineLogs,
         `อัปเดตสถานะงาน "${task.title}" เป็น "${
           nextStatus === TaskStatus.COMPLETED
-            ? 'เสร็จแล้ว'
+            ? 'เสร็จสิ้นแล้ว'
             : nextStatus === TaskStatus.IN_PROGRESS
-            ? 'กำลังทำ'
+            ? 'กำลังดำเนินการ'
             : 'รอดำเนินการ'
         }" เรียบร้อยแล้ว`,
         undefined,
@@ -2957,9 +3042,9 @@ export default function App() {
         'success',
         `อัปเดตสถานะงาน "${task.title}" เป็น "${
           nextStatus === TaskStatus.COMPLETED
-            ? 'เสร็จแล้ว'
+            ? 'เสร็จสิ้นแล้ว'
             : nextStatus === TaskStatus.IN_PROGRESS
-            ? 'กำลังทำ'
+            ? 'กำลังดำเนินการ'
             : 'รอดำเนินการ'
         }" เรียบร้อยแล้ว`
       );
@@ -4199,29 +4284,87 @@ export default function App() {
               </div>
             </div>
 
-            {/* Quick Natural-Language LINE Command Input Bar + 1-Click Quick Chips */}
+            {/* Quick Natural-Language LINE Command Input Bar + 1-Click Quick Chips + Enable/Disable Toggle */}
             <div className="bg-white rounded-2xl p-4 sm:px-5 border border-slate-200/90 shadow-2xs space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-6 px-2 items-center justify-center rounded-md bg-[#06C755] text-white text-[10px] font-extrabold tracking-wide">
+                    LINE
+                  </span>
+                  <span className="text-xs font-bold text-slate-800">
+                    สั่งเพิ่มงานลงปฏิทินจากแชท / กลุ่ม LINE
+                  </span>
+                  <span
+                    className={`text-[11px] font-semibold ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'text-emerald-700'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {lineSettings.allowAddTaskFromLine !== false
+                      ? '· เปิดรับคำสั่งเพิ่มงานอยู่'
+                      : '· ปิดการเพิ่มงานจาก LINE ชั่วคราว'}
+                  </span>
+                </div>
+
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={lineSettings.allowAddTaskFromLine !== false}
+                    onChange={(e) =>
+                      handleUpdateLineSettings({
+                        ...lineSettings,
+                        allowAddTaskFromLine: e.target.checked,
+                      })
+                    }
+                    className="sr-only"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'bg-[#06C755]'
+                        : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-2xs transition-transform ${
+                        lineSettings.allowAddTaskFromLine !== false
+                          ? 'translate-x-4.5'
+                          : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                  <span className="text-xs font-bold text-slate-700">
+                    {lineSettings.allowAddTaskFromLine !== false
+                      ? 'เปิดเพิ่มงานจาก LINE'
+                      : 'ปิดเพิ่มงานจาก LINE'}
+                  </span>
+                </label>
+              </div>
+
               <form
                 onSubmit={handleQuickLineSubmit}
                 className="flex flex-col md:flex-row md:items-center gap-2.5"
               >
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="inline-flex h-7 px-2 items-center justify-center rounded-lg bg-[#06C755] text-white text-[10px] font-extrabold tracking-wide">
-                    LINE
-                  </span>
-                  <span className="text-xs font-bold text-slate-800 whitespace-nowrap">
-                    สั่งงานด่วนเข้าปฏิทิน:
-                  </span>
-                </div>
                 <div className="relative flex-1">
                   <input
                     type="text"
                     value={quickLineInput}
+                    disabled={lineSettings.allowAddTaskFromLine === false}
                     onChange={(e) => setQuickLineInput(e.target.value)}
-                    placeholder='พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมผู้บริหาร พรุ่งนี้ 09:30 ห้องประชุมสำนักฯ #สูง"...'
-                    className="w-full h-10 rounded-xl border border-slate-200/90 bg-slate-50/60 focus:bg-white pl-3.5 pr-8 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#06C755] focus:outline-none transition-colors"
+                    placeholder={
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'พิมพ์ชื่องานพร้อมวันเวลา เช่น "ประชุมผู้บริหาร พรุ่งนี้ 09:30 ห้องประชุมสำนักฯ #สูง"...'
+                        : 'ขณะนี้ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE ชั่วคราว (กดเปิดสวิตช์ด้านขวาบนเพื่อใช้งาน)'
+                    }
+                    className={`w-full h-10 rounded-xl border pl-3.5 pr-8 text-sm transition-colors focus:outline-none ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'border-slate-200/90 bg-slate-50/60 focus:bg-white text-slate-900 placeholder:text-slate-400 focus:border-[#06C755]'
+                        : 'border-slate-200 bg-slate-100/80 text-slate-400 placeholder:text-slate-400 cursor-not-allowed'
+                    }`}
                   />
-                  {quickLineInput && (
+                  {quickLineInput && lineSettings.allowAddTaskFromLine !== false && (
                     <button
                       type="button"
                       onClick={() => setQuickLineInput('')}
@@ -4235,7 +4378,12 @@ export default function App() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="submit"
-                    className="inline-flex items-center justify-center gap-1.5 h-10 px-4 text-xs font-bold text-white bg-[#06C755] rounded-xl hover:bg-[#05b04b] shadow-2xs transition-all whitespace-nowrap shrink-0"
+                    disabled={lineSettings.allowAddTaskFromLine === false}
+                    className={`inline-flex items-center justify-center gap-1.5 h-10 px-4 text-xs font-bold rounded-xl shadow-2xs transition-all whitespace-nowrap shrink-0 ${
+                      lineSettings.allowAddTaskFromLine !== false
+                        ? 'text-white bg-[#06C755] hover:bg-[#05b04b]'
+                        : 'text-slate-400 bg-slate-200 cursor-not-allowed shadow-none'
+                    }`}
                   >
                     <Send className="h-3.5 w-3.5" />
                     <span>บันทึกเข้าปฏิทิน</span>
@@ -4255,31 +4403,33 @@ export default function App() {
                 </div>
               </form>
 
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="text-slate-400 font-semibold mr-1">เติมคำสั่งด่วน:</span>
-                {[
-                  'วันนี้ 09:30',
-                  'วันนี้ 13:30',
-                  'พรุ่งนี้ 09:00',
-                  'พรุ่งนี้ 13:30',
-                  'สถานที่: ห้องประชุมสำนักฯ',
-                  'สถานที่: กระทรวงแรงงาน',
-                  '#สูง',
-                ].map((chip) => (
-                  <button
-                    key={chip}
-                    type="button"
-                    onClick={() =>
-                      setQuickLineInput((prev) =>
-                        prev.trim() ? `${prev.trim()} ${chip}` : `${chip} `
-                      )
-                    }
-                    className="px-2.5 py-0.5 rounded-lg border border-slate-200/90 bg-slate-50/70 hover:bg-emerald-50 hover:border-emerald-200 text-slate-600 hover:text-emerald-800 font-medium transition-colors"
-                  >
-                    + {chip}
-                  </button>
-                ))}
-              </div>
+              {lineSettings.allowAddTaskFromLine !== false && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-slate-400 font-semibold mr-1">เติมคำสั่งด่วน:</span>
+                  {[
+                    'วันนี้ 09:30',
+                    'วันนี้ 13:30',
+                    'พรุ่งนี้ 09:00',
+                    'พรุ่งนี้ 13:30',
+                    'สถานที่: ห้องประชุมสำนักฯ',
+                    'สถานที่: กระทรวงแรงงาน',
+                    '#สูง',
+                  ].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() =>
+                        setQuickLineInput((prev) =>
+                          prev.trim() ? `${prev.trim()} ${chip}` : `${chip} `
+                        )
+                      }
+                      className="px-2.5 py-0.5 rounded-lg border border-slate-200/90 bg-slate-50/70 hover:bg-emerald-50 hover:border-emerald-200 text-slate-600 hover:text-emerald-800 font-medium transition-colors"
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Main Dashboard Split: Clean Task List (8 cols) + Shared Calendar & Categories Sidebar (4 cols) */}
@@ -4752,6 +4902,7 @@ export default function App() {
               setIsTaskModalOpen(true);
             }}
             onToggleStatus={handleToggleTaskStatus}
+            onUpdateStatus={handleUpdateTaskStatus}
             onOpenCalendarDate={handleOpenDateInCalendar}
           />
         )}
@@ -4877,7 +5028,7 @@ export default function App() {
             lastCollabSyncAt={lastCollabSyncAt}
             lineSettings={lineSettings}
             isSendingPush={isSendingPush}
-            onUpdateLineSettings={setLineSettings}
+            onUpdateLineSettings={handleUpdateLineSettings}
             onTestPushNotification={handleTestLinePush}
             onDetectGroupId={handleDetectLineGroupId}
             onOpenLineCenter={() => setActiveSection('line')}
@@ -4895,7 +5046,7 @@ export default function App() {
             lineSettings={lineSettings}
             spreadsheetId={sheetMeta?.spreadsheetId || ''}
             spreadsheetUrl={sheetMeta?.spreadsheetUrl}
-            onUpdateSettings={setLineSettings}
+            onUpdateSettings={handleUpdateLineSettings}
             onSendChatCommand={handleSendLineChatCommand}
             onTestPushNotification={handleTestLinePush}
             onTestSingleTaskNotification={(sampleTask) =>

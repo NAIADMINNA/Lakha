@@ -2493,6 +2493,20 @@ function setSavedUserId(uid) {
   } catch (err) {}
 }
 
+function getAllowAddTaskFromLine() {
+  try {
+    var val = PropertiesService.getScriptProperties().getProperty('ALLOW_ADD_TASK_FROM_LINE');
+    if (val === 'false' || val === '0') return false;
+  } catch (err) {}
+  return true;
+}
+
+function setAllowAddTaskFromLine(allowed) {
+  try {
+    PropertiesService.getScriptProperties().setProperty('ALLOW_ADD_TASK_FROM_LINE', allowed === false ? 'false' : 'true');
+  } catch (err) {}
+}
+
 function openSafeSpreadsheet() {
   try {
     if (
@@ -2989,6 +3003,17 @@ function doPost(e) {
     }
     if (payload.targetGroupId && /^[CR][0-9a-fA-F]{32}$/.test(String(payload.targetGroupId).trim())) {
       setSavedGroupId(String(payload.targetGroupId).trim());
+    }
+    if (typeof payload.allowAddTaskFromLine === 'boolean') {
+      setAllowAddTaskFromLine(payload.allowAddTaskFromLine);
+    }
+
+    if (payload.action === 'set_config') {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'ok',
+        mode: 'gas_set_config',
+        allowAddTaskFromLine: getAllowAddTaskFromLine()
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // คำสั่งลบ Rich Menu ทั้งหมดออกจาก LINE OA
@@ -3693,6 +3718,14 @@ function doPost(e) {
 
         // ในห้องแชทกลุ่ม LINE บันทึกเฉพาะข้อความที่ขึ้นต้นด้วยคำสั่งเพิ่มงานเท่านั้น (ป้องกันข้อความคุยเล่นทั่วไปกลายเป็นตารางงาน)
         if (srcGroupId && !/^(?:@[^\\s]+\\s*)?(?:น้องเลขา\\s*[:：-]?\\s*)?(เพิ่มงาน|จดงาน|บันทึกงาน|นัดหมาย|ตารางงาน|เตือน|งานใหม่)\\b/i.test(userMessage)) {
+          return;
+        }
+
+        if (!getAllowAddTaskFromLine()) {
+          replyLineMessages(replyToken, [{
+            type: 'text',
+            text: '⛔ ขณะนี้ปิดฟังก์ชันการเพิ่มงานลงปฏิทินจาก LINE ชั่วคราวครับ\\n\\n💡 คุณยังสามารถพิมพ์ "สรุปงานวันนี้", "งานพรุ่งนี้" หรือ "งานค้าง" เพื่อดูตารางงานได้ตามปกติ หรือเพิ่มนัดหมายผ่านหน้าเว็บแอปได้โดยตรงครับ'
+          }]);
           return;
         }
 

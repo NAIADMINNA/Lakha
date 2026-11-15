@@ -52,6 +52,7 @@ interface ScheduleBoardViewProps {
   onAddTaskForDate: (dateStr: string) => void;
   onEditTask: (task: Task) => void;
   onToggleStatus: (task: Task) => void;
+  onUpdateStatus?: (task: Task, nextStatus: TaskStatus) => void;
   onOpenCalendarDate: (dateStr: string) => void;
 }
 
@@ -73,7 +74,7 @@ function isExternalOffsiteTask(task: Task): boolean {
   if (/สบต\.|สำนักบริหารแรงงานต่างด้าว|ห้องประชุมเทียน/i.test(text)) {
     return false;
   }
-  return /เดินทางไป|ไปราชการ|ต่างประเทศ|ต่างจังหวัด|นอกสถานที่|ลงพื้นที่|ตรวจเยี่ยม|ศรีลังกา|ลาว|ญี่ปุ่น|กัมพูชา|เมียนมา|เวียดนาม|ร้อยเอ็ด|เชียงใหม่|ภูเก็ต|ชลบุรี|สนามบิน|ทำเนียบรัฐบาล|รัฐสภา|โรงแรม/i.test(
+  return /เดินทางไป|ไปราชการ|ไปพบ|ไปตึก|กระทรวง|ต่างประเทศ|ต่างจังหวัด|นอกสถานที่|ลงพื้นที่|ตรวจเยี่ยม|ศรีลังกา|ลาว|ญี่ปุ่น|กัมพูชา|เมียนมา|เวียดนาม|ร้อยเอ็ด|เชียงใหม่|ภูเก็ต|ชลบุรี|สนามบิน|ทำเนียบรัฐบาล|รัฐสภา|โรงแรม/i.test(
     text
   );
 }
@@ -295,6 +296,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onAddTaskForDate,
   onEditTask,
   onToggleStatus,
+  onUpdateStatus,
   onOpenCalendarDate,
 }) => {
   // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
@@ -695,17 +697,33 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     const pending = activeToday.filter((t) => t.status !== TaskStatus.COMPLETED).length;
     const completed = activeToday.length - pending;
 
-    const inProgressTask = activeToday.find((t) => {
-      if (t.status === TaskStatus.COMPLETED) return false;
-      if (t.status === TaskStatus.IN_PROGRESS) return true;
+    const explicitTodayInProgress = activeToday.find(
+      (t) => t.status === TaskStatus.IN_PROGRESS
+    );
+    const timeWindowTodayInProgress = activeToday.find((t) => {
+      if (t.status !== TaskStatus.PENDING) return false;
       if (nowTotalMins === null) return false;
       const tMins = parseHM(t.time);
       if (tMins === null) return false;
       return tMins <= nowTotalMins && nowTotalMins - tMins <= 55;
     });
+    const inProgressTask = explicitTodayInProgress || timeWindowTodayInProgress;
+
+    const explicitAnyInProgressTask = tasks
+      .filter((t) => t.status === TaskStatus.IN_PROGRESS)
+      .sort((a, b) => {
+        const aToday = isTaskActiveOnDate(a, todayStr) ? 0 : 1;
+        const bToday = isTaskActiveOnDate(b, todayStr) ? 0 : 1;
+        if (aToday !== bToday) return aToday - bToday;
+        const updatedCmp = (b.updatedAt || '').localeCompare(a.updatedAt || '');
+        if (updatedCmp !== 0) return updatedCmp;
+        const dateCmp = a.date.localeCompare(b.date);
+        if (dateCmp !== 0) return dateCmp;
+        return a.time.localeCompare(b.time);
+      })[0];
 
     const nextUpcoming = activeToday.find(
-      (t) => t.status !== TaskStatus.COMPLETED && t.time >= nowHM
+      (t) => t.status === TaskStatus.PENDING && t.time >= nowHM
     );
 
     let nextCountdownLabel = '';
@@ -740,6 +758,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       pending,
       completed,
       inProgressTask,
+      explicitAnyInProgressTask,
       nextUpcoming,
       nextCountdownLabel,
       highPriorityCount,
@@ -883,6 +902,26 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     [directorPresence.customNote, persistPresenceLocally]
   );
 
+  const handleCycleTaskStatus = useCallback(
+    (task: Task, isDone: boolean, isInProgress: boolean) => {
+      if (onUpdateStatus) {
+        if (isDone) {
+          onUpdateStatus(task, TaskStatus.PENDING);
+        } else if (isInProgress) {
+          onUpdateStatus(task, TaskStatus.COMPLETED);
+        } else {
+          onUpdateStatus(task, TaskStatus.IN_PROGRESS);
+          if (directorPresence.mode !== 'auto') {
+            updateDirectorPresence('auto');
+          }
+        }
+      } else {
+        onToggleStatus(task);
+      }
+    },
+    [onUpdateStatus, onToggleStatus, directorPresence.mode, updateDirectorPresence]
+  );
+
   const resolvedDirectorPresence = useMemo(() => {
     const multiDayOffsiteToday = todayTasksSummary.activeToday.find(
       (t) =>
@@ -890,7 +929,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         Boolean(t.endDate && t.endDate > t.date) &&
         isExternalOffsiteTask(t)
     );
-    const activeInProgress = todayTasksSummary.inProgressTask;
+    const activeInProgress =
+      todayTasksSummary.explicitAnyInProgressTask || todayTasksSummary.inProgressTask;
+
+    const formatActiveTaskDetail = (t: Task) =>
+      isTaskActiveOnDate(t, todayStr)
+        ? `${t.time} น. — ${t.title}`
+        : `${t.title} (${formatThaiDateDisplay(t.date, 'short')} · ${t.time} น.)`;
 
     let effectiveStatus: Exclude<DirectorPresenceMode, 'auto'> = 'in_office';
     let autoDetail = '';
@@ -898,13 +943,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     if (directorPresence.mode === 'auto') {
       if (activeInProgress && isExternalOffsiteTask(activeInProgress)) {
         effectiveStatus = 'offsite';
-        autoDetail = `${activeInProgress.time} น. — ${activeInProgress.title}`;
+        autoDetail = formatActiveTaskDetail(activeInProgress);
+      } else if (activeInProgress) {
+        effectiveStatus = 'in_meeting';
+        autoDetail = formatActiveTaskDetail(activeInProgress);
       } else if (multiDayOffsiteToday) {
         effectiveStatus = 'offsite';
         autoDetail = multiDayOffsiteToday.title;
-      } else if (activeInProgress) {
-        effectiveStatus = 'in_meeting';
-        autoDetail = `${activeInProgress.time} น. — ${activeInProgress.title}`;
       } else {
         effectiveStatus = 'in_office';
         if (todayTasksSummary.nextUpcoming) {
@@ -956,7 +1001,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       autoDetail,
       customNote: directorPresence.customNote,
     };
-  }, [directorPresence, todayTasksSummary]);
+  }, [directorPresence, todayTasksSummary, todayStr]);
 
   const bannerRef = useRef<HTMLDivElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
@@ -1103,12 +1148,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       const catColor = cat?.color || '#2563EB';
       const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
       const isDone = task.status === TaskStatus.COMPLETED;
+      const isAutoInProgressByTime =
+        displayDate === todayStr &&
+        !isDone &&
+        todayTasksSummary.inProgressTask?.id === task.id;
+      const isInProgress =
+        !isDone &&
+        (task.status === TaskStatus.IN_PROGRESS || isAutoInProgressByTime);
       const isHigh = task.priority === TaskPriority.HIGH;
       const isCurrentDayPassed =
-        displayDate === todayStr && task.time <= nowHM && !isDone;
+        displayDate === todayStr &&
+        task.time <= nowHM &&
+        !isDone &&
+        !isInProgress;
       const isNextUpcomingRow =
         displayDate === todayStr &&
         !isDone &&
+        !isInProgress &&
         todayTasksSummary.nextUpcoming?.id === task.id;
       const detectedVenue = extractLocationFromText(task.title, task.description);
       const displayDescription = task.description
@@ -1292,7 +1348,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           <div className="flex items-center justify-end gap-3 shrink-0">
             <button
               type="button"
-              onClick={() => onToggleStatus(task)}
+              onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
               className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
                 isLargeText ? 'text-base' : 'text-sm'
               } font-bold transition-colors whitespace-nowrap shrink-0 ${
@@ -1300,6 +1356,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                   ? isDarkDisplay
                     ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
                     : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : isInProgress
+                  ? isDarkDisplay
+                    ? 'bg-sky-950/65 border-sky-600 text-sky-300 hover:bg-sky-900/60'
+                    : isEmeraldExec
+                    ? 'bg-teal-50 border-teal-300 text-teal-900 hover:bg-teal-100/80'
+                    : 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100/80'
                   : isCurrentDayPassed
                   ? isDarkDisplay
                     ? 'bg-amber-950/60 border-amber-700 text-amber-300'
@@ -1317,6 +1379,19 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     }`}
                   />
                   <span>เสร็จสิ้นแล้ว</span>
+                </>
+              ) : isInProgress ? (
+                <>
+                  <Clock
+                    className={`h-4 w-4 ${
+                      isDarkDisplay
+                        ? 'text-sky-400'
+                        : isEmeraldExec
+                        ? 'text-teal-700'
+                        : 'text-indigo-600'
+                    }`}
+                  />
+                  <span>กำลังดำเนินการ</span>
                 </>
               ) : (
                 <>
@@ -3003,6 +3078,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     const catColor = cat?.color || '#2563EB';
                     const displayCatColor = getReadableCategoryColor(catColor, isDarkDisplay);
                     const isDone = task.status === TaskStatus.COMPLETED;
+                    const isInProgress =
+                      !isDone &&
+                      (task.status === TaskStatus.IN_PROGRESS ||
+                        (displayDate === todayStr && todayTasksSummary.inProgressTask?.id === task.id));
                     const rel = getRelativeDayLabel(displayDate, todayStr);
 
                     return (
@@ -3121,16 +3200,22 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         <td className="py-3.5 px-4 align-top whitespace-nowrap text-right">
                           <button
                             type="button"
-                            onClick={() => onToggleStatus(task)}
-                            className={`inline-flex items-center gap-1.5 text-xs font-semibold ${
+                            onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
+                            className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
                               isDone
                                 ? isDarkDisplay
                                   ? 'text-emerald-400'
                                   : 'text-emerald-600'
+                                : isInProgress
+                                ? isDarkDisplay
+                                  ? 'text-sky-300'
+                                  : isEmeraldExec
+                                  ? 'text-teal-700'
+                                  : 'text-indigo-600'
                                 : displayDate === todayStr && task.time <= nowHM
                                 ? isDarkDisplay
-                                  ? 'text-rose-400'
-                                  : 'text-rose-600'
+                                  ? 'text-amber-300'
+                                  : 'text-amber-700'
                                 : isDarkDisplay
                                 ? 'text-amber-300'
                                 : 'text-amber-600'
@@ -3141,12 +3226,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                                 <CheckCircle2 className="h-4 w-4" />
                                 <span>เสร็จสิ้นแล้ว</span>
                               </>
+                            ) : isInProgress ? (
+                              <>
+                                <Clock className="h-4 w-4" />
+                                <span>กำลังดำเนินการ</span>
+                              </>
                             ) : (
                               <>
                                 <Circle className="h-4 w-4" />
                                 <span>
                                   {displayDate === todayStr && task.time <= nowHM
-                                    ? 'ถึงเวลา / กำลังดำเนินการ'
+                                    ? 'ถึงกำหนดเวลา'
                                     : 'รอดำเนินการ'}
                                 </span>
                               </>

@@ -126,6 +126,7 @@ export interface LineSettings {
   targetGroupId?: string;
   teamNotificationMode?: 'broadcast' | 'group' | 'both';
   autoSyncOnLineCommand: boolean;
+  allowAddTaskFromLine?: boolean;
   publicCalendarUrl?: string;
   cardFontSize?: 'sm' | 'md' | 'lg';
   cardTitleWeight?: 'bold' | 'regular';
