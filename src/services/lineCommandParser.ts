@@ -2685,12 +2685,13 @@ function doGet(e) {
     return ContentService
       .createTextOutput(JSON.stringify({
         status: 'verified',
-        version: '2.7-group-portal-clean',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal'],
+        version: '3.0-executive-card',
+        cardDesignVersion: '3.0-executive-card',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         tasks: tasks,
-        message: 'ระบบน้องเลขา Webhook & Team Portal Ready (v2.7)'
+        message: 'ระบบน้องเลขา Webhook & Executive Card Ready (v3.0)'
       }))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -3107,8 +3108,9 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
-        version: '2.7-group-portal-clean',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal'],
+        version: '3.0-executive-card',
+        cardDesignVersion: '3.0-executive-card',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         hasToken: Boolean(getSavedLineToken()),
@@ -3124,7 +3126,27 @@ function doPost(e) {
       for (var di = 0; di < delIdsList.length; di++) {
         if (delIdsList[di]) delSet[String(delIdsList[di]).trim()] = true;
       }
-      var currentSheetTasks = readSheetTasksForWeb() || [];
+      var incomingHasCatsMeta = incomingTasks.some(function(it) {
+        return it && typeof it.source === 'string' && it.source.indexOf('#SCMETA#') !== -1 && it.source.indexOf('"c":') !== -1;
+      });
+      var currentSheetTasks = (readSheetTasksForWeb() || []).map(function(st) {
+        if (!incomingHasCatsMeta || !st || typeof st.source !== 'string' || st.source.indexOf('#SCMETA#') === -1) return st;
+        var parts = st.source.split('#SCMETA#');
+        try {
+          var metaObj = JSON.parse(parts[1] || '{}');
+          delete metaObj.c;
+          delete metaObj.cu;
+          delete metaObj.dc;
+          delete metaObj.m;
+          var cleanSrc = Object.keys(metaObj).length > 0 ? (parts[0] + '#SCMETA#' + JSON.stringify(metaObj)) : parts[0];
+          var copySt = {};
+          for (var k in st) copySt[k] = st[k];
+          copySt.source = cleanSrc;
+          return copySt;
+        } catch (errMeta) {
+          return st;
+        }
+      });
       var byIdMap = {};
       var combinedList = currentSheetTasks.concat(incomingTasks);
       for (var ci = 0; ci < combinedList.length; ci++) {
@@ -3305,23 +3327,26 @@ function doPost(e) {
         });
         messagesPayload = [buildSummaryFlexBubble('สรุปตารางงานประจำวัน', payload.date || '', rowsForFlex, payload.originUrl)];
       } else if (payload.messageFormat !== 'text_custom' && payload.taskTitle) {
-        var singleFooterButtons = [
-          {
-            type: 'button',
-            style: 'primary',
-            color: '#06C755',
-            height: 'sm',
-            action: { type: 'uri', label: '📅 เปิดดูปฏิทินของทีม', uri: calDeepLink }
-          }
-        ];
-        if (sheetUrl && calDeepLink !== sheetUrl) {
+        var schedDeepLink = calDeepLink.indexOf('section=calendar') !== -1
+          ? calDeepLink.replace('section=calendar', 'section=schedule')
+          : calDeepLink;
+        var singleFooterButtons = [];
+        if (calDeepLink.indexOf('script.google.com') === -1) {
           singleFooterButtons.push({
             type: 'button',
-            style: 'secondary',
+            style: 'primary',
+            color: '#0F172A',
             height: 'sm',
-            action: { type: 'uri', label: '📊 เปิดตาราง Google Sheets', uri: sheetUrl }
+            action: { type: 'uri', label: 'เปิดตารางงานนำเสนอ (รายวัน)', uri: schedDeepLink }
           });
         }
+        singleFooterButtons.push({
+          type: 'button',
+          style: singleFooterButtons.length === 0 ? 'primary' : 'secondary',
+          height: 'sm',
+          action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: calDeepLink }
+        });
+
         var fontSizeMode = payload.cardFontSize || 'md';
         var titleSize = fontSizeMode === 'sm' ? 'md' : fontSizeMode === 'lg' ? 'xl' : 'lg';
         var bodySize = fontSizeMode === 'sm' ? 'xxs' : fontSizeMode === 'lg' ? 'sm' : 'xs';
@@ -3329,20 +3354,12 @@ function doPost(e) {
         var lineSpacingVal = payload.cardLineSpacing === 'tight' ? '2px' : payload.cardLineSpacing === 'normal' ? '4px' : '6px';
 
         var prioKey = String(payload.priority || 'medium').toLowerCase();
-        var prioHeaderBg = prioKey === 'high' ? '#B91C1C' : (prioKey === 'low' ? '#0F766E' : '#D97706');
-        var prioStripBg = prioKey === 'high' ? '#991B1B' : (prioKey === 'low' ? '#115E59' : '#B45309');
-        var prioBadgeBg = prioKey === 'high' ? '#FEF2F2' : (prioKey === 'low' ? '#F0FDFA' : '#FFFBEB');
-        var prioBadgeColor = prioKey === 'high' ? '#991B1B' : (prioKey === 'low' ? '#115E59' : '#92400E');
-        var prioBorderAccent = prioKey === 'high' ? '#FCA5A5' : (prioKey === 'low' ? '#99F6E4' : '#FCD34D');
-        var prioBadgeText = prioKey === 'high' ? '🔥 ด่วนมาก • ความสำคัญสูง' : (prioKey === 'low' ? '📌 งานทั่วไป • ตามกำหนดการ' : '⚡ ความสำคัญปานกลาง');
-        var prioShortLabel = prioKey === 'high' ? 'สูง (งานด่วนมาก)' : (prioKey === 'low' ? 'ทั่วไป (ตามกำหนดการ)' : 'ปานกลาง (มาตรฐาน)');
+        var prioTagBg = prioKey === 'high' ? '#DC2626' : (prioKey === 'low' ? '#1E3A5F' : '#D97706');
+        var prioShortLabel = prioKey === 'high' ? 'ภารกิจด่วนมาก' : (prioKey === 'low' ? 'ตามกำหนดการ' : 'ความสำคัญปานกลาง');
+        var prioTextColor = prioKey === 'high' ? '#B91C1C' : (prioKey === 'low' ? '#334155' : '#B45309');
 
         var cleanTaskTime = String(payload.time || '09:00').replace(/^'/, '');
-        var cleanTaskDateLabel = String(payload.dateTime || '').replace(/\\s*·?\\s*\\d{1,2}:\\d{2}\\s*น\\.?$/, '').trim();
-        if (!cleanTaskDateLabel) {
-          cleanTaskDateLabel = payload.date ? formatThaiFullDateInGas(String(payload.date)) : 'วันนี้';
-        }
-        var catColorHex = /^#[0-9A-Fa-f]{6}$/.test(String(payload.categoryColor || '')) ? String(payload.categoryColor) : prioHeaderBg;
+        var cleanTaskDateLabel = payload.date ? formatThaiFullDateInGas(String(payload.date)) : String(payload.dateTime || 'วันนี้').replace(/\\s*·?\\s*\\d{1,2}:\\d{2}\\s*น\\.?$/, '').trim();
         var rawDescText = String(payload.description || '').trim();
         var hasCleanDesc = Boolean(rawDescText) &&
           rawDescText !== String(payload.taskTitle || '').trim() &&
@@ -3353,59 +3370,45 @@ function doPost(e) {
         var detailCardContents = [
           {
             type: 'box',
-            layout: 'vertical',
-            backgroundColor: prioBadgeBg,
-            cornerRadius: '10px',
-            borderWidth: '1px',
-            borderColor: prioBorderAccent,
-            paddingAll: '12px',
+            layout: 'horizontal',
+            alignItems: 'center',
             contents: [
               {
                 type: 'box',
-                layout: 'horizontal',
-                alignItems: 'center',
+                layout: 'vertical',
+                backgroundColor: '#0F172A',
+                cornerRadius: '6px',
+                paddingStart: '10px',
+                paddingEnd: '10px',
+                paddingTop: '4px',
+                paddingBottom: '4px',
+                flex: 0,
                 contents: [
                   {
-                    type: 'box',
-                    layout: 'vertical',
-                    backgroundColor: prioHeaderBg,
-                    cornerRadius: '6px',
-                    paddingStart: '10px',
-                    paddingEnd: '10px',
-                    paddingTop: '4px',
-                    paddingBottom: '4px',
-                    flex: 0,
-                    contents: [
-                      {
-                        type: 'text',
-                        text: '⏰ เวลา ' + cleanTaskTime + ' น.',
-                        size: 'sm',
-                        weight: 'bold',
-                        color: '#FFFFFF'
-                      }
-                    ]
-                  },
-                  {
                     type: 'text',
-                    text: 'กำหนดการนัดหมาย',
-                    size: 'xxs',
+                    text: 'เวลา ' + cleanTaskTime + ' น.',
+                    size: 'xs',
                     weight: 'bold',
-                    color: prioBadgeColor,
-                    align: 'end',
-                    flex: 1
+                    color: '#FFFFFF'
                   }
                 ]
               },
               {
                 type: 'text',
-                text: '🗓️ ' + cleanTaskDateLabel,
-                size: fontSizeMode === 'sm' ? 'xs' : 'sm',
+                text: cleanTaskDateLabel,
+                size: 'xs',
                 weight: 'bold',
-                color: '#0F172A',
-                margin: 'sm',
+                color: '#334155',
+                align: 'end',
+                flex: 1,
                 wrap: true
               }
             ]
+          },
+          {
+            type: 'separator',
+            margin: 'md',
+            color: '#F1F5F9'
           },
           {
             type: 'box',
@@ -3413,8 +3416,8 @@ function doPost(e) {
             spacing: 'sm',
             margin: 'md',
             contents: [
-              { type: 'text', text: '🗂️ หมวดหมู่', size: bodySize, color: '#64748B', flex: 3 },
-              { type: 'text', text: String(payload.categoryName || 'ทั่วไป'), size: bodySize, weight: 'bold', color: catColorHex, flex: 7, wrap: true }
+              { type: 'text', text: 'หมวดหมู่', size: bodySize, color: '#64748B', flex: 3 },
+              { type: 'text', text: String(payload.categoryName || 'ภารกิจทั่วไป'), size: bodySize, weight: titleWeight, color: '#0F172A', flex: 7, wrap: true }
             ]
           },
           {
@@ -3423,8 +3426,8 @@ function doPost(e) {
             spacing: 'sm',
             margin: 'sm',
             contents: [
-              { type: 'text', text: '⚡ ความสำคัญ', size: bodySize, color: '#64748B', flex: 3 },
-              { type: 'text', text: prioShortLabel, size: bodySize, weight: 'bold', color: prioBadgeColor, flex: 7, wrap: true }
+              { type: 'text', text: 'ความสำคัญ', size: bodySize, color: '#64748B', flex: 3 },
+              { type: 'text', text: prioShortLabel, size: bodySize, weight: titleWeight, color: prioTextColor, flex: 7, wrap: true }
             ]
           }
         ];
@@ -3433,7 +3436,7 @@ function doPost(e) {
           detailCardContents.push({
             type: 'separator',
             margin: 'md',
-            color: '#E2E8F0'
+            color: '#F1F5F9'
           });
           detailCardContents.push({
             type: 'box',
@@ -3443,68 +3446,116 @@ function doPost(e) {
             paddingAll: '10px',
             margin: 'md',
             contents: [
-              { type: 'text', text: '📝 รายละเอียดงาน', size: 'xxs', weight: 'bold', color: '#475569' },
+              { type: 'text', text: 'รายละเอียดเพิ่มเติม', size: 'xxs', weight: 'bold', color: '#64748B' },
               { type: 'text', text: rawDescText, size: bodySize, color: '#1E293B', lineSpacing: lineSpacingVal, wrap: true, margin: 'xs' }
             ]
           });
         }
 
-        var singleBodyContents = [
+        var singleHeaderContents = [
           {
             type: 'box',
             layout: 'horizontal',
-            backgroundColor: '#FFFFFF',
-            cornerRadius: '12px',
-            borderWidth: '1px',
-            borderColor: prioKey === 'high' ? '#FCA5A5' : '#E2E8F0',
+            alignItems: 'center',
+            contents: [
+              {
+                type: 'text',
+                text: 'แจ้งเตือนกำหนดการปฏิบัติราชการ',
+                color: '#FBBF24',
+                size: 'xxs',
+                weight: 'bold',
+                flex: 1
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                backgroundColor: prioTagBg,
+                cornerRadius: '4px',
+                paddingStart: '8px',
+                paddingEnd: '8px',
+                paddingTop: '3px',
+                paddingBottom: '3px',
+                flex: 0,
+                contents: [
+                  { type: 'text', text: prioShortLabel, color: '#FFFFFF', size: 'xxs', weight: 'bold' }
+                ]
+              }
+            ]
+          },
+          {
+            type: 'text',
+            text: String(payload.taskTitle),
+            color: '#FFFFFF',
+            size: titleSize,
+            weight: titleWeight,
+            lineSpacing: lineSpacingVal,
+            wrap: true,
+            margin: 'md'
+          },
+          {
+            type: 'text',
+            text: cleanTaskDateLabel + ' · เวลา ' + cleanTaskTime + ' น.',
+            color: '#CBD5E1',
+            size: 'xs',
+            margin: 'xs',
+            wrap: true
+          }
+        ];
+
+        if (payload.stats && typeof payload.stats.total === 'number') {
+          singleHeaderContents.push({
+            type: 'box',
+            layout: 'horizontal',
+            backgroundColor: '#132640',
+            cornerRadius: '8px',
+            paddingTop: '10px',
+            paddingBottom: '10px',
+            paddingStart: '8px',
+            paddingEnd: '8px',
+            margin: 'md',
+            alignItems: 'center',
             contents: [
               {
                 type: 'box',
                 layout: 'vertical',
-                width: '6px',
-                flex: 0,
-                backgroundColor: prioHeaderBg,
+                flex: 1,
+                contents: [
+                  { type: 'text', text: String(payload.stats.total), size: 'md', weight: 'bold', color: '#FFFFFF', align: 'center' },
+                  { type: 'text', text: 'ทั้งหมด', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
+                ]
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                width: '1px',
+                height: '24px',
+                backgroundColor: '#1E3A5F',
                 contents: [{ type: 'filler' }]
               },
               {
                 type: 'box',
                 layout: 'vertical',
                 flex: 1,
-                paddingAll: '14px',
-                contents: detailCardContents
-              }
-            ]
-          }
-        ];
-
-        if (payload.stats && typeof payload.stats.total === 'number') {
-          singleBodyContents.push({
-            type: 'box',
-            layout: 'horizontal',
-            backgroundColor: '#0F172A',
-            cornerRadius: '10px',
-            paddingAll: '10px',
-            margin: 'md',
-            contents: [
-              {
-                type: 'box',
-                layout: 'vertical',
                 contents: [
-                  { type: 'text', text: 'ทั้งหมด ' + String(payload.stats.total), size: 'xxs', weight: 'bold', color: '#38BDF8', align: 'center' }
+                  { type: 'text', text: String(payload.stats.pending || 0), size: 'md', weight: 'bold', color: '#FBBF24', align: 'center' },
+                  { type: 'text', text: 'รอดำเนินการ', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
                 ]
               },
               {
                 type: 'box',
                 layout: 'vertical',
-                contents: [
-                  { type: 'text', text: 'รอทำ ' + String(payload.stats.pending || 0), size: 'xxs', weight: 'bold', color: '#FBBF24', align: 'center' }
-                ]
+                width: '1px',
+                height: '24px',
+                backgroundColor: '#1E3A5F',
+                contents: [{ type: 'filler' }]
               },
               {
                 type: 'box',
                 layout: 'vertical',
+                flex: 1,
                 contents: [
-                  { type: 'text', text: 'เสร็จแล้ว ' + String(payload.stats.completed || 0), size: 'xxs', weight: 'bold', color: '#34D399', align: 'center' }
+                  { type: 'text', text: String(payload.stats.completed || 0), size: 'md', weight: 'bold', color: '#34D399', align: 'center' },
+                  { type: 'text', text: 'เสร็จสิ้นแล้ว', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
                 ]
               }
             ]
@@ -3513,108 +3564,34 @@ function doPost(e) {
 
         messagesPayload = [{
           type: 'flex',
-          altText: ('🔔 แจ้งเตือนงาน: ' + String(payload.taskTitle) + ' (' + cleanTaskDateLabel + ' เวลา ' + cleanTaskTime + ' น.)').slice(0, 300),
+          altText: ('แจ้งเตือนภารกิจ: ' + String(payload.taskTitle) + ' (' + cleanTaskDateLabel + ' เวลา ' + cleanTaskTime + ' น.)').slice(0, 300),
           contents: {
             type: 'bubble',
             size: 'mega',
             header: {
               type: 'box',
               layout: 'vertical',
-              backgroundColor: prioHeaderBg,
+              backgroundColor: '#0B192C',
               paddingAll: '18px',
-              contents: [
-                {
-                  type: 'box',
-                  layout: 'horizontal',
-                  alignItems: 'center',
-                  contents: [
-                    {
-                      type: 'box',
-                      layout: 'vertical',
-                      backgroundColor: prioBadgeBg,
-                      cornerRadius: '6px',
-                      paddingStart: '8px',
-                      paddingEnd: '8px',
-                      paddingTop: '4px',
-                      paddingBottom: '4px',
-                      flex: 0,
-                      contents: [
-                        { type: 'text', text: prioBadgeText, color: prioBadgeColor, size: 'xxs', weight: 'bold' }
-                      ]
-                    },
-                    {
-                      type: 'box',
-                      layout: 'vertical',
-                      backgroundColor: prioStripBg,
-                      cornerRadius: '6px',
-                      paddingStart: '8px',
-                      paddingEnd: '8px',
-                      paddingTop: '4px',
-                      paddingBottom: '4px',
-                      flex: 0,
-                      margin: 'sm',
-                      contents: [
-                        { type: 'text', text: '🗂️ ' + String(payload.categoryName || 'ทั่วไป'), color: '#FFFFFF', size: 'xxs', weight: 'bold' }
-                      ]
-                    }
-                  ]
-                },
-                {
-                  type: 'text',
-                  text: String(payload.taskTitle),
-                  color: '#FFFFFF',
-                  size: titleSize,
-                  weight: titleWeight,
-                  lineSpacing: lineSpacingVal,
-                  wrap: true,
-                  margin: 'md'
-                },
-                {
-                  type: 'box',
-                  layout: 'horizontal',
-                  backgroundColor: '#FFFFFF',
-                  cornerRadius: '10px',
-                  paddingStart: '10px',
-                  paddingEnd: '12px',
-                  paddingTop: '8px',
-                  paddingBottom: '8px',
-                  margin: 'md',
-                  alignItems: 'center',
-                  spacing: 'sm',
-                  contents: [
-                    {
-                      type: 'box',
-                      layout: 'vertical',
-                      backgroundColor: '#0F172A',
-                      cornerRadius: '6px',
-                      paddingStart: '8px',
-                      paddingEnd: '8px',
-                      paddingTop: '4px',
-                      paddingBottom: '4px',
-                      flex: 0,
-                      contents: [
-                        { type: 'text', text: '⏰ ' + cleanTaskTime + ' น.', color: '#FFFFFF', size: 'xs', weight: 'bold' }
-                      ]
-                    },
-                    {
-                      type: 'text',
-                      text: '🗓️ ' + cleanTaskDateLabel,
-                      color: prioBadgeColor,
-                      size: 'xs',
-                      weight: 'bold',
-                      flex: 1,
-                      wrap: true
-                    }
-                  ]
-                }
-              ]
+              contents: singleHeaderContents
             },
             body: {
               type: 'box',
               layout: 'vertical',
-              backgroundColor: '#F1F5F9',
+              backgroundColor: '#F8FAFC',
               paddingAll: '16px',
-              contents: singleBodyContents
+              contents: [
+                {
+                  type: 'box',
+                  layout: 'vertical',
+                  backgroundColor: '#FFFFFF',
+                  cornerRadius: '10px',
+                  borderWidth: '1px',
+                  borderColor: prioKey === 'high' ? '#FECDD3' : '#E2E8F0',
+                  paddingAll: '14px',
+                  contents: detailCardContents
+                }
+              ]
             },
             footer: {
               type: 'box',
@@ -3732,7 +3709,8 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: sentSuccess ? 'ok' : 'error',
         mode: 'gas_push_line',
-        version: '2.7-quota-guard',
+        version: '3.0-executive-card',
+        cardDesignVersion: '3.0-executive-card',
         ok: sentSuccess,
         quotaExceeded: quotaExceeded,
         deliveryMethod: deliveryMethod,
@@ -3747,9 +3725,10 @@ function doPost(e) {
     if (events.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'verified',
-        version: '2.6-group-bridge',
+        version: '3.0-executive-card',
+        cardDesignVersion: '3.0-executive-card',
         detectedGroupId: getSavedGroupId(),
-        capabilities: ['webhook', 'push_line', 'group_chat']
+        capabilities: ['webhook', 'push_line', 'group_chat', 'executive_card_v3']
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -3936,19 +3915,60 @@ function doPost(e) {
           });
         } catch (calErr) {}
 
+        var fullSavedThaiDate = formatThaiFullDateInGas(parsed.date);
+        var savedPrioTagBg = parsed.priority === 'high' ? '#DC2626' : '#1E3A5F';
+        var savedPrioLabel = parsed.priority === 'high' ? 'ภารกิจด่วนมาก' : 'ตามกำหนดการ';
+        var dayDoneCount = Math.max(0, dayTotalCount - dayPendingCount);
+
         var bodyContents = [
-          { type: 'text', text: '🗓️ วันที่: ' + parsed.date + '   ⏰ เวลา: ' + parsed.time + ' น.', size: 'xs', weight: 'bold', color: '#0F172A' },
-          { type: 'text', text: '⚡ ความสำคัญ: ' + (parsed.priority === 'high' ? 'สูง (เร่งด่วน)' : 'ปานกลาง'), size: 'xs', color: '#475569' },
           {
             type: 'box',
             layout: 'vertical',
-            backgroundColor: '#EEF2FF',
-            cornerRadius: '8px',
-            paddingAll: '10px',
-            margin: 'md',
+            backgroundColor: '#FFFFFF',
+            cornerRadius: '10px',
+            borderWidth: '1px',
+            borderColor: parsed.priority === 'high' ? '#FECDD3' : '#E2E8F0',
+            paddingAll: '14px',
             contents: [
-              { type: 'text', text: '📊 สรุปตารางวันที่ ' + parsed.date, size: 'xxs', weight: 'bold', color: '#4338CA' },
-              { type: 'text', text: 'รวมทั้งหมด ' + dayTotalCount + ' งาน · รอดำเนินการ ' + dayPendingCount + ' งาน', size: 'xs', weight: 'bold', color: '#1E1B4B', margin: 'xs' }
+              {
+                type: 'box',
+                layout: 'horizontal',
+                alignItems: 'center',
+                contents: [
+                  {
+                    type: 'box',
+                    layout: 'vertical',
+                    backgroundColor: '#0F172A',
+                    cornerRadius: '6px',
+                    paddingStart: '10px',
+                    paddingEnd: '10px',
+                    paddingTop: '4px',
+                    paddingBottom: '4px',
+                    flex: 0,
+                    contents: [
+                      { type: 'text', text: 'เวลา ' + parsed.time + ' น.', size: 'xs', weight: 'bold', color: '#FFFFFF' }
+                    ]
+                  },
+                  {
+                    type: 'text',
+                    text: savedPrioLabel,
+                    size: 'xs',
+                    weight: 'bold',
+                    color: parsed.priority === 'high' ? '#B91C1C' : '#334155',
+                    align: 'end',
+                    flex: 1
+                  }
+                ]
+              },
+              {
+                type: 'text',
+                text: fullSavedThaiDate,
+                size: 'xs',
+                weight: 'bold',
+                color: '#0F172A',
+                margin: 'md',
+                wrap: true
+              }
             ]
           }
         ];
@@ -3956,9 +3976,9 @@ function doPost(e) {
         if (srcGroupId) {
           bodyContents.push({
             type: 'text',
-            text: '🔑 Group ID: ' + srcGroupId,
+            text: 'รหัสกลุ่มที่ซิงค์: ' + srcGroupId,
             size: 'xxs',
-            color: '#059669',
+            color: '#64748B',
             wrap: true,
             margin: 'sm'
           });
@@ -3966,23 +3986,117 @@ function doPost(e) {
 
         var savedFlex = {
           type: 'flex',
-          altText: '✅ บันทึกงาน: ' + parsed.title + (srcGroupId ? ' (Group ID: ' + srcGroupId + ')' : ''),
+          altText: 'บันทึกกำหนดการเรียบร้อย: ' + parsed.title,
           contents: {
             type: 'bubble',
             size: 'mega',
             header: {
               type: 'box',
               layout: 'vertical',
-              backgroundColor: parsed.priority === 'high' ? '#DC2626' : '#059669',
-              paddingAll: '16px',
+              backgroundColor: '#0B192C',
+              paddingAll: '18px',
               contents: [
-                { type: 'text', text: srcGroupId ? '✅ บันทึกงานจากกลุ่ม LINE เรียบร้อย' : '✅ บันทึกลงปฏิทินเรียบร้อย', color: '#FFFFFF', size: 'xs', weight: 'bold' },
-                { type: 'text', text: parsed.title, color: '#FFFFFF', size: 'lg', weight: 'bold', wrap: true, margin: 'xs' }
+                {
+                  type: 'box',
+                  layout: 'horizontal',
+                  alignItems: 'center',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: srcGroupId ? 'บันทึกกำหนดการจากกลุ่ม LINE สำเร็จ' : 'บันทึกกำหนดการลงปฏิทินสำเร็จ',
+                      color: '#34D399',
+                      size: 'xxs',
+                      weight: 'bold',
+                      flex: 1
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      backgroundColor: savedPrioTagBg,
+                      cornerRadius: '4px',
+                      paddingStart: '8px',
+                      paddingEnd: '8px',
+                      paddingTop: '3px',
+                      paddingBottom: '3px',
+                      flex: 0,
+                      contents: [
+                        { type: 'text', text: savedPrioLabel, color: '#FFFFFF', size: 'xxs', weight: 'bold' }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  type: 'text',
+                  text: parsed.title,
+                  color: '#FFFFFF',
+                  size: 'lg',
+                  weight: 'bold',
+                  wrap: true,
+                  margin: 'md'
+                },
+                {
+                  type: 'box',
+                  layout: 'horizontal',
+                  backgroundColor: '#132640',
+                  cornerRadius: '8px',
+                  paddingTop: '10px',
+                  paddingBottom: '10px',
+                  paddingStart: '8px',
+                  paddingEnd: '8px',
+                  margin: 'md',
+                  alignItems: 'center',
+                  contents: [
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      flex: 1,
+                      contents: [
+                        { type: 'text', text: String(dayTotalCount), size: 'md', weight: 'bold', color: '#FFFFFF', align: 'center' },
+                        { type: 'text', text: 'ทั้งหมดวันนี้', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
+                      ]
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      width: '1px',
+                      height: '24px',
+                      backgroundColor: '#1E3A5F',
+                      contents: [{ type: 'filler' }]
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      flex: 1,
+                      contents: [
+                        { type: 'text', text: String(dayPendingCount), size: 'md', weight: 'bold', color: '#FBBF24', align: 'center' },
+                        { type: 'text', text: 'รอดำเนินการ', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
+                      ]
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      width: '1px',
+                      height: '24px',
+                      backgroundColor: '#1E3A5F',
+                      contents: [{ type: 'filler' }]
+                    },
+                    {
+                      type: 'box',
+                      layout: 'vertical',
+                      flex: 1,
+                      contents: [
+                        { type: 'text', text: String(dayDoneCount), size: 'md', weight: 'bold', color: '#34D399', align: 'center' },
+                        { type: 'text', text: 'เสร็จสิ้นแล้ว', size: 'xxs', color: '#94A3B8', align: 'center', margin: 'xs' }
+                      ]
+                    }
+                  ]
+                }
               ]
             },
             body: {
               type: 'box',
               layout: 'vertical',
+              backgroundColor: '#F8FAFC',
               paddingAll: '16px',
               spacing: 'sm',
               contents: bodyContents
@@ -3991,27 +4105,31 @@ function doPost(e) {
               type: 'box',
               layout: 'vertical',
               spacing: 'sm',
-              paddingAll: '12px',
+              paddingAll: '14px',
+              backgroundColor: '#FFFFFF',
+              borderWidth: '1px',
+              borderColor: '#E2E8F0',
               contents: (function() {
                 var targetCal = getCalendarDeepLink('', parsed.date);
-                var backupPortal = getSelfWebAppUrl() ? (getSelfWebAppUrl() + '?view=calendar&openExternalBrowser=1') : '';
-                var btns = [
-                  {
-                    type: 'button',
-                    style: 'primary',
-                    color: '#06C755',
-                    height: 'sm',
-                    action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCal }
-                  }
-                ];
-                if (backupPortal && targetCal.indexOf('script.google.com') === -1) {
+                var schedUrl = targetCal.indexOf('section=calendar') !== -1
+                  ? targetCal.replace('section=calendar', 'section=schedule')
+                  : targetCal;
+                var btns = [];
+                if (targetCal.indexOf('script.google.com') === -1) {
                   btns.push({
                     type: 'button',
-                    style: 'secondary',
+                    style: 'primary',
+                    color: '#0F172A',
                     height: 'sm',
-                    action: { type: 'uri', label: '📅 ปฏิทินทีมสำรอง (ไม่ต้องล็อกอิน)', uri: backupPortal }
+                    action: { type: 'uri', label: 'เปิดตารางงานนำเสนอ (รายวัน)', uri: schedUrl }
                   });
                 }
+                btns.push({
+                  type: 'button',
+                  style: btns.length === 0 ? 'primary' : 'secondary',
+                  height: 'sm',
+                  action: { type: 'uri', label: 'เปิดดูปฏิทินและจัดการงาน', uri: targetCal }
+                });
                 return btns;
               })()
             }
@@ -4022,7 +4140,7 @@ function doPost(e) {
     });
   } catch (err) {}
 
-  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', version: '2.6-group-bridge', detectedGroupId: getSavedGroupId() })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({ status: 'ok', version: '3.0-executive-card', cardDesignVersion: '3.0-executive-card', detectedGroupId: getSavedGroupId() })).setMimeType(ContentService.MimeType.JSON);
 }
 
 function replyLineMessages(replyToken, messages) {

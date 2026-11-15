@@ -573,6 +573,52 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     setIsDiagnosingLine(false);
   };
 
+  const [gasCardVersionInfo, setGasCardVersionInfo] = useState<{
+    checking: boolean;
+    status: 'idle' | 'up_to_date' | 'outdated' | 'unreachable';
+    detectedVersion: string;
+  }>({
+    checking: false,
+    status: 'idle',
+    detectedVersion: '',
+  });
+
+  const checkLiveGasCardVersion = async (targetGasUrl?: string) => {
+    const urlToCheck = (targetGasUrl ?? gasUrl).trim();
+    if (!urlToCheck.startsWith('https://script.google.com/macros/s/')) {
+      setGasCardVersionInfo({
+        checking: false,
+        status: 'idle',
+        detectedVersion: '',
+      });
+      return;
+    }
+
+    setGasCardVersionInfo((prev) => ({ ...prev, checking: true }));
+    try {
+      const sep = urlToCheck.includes('?') ? '&' : '?';
+      const res = await fetch(`${urlToCheck}${sep}format=json&_t=${Date.now()}`);
+      const data = await res.json();
+      const ver = String(data?.cardDesignVersion || data?.version || '').trim();
+      const caps = Array.isArray(data?.capabilities) ? data.capabilities : [];
+      const isV3 =
+        ver === '3.0-executive-card' ||
+        ver.startsWith('3.') ||
+        caps.includes('executive_card_v3');
+      setGasCardVersionInfo({
+        checking: false,
+        status: isV3 ? 'up_to_date' : 'outdated',
+        detectedVersion: ver || 'เวอร์ชันเก่า (ก่อน v3.0)',
+      });
+    } catch {
+      setGasCardVersionInfo({
+        checking: false,
+        status: 'unreachable',
+        detectedVersion: '',
+      });
+    }
+  };
+
   useEffect(() => {
     try {
       if (gasUrl.trim()) {
@@ -581,6 +627,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     } catch {
       // Ignore storage error
     }
+    checkLiveGasCardVersion(gasUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gasUrl]);
 
   const todayStr = useMemo(() => formatLocalDateYMD(), []);
@@ -994,19 +1042,119 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Live Google Apps Script Card Design Version Status Banner */}
+      {gasCardVersionInfo.status === 'outdated' && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 sm:p-5 shadow-2xs space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[11px] font-bold">
+                <span>
+                  ตรวจพบสาเหตุที่ LINE ยังตอบกลับเป็นดีไซน์สีม่วงแบบเดิม ({gasCardVersionInfo.detectedVersion || 'เวอร์ชันเก่า'})
+                </span>
+              </div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                ลิงก์ Google Apps Script ของคุณยังรันโค้ดเวอร์ชันเก่าอยู่ จึงยังส่งการ์ดดีไซน์เดิมเข้า LINE
+              </h3>
+              <p className="text-xs text-slate-700 leading-relaxed">
+                หน้าเว็บนี้เปลี่ยนเป็น <strong>ดีไซน์ใหม่ระดับผู้บริหาร (สีกรมท่าเข้ม v3.0)</strong> เรียบร้อยแล้ว แต่บอทในแอป LINE ดึงการ์ดมาจาก Google Apps Script บนบัญชี Google ของคุณโดยตรง กรุณาอัปเดตตาม 3 ขั้นตอนด้านล่าง (ใช้เวลาไม่เกิน 1 นาที):
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleCopyScript}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-[#0B192C] hover:bg-slate-800 text-white text-xs font-bold shadow-2xs transition-colors whitespace-nowrap"
+              >
+                {copiedScript ? (
+                  <>
+                    <Check className="h-4 w-4 text-emerald-400" />
+                    <span>คัดลอกโค้ดดีไซน์ใหม่ v3.0 แล้ว!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4 text-amber-400" />
+                    <span>1. คัดลอกโค้ด Apps Script ดีไซน์ใหม่ (v3.0)</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                disabled={gasCardVersionInfo.checking}
+                onClick={() => checkLiveGasCardVersion()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-white hover:bg-amber-100/70 border border-amber-300 text-amber-950 text-xs font-bold transition-colors whitespace-nowrap disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${gasCardVersionInfo.checking ? 'animate-spin' : ''}`}
+                />
+                <span>
+                  {gasCardVersionInfo.checking
+                    ? 'กำลังตรวจสอบ...'
+                    : 'ตรวจเช็กอีกครั้งหลัง Deploy'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 text-xs">
+            <div className="rounded-lg bg-white border border-amber-200 p-3">
+              <div className="font-bold text-slate-900">ขั้นตอนที่ 1: วางทับใน Code.gs</div>
+              <div className="text-slate-600 mt-0.5 leading-relaxed">
+                กดปุ่มสีกรมท่าด้านบนเพื่อคัดลอกโค้ดจากหน้านี้ (ห้ามคัดลอกจากหน้าเว็บเก่า github.io) ไปวางทับโค้ดเดิมทั้งหมดใน <strong>Extensions &gt; Apps Script</strong> แล้วกด Save
+              </div>
+            </div>
+            <div className="rounded-lg bg-white border border-amber-200 p-3">
+              <div className="font-bold text-slate-900">
+                ขั้นตอนที่ 2: กด Manage deployments (สำคัญมาก)
+              </div>
+              <div className="text-slate-600 mt-0.5 leading-relaxed">
+                การกด Save เฉย ๆ จะไม่อัปเดตบอท LINE — ต้องกดปุ่ม <strong>Deploy &gt; Manage deployments &gt; รูปดินสอ (Edit) &gt; ช่อง Version เลือก &quot;New version&quot; &gt; กด Deploy</strong>
+              </div>
+            </div>
+            <div className="rounded-lg bg-white border border-amber-200 p-3">
+              <div className="font-bold text-slate-900">
+                ข้อควรระวังหากกด New deployment
+              </div>
+              <div className="text-slate-600 mt-0.5 leading-relaxed">
+                หากเผลอกด <em>New deployment</em> จะได้ลิงก์ใหม่ ต้องนำลิงก์ใหม่ไปวางทับใน <strong>LINE Developers Console &gt; Messaging API &gt; Webhook URL</strong> ด้วยครับ
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gasCardVersionInfo.status === 'up_to_date' && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950">
+          <div className="font-bold flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+            <span>
+              Google Apps Script ของคุณอัปเดตเป็นดีไซน์ใหม่ระดับผู้บริหาร (v3.0 Executive Card) เรียบร้อยแล้ว — พิมพ์ถามตารางงานใน LINE ได้ทันที
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => checkLiveGasCardVersion()}
+            className="text-[11px] font-semibold text-emerald-800 underline hover:text-emerald-950"
+          >
+            ตรวจสอบซ้ำ
+          </button>
+        </div>
+      )}
+
       {/* Top Executive Summary & Instant LINE Notification Dispatch Banner */}
-      <div className="bg-white border border-slate-200 border-t-4 border-t-[#06C755] rounded-xl p-5 shadow-2xs">
+      <div className="bg-white border border-slate-200 border-t-4 border-t-[#0B192C] rounded-xl p-5 shadow-2xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-[#06C755] uppercase tracking-wider">
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>LINE OA Smart Notification & Daily Digest</span>
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-[#0B192C] uppercase tracking-wider">
+              <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+              <span>Executive Official Schedule · LINE OA</span>
             </div>
             <h2 className="text-lg font-bold text-slate-900 mt-0.5">
-              ระบบแจ้งเตือนและส่งการ์ดสรุปตารางงานเข้า LINE OA
+              ระบบแจ้งเตือนและส่งการ์ดกำหนดการปฏิบัติราชการเข้า LINE OA
             </h2>
             <p className="text-xs text-slate-600 mt-0.5">
-              แจ้งเตือนเป็นดีไซน์การ์ดสีสันแยกตามหมวดหมู่ พร้อมสรุปยอดงานทั้งหมด งานค้าง และงานที่เสร็จแล้วในทุกการแจ้งเตือน
+              ดีไซน์ระดับผู้บริหารโทนกรมท่าเข้ม แบ่งภารกิจภาคเช้าและภาคบ่ายชัดเจน พร้อมสรุปยอดภารกิจแบบอ่านง่ายเต็มความกว้างการ์ด
             </p>
           </div>
 
@@ -1452,157 +1600,139 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                       {/* Exact 1:1 Simulated LINE Single-Task Notification Bubble */}
                       <div className="max-w-[420px] mx-auto rounded-2xl overflow-hidden border border-slate-300 bg-white shadow-md">
-                        {/* Priority-Colored Header ("หัวตารางเน้นสีตามความสำคัญของงาน") */}
-                        <div
-                          style={{ backgroundColor: prioTheme.headerBg }}
-                          className="p-5 text-white transition-colors"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span
-                              style={{
-                                backgroundColor: prioTheme.badgeBg,
-                                color: prioTheme.badgeText,
-                              }}
-                              className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold shadow-2xs"
-                            >
-                              {prioTheme.badgeLabel}
-                            </span>
-                            <span
-                              style={{ backgroundColor: prioTheme.headerStripBg }}
-                              className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] text-white font-bold"
-                            >
-                              🗂️ {activeCat?.name || 'ทั่วไป'}
-                            </span>
-                          </div>
+                        {(() => {
+                          const isTopHigh = prioTheme.priorityKey === 'high';
+                          const isTopLow = prioTheme.priorityKey === 'low';
+                          const topTagBg = isTopHigh
+                            ? '#DC2626'
+                            : isTopLow
+                            ? '#1E3A5F'
+                            : '#D97706';
+                          const topPrioLabel = isTopHigh
+                            ? 'ภารกิจด่วนมาก'
+                            : isTopLow
+                            ? 'ตามกำหนดการ'
+                            : 'ความสำคัญปานกลาง';
+                          const topPrioTextColor = isTopHigh
+                            ? '#B91C1C'
+                            : isTopLow
+                            ? '#334155'
+                            : '#B45309';
 
-                          <div className="text-lg font-bold mt-3 text-white leading-snug break-words">
-                            {activeTask.title}
-                          </div>
+                          return (
+                            <>
+                              {/* Executive Royal Navy Header */}
+                              <div className="bg-[#0B192C] p-4.5 text-white">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-bold text-amber-400">
+                                    แจ้งเตือนกำหนดการปฏิบัติราชการ
+                                  </span>
+                                  <span
+                                    style={{ backgroundColor: topTagBg }}
+                                    className="inline-flex items-center px-2.5 py-0.5 rounded text-[10px] font-bold text-white shrink-0"
+                                  >
+                                    {topPrioLabel}
+                                  </span>
+                                </div>
 
-                          {/* High-Contrast Date & Time Spotlight Banner inside Header */}
-                          <div className="mt-3 rounded-xl bg-white px-3 py-2 shadow-xs flex flex-wrap items-center gap-2">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold shrink-0">
-                              ⏰ {activeTask.time} น.
-                            </span>
-                            <span
-                              style={{ color: prioTheme.badgeText }}
-                              className="text-xs font-bold leading-snug"
-                            >
-                              🗓️ {shortDateRange}
-                            </span>
-                          </div>
-                        </div>
+                                <div className="text-lg font-bold mt-2 text-white leading-snug break-words">
+                                  {activeTask.title}
+                                </div>
+                                <div className="text-xs text-slate-300 mt-1">
+                                  {longDateHeader} · เวลา {activeTask.time} น.
+                                </div>
 
-                        {/* Body: Structured Executive Card with 6px Left Priority Stripe */}
-                        <div className="p-4 bg-[#F1F5F9] space-y-3">
-                          <div
-                            style={{ borderLeft: `6px solid ${prioTheme.headerBg}` }}
-                            className={`bg-white border rounded-xl p-3.5 shadow-2xs space-y-2.5 text-xs ${
-                              prioTheme.priorityKey === 'high'
-                                ? 'border-rose-300'
-                                : 'border-slate-200'
-                            }`}
-                          >
-                            {/* Prominent Date & Time Hero Box at Top of Body */}
-                            <div
-                              style={{
-                                backgroundColor: prioTheme.badgeBg,
-                                borderColor: prioTheme.borderAccent,
-                              }}
-                              className="rounded-xl border p-3 space-y-1.5"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span
-                                  style={{ backgroundColor: prioTheme.headerBg }}
-                                  className="inline-flex items-center px-2.5 py-1 rounded-md text-white font-mono-tabular font-bold text-sm shadow-2xs"
-                                >
-                                  ⏰ เวลา {activeTask.time} น.
-                                </span>
-                                <span
-                                  style={{ color: prioTheme.badgeText }}
-                                  className="text-[11px] font-bold"
-                                >
-                                  กำหนดการนัดหมาย
-                                </span>
-                              </div>
-                              <div className="text-sm font-bold text-slate-900 leading-snug pt-0.5">
-                                🗓️ {longDateHeader}
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-12 gap-2 items-baseline pt-0.5">
-                              <span className="col-span-4 text-slate-500 font-medium">
-                                🗂️ หมวดหมู่
-                              </span>
-                              <span
-                                style={{
-                                  color: activeCat?.color || prioTheme.headerBg,
-                                }}
-                                className="col-span-8 font-bold"
-                              >
-                                {activeCat?.name || 'ทั่วไป'}
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-12 gap-2 items-baseline">
-                              <span className="col-span-4 text-slate-500 font-medium">
-                                ⚡ ความสำคัญ
-                              </span>
-                              <span
-                                style={{ color: prioTheme.badgeText }}
-                                className="col-span-8 font-bold"
-                              >
-                                {prioTheme.shortLabel}
-                              </span>
-                            </div>
-
-                            {showSingleDesc && (
-                              <>
-                                <div className="border-t border-slate-200 my-2" />
-                                <div className="rounded-lg bg-slate-50 border border-slate-200/80 p-2.5">
-                                  <div className="text-[11px] font-bold text-slate-600">
-                                    📝 รายละเอียดงาน
+                                {/* 3-Column Executive KPI Strip */}
+                                <div className="mt-3 grid grid-cols-3 rounded-lg bg-[#132640] py-2.5 px-2 text-center">
+                                  <div>
+                                    <div className="text-base font-extrabold text-white tabular-nums">
+                                      {Math.max(1, sameDayCount.length)}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">ทั้งหมด</div>
                                   </div>
-                                  <div className="text-xs text-slate-800 mt-1 leading-relaxed break-words">
-                                    {cleanSingleDesc}
+                                  <div className="border-x border-[#1E3A5F]">
+                                    <div className="text-base font-extrabold text-amber-400 tabular-nums">
+                                      {sameDayCount.length === 0 ? 1 : sameDayPending}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">รอดำเนินการ</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-base font-extrabold text-emerald-400 tabular-nums">
+                                      {sameDayDone}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">เสร็จสิ้นแล้ว</div>
                                   </div>
                                 </div>
-                              </>
-                            )}
-                          </div>
+                              </div>
 
-                          {/* 3-Column Dark Daily Overview Strip */}
-                          <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#0F172A] p-2.5 text-center">
-                            <div>
-                              <span className="text-[11px] font-bold text-sky-400 font-mono-tabular">
-                                ทั้งหมด {Math.max(1, sameDayCount.length)}
-                              </span>
-                            </div>
-                            <div className="border-x border-slate-700">
-                              <span className="text-[11px] font-bold text-amber-400 font-mono-tabular">
-                                รอทำ {sameDayCount.length === 0 ? 1 : sameDayPending}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[11px] font-bold text-emerald-400 font-mono-tabular">
-                                เสร็จแล้ว {sameDayDone}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
+                              {/* Body */}
+                              <div className="p-4 bg-[#F8FAFC] space-y-3">
+                                <div
+                                  className={`bg-white border rounded-xl p-3.5 shadow-2xs space-y-2.5 text-xs ${
+                                    isTopHigh ? 'border-rose-200' : 'border-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded bg-[#0F172A] text-white font-bold tabular-nums text-xs">
+                                      เวลา {activeTask.time} น.
+                                    </span>
+                                    <span className="font-bold text-slate-700 text-xs">
+                                      {shortDateRange}
+                                    </span>
+                                  </div>
 
-                        {/* Footer */}
-                        <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
-                          <button
-                            type="button"
-                            onClick={() => onOpenDateInCalendar(activeTask.date)}
-                            className="w-full py-2 px-3 rounded-lg bg-[#06C755] hover:bg-[#05b34c] text-white text-center text-xs font-bold transition-colors"
-                          >
-                            📅 เปิดดูปฏิทินของทีม
-                          </button>
-                          <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-700 text-center text-xs font-semibold">
-                            📊 เปิดตาราง Google Sheets
-                          </div>
-                        </div>
+                                  <div className="grid grid-cols-12 gap-2 items-baseline pt-0.5">
+                                    <span className="col-span-4 text-slate-500 font-medium">
+                                      หมวดหมู่
+                                    </span>
+                                    <span className="col-span-8 font-bold text-slate-900">
+                                      {activeCat?.name || 'ภารกิจทั่วไป'}
+                                    </span>
+                                  </div>
+                                  <div className="grid grid-cols-12 gap-2 items-baseline">
+                                    <span className="col-span-4 text-slate-500 font-medium">
+                                      ความสำคัญ
+                                    </span>
+                                    <span
+                                      style={{ color: topPrioTextColor }}
+                                      className="col-span-8 font-bold"
+                                    >
+                                      {topPrioLabel}
+                                    </span>
+                                  </div>
+
+                                  {showSingleDesc && (
+                                    <>
+                                      <div className="border-t border-slate-100 my-2" />
+                                      <div className="rounded-lg bg-slate-50 border border-slate-200/80 p-2.5">
+                                        <div className="text-[11px] font-bold text-slate-600">
+                                          รายละเอียดเพิ่มเติม
+                                        </div>
+                                        <div className="text-xs text-slate-800 mt-1 leading-relaxed break-words">
+                                          {cleanSingleDesc}
+                                        </div>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Footer */}
+                              <div className="p-3.5 bg-white border-t border-slate-200 space-y-2">
+                                <div className="w-full py-2 px-3 rounded-lg bg-[#0F172A] text-white text-center text-xs font-bold">
+                                  เปิดตารางงานนำเสนอ (รายวัน)
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenDateInCalendar(activeTask.date)}
+                                  className="w-full py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-center text-xs font-semibold transition-colors"
+                                >
+                                  เปิดดูปฏิทินและจัดการงาน
+                                </button>
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -1944,12 +2074,29 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                           </div>
                         </div>
                       ) : flex ? (
-                        /* CASE 2: COLORFUL SINGLE TASK NOTIFICATION / SAVED TASK CARD WITH PRIORITY-COLORED HEADER */
+                        /* CASE 2: EXECUTIVE OFFICIAL SINGLE-TASK / SAVED TASK CARD */
                         (() => {
                           const pTheme = getPriorityHeaderTheme(
                             flex.priority,
                             `${flex.priorityLabel || ''} ${flex.badge || ''} ${flex.categoryName || ''}`
                           );
+                          const isSingleHigh = pTheme.priorityKey === 'high';
+                          const isSingleLow = pTheme.priorityKey === 'low';
+                          const singleTagBg = isSingleHigh
+                            ? '#DC2626'
+                            : isSingleLow
+                            ? '#1E3A5F'
+                            : '#D97706';
+                          const singlePrioLabel = isSingleHigh
+                            ? 'ภารกิจด่วนมาก'
+                            : isSingleLow
+                            ? 'ตามกำหนดการ'
+                            : 'ความสำคัญปานกลาง';
+                          const singlePrioTextColor = isSingleHigh
+                            ? '#B91C1C'
+                            : isSingleLow
+                            ? '#334155'
+                            : '#B45309';
                           const cleanDesc = (flex.description || flex.subtitle || '').trim();
                           const showCleanDesc =
                             Boolean(cleanDesc) &&
@@ -1970,98 +2117,81 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                           return (
                             <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
-                              {/* Priority-Colored Header ("หัวตารางเน้นสีตามความสำคัญของงาน") */}
-                              <div
-                                style={{ backgroundColor: pTheme.headerBg }}
-                                className="px-4 py-3.5 text-white"
-                              >
+                              {/* Executive Royal Navy Header */}
+                              <div className="bg-[#0B192C] px-4 py-4 text-white">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span
-                                    style={{
-                                      backgroundColor: pTheme.badgeBg,
-                                      color: pTheme.badgeText,
-                                    }}
-                                    className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold"
-                                  >
-                                    {pTheme.badgeLabel}
+                                  <span className="text-[11px] font-bold text-amber-400">
+                                    แจ้งเตือนกำหนดการปฏิบัติราชการ
                                   </span>
                                   <span
-                                    style={{ backgroundColor: pTheme.headerStripBg }}
-                                    className="px-2 py-0.5 rounded-md text-[10px] font-bold text-white"
+                                    style={{ backgroundColor: singleTagBg }}
+                                    className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0"
                                   >
-                                    🗂️ {flex.categoryName}
+                                    {singlePrioLabel}
                                   </span>
                                 </div>
-                                <div className="text-sm font-bold mt-2 break-words leading-snug">
+                                <div className="text-sm font-bold mt-2 break-words leading-snug text-white">
                                   {flex.title}
                                 </div>
-                                {/* High-Contrast Date & Time Spotlight Banner */}
-                                <div className="mt-2.5 rounded-xl bg-white px-2.5 py-1.5 shadow-2xs flex flex-wrap items-center gap-2">
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold">
-                                    ⏰ {flex.time || flex.dateTime}
-                                  </span>
-                                  <span
-                                    style={{ color: pTheme.badgeText }}
-                                    className="text-xs font-bold"
-                                  >
-                                    🗓️ {displayDate}
-                                  </span>
+                                <div className="text-[11px] text-slate-300 mt-1">
+                                  {displayDate} · เวลา {flex.time || flex.dateTime} น.
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-3 rounded-lg bg-[#132640] py-2 px-2 text-center">
+                                  <div>
+                                    <div className="text-sm font-extrabold text-white tabular-nums">
+                                      {flex.stats?.total ?? summaryMetrics.total}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">ทั้งหมด</div>
+                                  </div>
+                                  <div className="border-x border-[#1E3A5F]">
+                                    <div className="text-sm font-extrabold text-amber-400 tabular-nums">
+                                      {flex.stats?.pending ?? summaryMetrics.pendingCount}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">รอดำเนินการ</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-sm font-extrabold text-emerald-400 tabular-nums">
+                                      {flex.stats?.completed ?? summaryMetrics.completedCount}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">เสร็จสิ้นแล้ว</div>
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="p-3.5 space-y-2.5 bg-[#F1F5F9]">
-                                {/* Structured Details with Left Priority Accent Stripe */}
+                              <div className="p-3.5 space-y-2.5 bg-[#F8FAFC]">
                                 <div
-                                  style={{ borderLeft: `6px solid ${pTheme.headerBg}` }}
-                                  className="rounded-xl bg-white border border-slate-200 p-3 space-y-2 text-xs shadow-2xs"
+                                  className={`rounded-xl bg-white border p-3.5 space-y-2 text-xs shadow-2xs ${
+                                    isSingleHigh ? 'border-rose-200' : 'border-slate-200'
+                                  }`}
                                 >
-                                  <div
-                                    style={{
-                                      backgroundColor: pTheme.badgeBg,
-                                      borderColor: pTheme.borderAccent,
-                                    }}
-                                    className="rounded-lg border p-2.5 space-y-1"
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span
-                                        style={{ backgroundColor: pTheme.headerBg }}
-                                        className="inline-flex items-center px-2 py-0.5 rounded-md text-white font-mono-tabular font-bold text-xs"
-                                      >
-                                        ⏰ เวลา {flex.time || flex.dateTime}
-                                      </span>
-                                      <span
-                                        style={{ color: pTheme.badgeText }}
-                                        className="text-[10px] font-bold"
-                                      >
-                                        กำหนดการนัดหมาย
-                                      </span>
-                                    </div>
-                                    <div className="font-bold text-slate-900 text-xs pt-0.5">
-                                      🗓️ {displayDate}
-                                    </div>
+                                  <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded bg-[#0F172A] text-white font-bold tabular-nums text-xs">
+                                      เวลา {flex.time || flex.dateTime} น.
+                                    </span>
+                                    <span className="text-slate-700 font-bold text-xs">
+                                      {displayDate}
+                                    </span>
                                   </div>
                                   <div className="flex items-baseline justify-between gap-2">
-                                    <span className="text-slate-500 shrink-0">🗂️ หมวดหมู่:</span>
-                                    <span
-                                      className="font-bold text-right"
-                                      style={{ color: flex.categoryColor || pTheme.headerBg }}
-                                    >
+                                    <span className="text-slate-500 shrink-0">หมวดหมู่</span>
+                                    <span className="font-bold text-slate-900 text-right">
                                       {flex.categoryName}
                                     </span>
                                   </div>
                                   <div className="flex items-baseline justify-between gap-2">
-                                    <span className="text-slate-500 shrink-0">⚡ ความสำคัญ:</span>
+                                    <span className="text-slate-500 shrink-0">ความสำคัญ</span>
                                     <span
                                       className="font-bold text-right"
-                                      style={{ color: pTheme.badgeText }}
+                                      style={{ color: singlePrioTextColor }}
                                     >
-                                      {pTheme.shortLabel}
+                                      {singlePrioLabel}
                                     </span>
                                   </div>
                                   {flex.remindLabel && (
                                     <div className="flex items-baseline justify-between gap-2">
                                       <span className="text-slate-500 shrink-0">
-                                        🔔 แจ้งเตือนล่วงหน้า:
+                                        แจ้งเตือนล่วงหน้า
                                       </span>
                                       <span className="font-semibold text-emerald-700 text-right">
                                         {flex.remindLabel}
@@ -2071,45 +2201,31 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                                   {showCleanDesc && (
                                     <>
-                                      <div className="border-t border-slate-200 my-1.5" />
-                                      <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
-                                        <span className="font-bold text-slate-900 block mb-0.5">
-                                          📝 รายละเอียดงาน:
+                                      <div className="border-t border-slate-100 my-1.5" />
+                                      <div className="rounded-lg bg-slate-50 p-2.5 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                        <span className="font-bold text-slate-600 block mb-0.5 text-[11px]">
+                                          รายละเอียดเพิ่มเติม
                                         </span>
                                         {cleanDesc}
                                       </div>
                                     </>
                                   )}
                                 </div>
+                              </div>
 
-                                {/* Dark Overview Strip + Calendar Action */}
-                                <div className="rounded-xl bg-[#0F172A] px-3 py-2 flex items-center justify-between gap-2 text-white">
-                                  <div className="text-[11px] font-bold font-mono-tabular">
-                                    <span className="text-sky-400">
-                                      ทั้งหมด {flex.stats?.total ?? summaryMetrics.total}
-                                    </span>{' '}
-                                    ·{' '}
-                                    <span className="text-amber-400">
-                                      รอทำ {flex.stats?.pending ?? summaryMetrics.pendingCount}
-                                    </span>{' '}
-                                    ·{' '}
-                                    <span className="text-emerald-400">
-                                      เสร็จแล้ว{' '}
-                                      {flex.stats?.completed ?? summaryMetrics.completedCount}
-                                    </span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onOpenDateInCalendar(
-                                        flex.date || flex.dateTime.slice(0, 10) || todayStr
-                                      )
-                                    }
-                                    className="px-2.5 py-1 rounded-md bg-[#06C755] text-white text-[11px] font-bold hover:bg-[#05b34c] transition-colors whitespace-nowrap shrink-0"
-                                  >
-                                    📅 ดูในปฏิทิน
-                                  </button>
-                                </div>
+                              <div className="p-3 bg-white border-t border-slate-200">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onOpenDateInCalendar(
+                                      flex.date || flex.dateTime.slice(0, 10) || todayStr
+                                    )
+                                  }
+                                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#0F172A] text-white text-xs font-bold hover:bg-slate-800 transition-colors"
+                                >
+                                  <CalendarIcon className="h-3.5 w-3.5" />
+                                  <span>เปิดดูปฏิทินและจัดการงาน</span>
+                                </button>
                               </div>
                             </div>
                           );
@@ -2137,10 +2253,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               </span>
               <button
                 type="button"
-                onClick={() => onSendChatCommand('สรุปงานตามเวลา')}
-                className="px-2.5 py-1 rounded-md bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+                onClick={() => onSendChatCommand('สรุปงานวันนี้')}
+                className="px-2.5 py-1 rounded-md bg-[#0F172A] text-white text-xs font-semibold hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
               >
-                ⏰ สรุปงานตามเวลา (ผ่านแล้ว / ยังไม่ถึง)
+                กำหนดการวันนี้
               </button>
               <button
                 type="button"
@@ -2632,37 +2748,45 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       </div>
 
                       {(() => {
-                        const samplePrioTheme = getPriorityHeaderTheme(
-                          samplePreviewTask.priority,
-                          sampleCategory?.name
+                        const isSampleHigh = samplePreviewTask.priority === TaskPriority.HIGH;
+                        const isSampleLow = samplePreviewTask.priority === TaskPriority.LOW;
+                        const sampleTagBg = isSampleHigh
+                          ? '#DC2626'
+                          : isSampleLow
+                          ? '#1E3A5F'
+                          : '#D97706';
+                        const samplePrioLabel = isSampleHigh
+                          ? 'ภารกิจด่วนมาก'
+                          : isSampleLow
+                          ? 'ตามกำหนดการ'
+                          : 'ความสำคัญปานกลาง';
+                        const samplePrioTextColor = isSampleHigh
+                          ? '#B91C1C'
+                          : isSampleLow
+                          ? '#334155'
+                          : '#B45309';
+                        const sampleFullDate = formatSummaryCardHeaderDate(
+                          samplePreviewTask.date,
+                          [samplePreviewTask]
                         );
+
                         return (
                           <div className="rounded-xl overflow-hidden border border-slate-200 shadow-2xs bg-white">
-                            <div
-                              style={{
-                                backgroundColor: samplePrioTheme.headerBg,
-                              }}
-                              className="px-4 py-3.5 text-white"
-                            >
+                            {/* Executive Royal Navy Header */}
+                            <div className="bg-[#0B192C] px-4 py-4 text-white">
                               <div className="flex items-center justify-between gap-2">
-                                <span
-                                  style={{
-                                    backgroundColor: samplePrioTheme.badgeBg,
-                                    color: samplePrioTheme.badgeText,
-                                  }}
-                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold"
-                                >
-                                  {samplePrioTheme.badgeLabel}
+                                <span className="text-[11px] font-bold text-amber-400">
+                                  แจ้งเตือนกำหนดการปฏิบัติราชการ
                                 </span>
                                 <span
-                                  style={{ backgroundColor: samplePrioTheme.headerStripBg }}
-                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold"
+                                  style={{ backgroundColor: sampleTagBg }}
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0"
                                 >
-                                  🗂️ {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
+                                  {samplePrioLabel}
                                 </span>
                               </div>
                               <div
-                                className={`mt-2 ${
+                                className={`mt-2 text-white ${
                                   lineSettings.cardFontSize === 'sm'
                                     ? 'text-xs'
                                     : lineSettings.cardFontSize === 'lg'
@@ -2682,20 +2806,36 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               >
                                 {samplePreviewTask.title}
                               </div>
-                              <div className="mt-2.5 rounded-xl bg-white px-2.5 py-1.5 shadow-2xs flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-900 text-white text-xs font-mono-tabular font-bold">
-                                  ⏰ {samplePreviewTask.time} น.
-                                </span>
-                                <span
-                                  style={{ color: samplePrioTheme.badgeText }}
-                                  className="text-xs font-bold"
-                                >
-                                  🗓️ {formatTaskDateRangeLabel(samplePreviewTask)}
-                                </span>
+                              <div className="text-[11px] text-slate-300 mt-1">
+                                {sampleFullDate} · เวลา {samplePreviewTask.time} น.
+                              </div>
+
+                              {/* 3-Column Executive KPI Strip */}
+                              <div className="mt-3 grid grid-cols-3 rounded-lg bg-[#132640] py-2 px-2 text-center">
+                                <div>
+                                  <div className="text-sm font-extrabold text-white tabular-nums">
+                                    {Math.max(1, summaryMetrics.total)}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">ทั้งหมด</div>
+                                </div>
+                                <div className="border-x border-[#1E3A5F]">
+                                  <div className="text-sm font-extrabold text-amber-400 tabular-nums">
+                                    {summaryMetrics.total === 0 ? 1 : summaryMetrics.pendingCount}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">รอดำเนินการ</div>
+                                </div>
+                                <div>
+                                  <div className="text-sm font-extrabold text-emerald-400 tabular-nums">
+                                    {summaryMetrics.completedCount}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">เสร็จสิ้นแล้ว</div>
+                                </div>
                               </div>
                             </div>
+
+                            {/* Clean White Body Card */}
                             <div
-                              className={`p-3.5 space-y-2.5 bg-[#F1F5F9] ${
+                              className={`p-3.5 space-y-2.5 bg-[#F8FAFC] ${
                                 lineSettings.cardFontSize === 'sm'
                                   ? 'text-[11px]'
                                   : lineSettings.cardFontSize === 'lg'
@@ -2704,86 +2844,52 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                               }`}
                             >
                               <div
-                                style={{ borderLeft: `6px solid ${samplePrioTheme.headerBg}` }}
-                                className="rounded-xl bg-white border border-slate-200 p-3 space-y-2 shadow-2xs"
+                                className={`rounded-xl bg-white border p-3.5 space-y-2 shadow-2xs ${
+                                  isSampleHigh ? 'border-rose-200' : 'border-slate-200'
+                                }`}
                               >
-                                <div
-                                  style={{
-                                    backgroundColor: samplePrioTheme.badgeBg,
-                                    borderColor: samplePrioTheme.borderAccent,
-                                  }}
-                                  className="rounded-lg border p-2.5 space-y-1"
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span
-                                      style={{ backgroundColor: samplePrioTheme.headerBg }}
-                                      className="inline-flex items-center px-2 py-0.5 rounded-md text-white font-mono-tabular font-bold text-xs"
-                                    >
-                                      ⏰ เวลา {samplePreviewTask.time} น.
-                                    </span>
-                                    <span
-                                      style={{ color: samplePrioTheme.badgeText }}
-                                      className="text-[10px] font-bold"
-                                    >
-                                      กำหนดการนัดหมาย
-                                    </span>
-                                  </div>
-                                  <div className="font-bold text-slate-900 text-xs pt-0.5">
-                                    🗓️ {formatTaskDateRangeLabel(samplePreviewTask)}
-                                  </div>
+                                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded bg-[#0F172A] text-white font-bold tabular-nums text-xs">
+                                    เวลา {samplePreviewTask.time} น.
+                                  </span>
+                                  <span className="text-slate-700 font-bold text-xs">
+                                    {formatTaskDateRangeLabel(samplePreviewTask, 'short')}
+                                  </span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span className="text-slate-500">🗂️ หมวดหมู่:</span>
+                                <div className="flex justify-between gap-2">
+                                  <span className="text-slate-500">หมวดหมู่</span>
                                   <span
-                                    className={
+                                    className={`text-slate-900 ${
                                       lineSettings.cardTitleWeight === 'regular'
                                         ? 'font-normal'
                                         : 'font-bold'
-                                    }
-                                    style={{
-                                      color: sampleCategory?.color || samplePrioTheme.headerBg,
-                                    }}
+                                    }`}
                                   >
                                     {sampleCategory?.name || 'งานบริหาร & โปรเจกต์'}
                                   </span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span className="text-slate-500">⚡ ความสำคัญ:</span>
+                                <div className="flex justify-between gap-2">
+                                  <span className="text-slate-500">ความสำคัญ</span>
                                   <span
                                     className={
                                       lineSettings.cardTitleWeight === 'regular'
                                         ? 'font-normal'
                                         : 'font-bold'
                                     }
-                                    style={{ color: samplePrioTheme.badgeText }}
+                                    style={{ color: samplePrioTextColor }}
                                   >
-                                    {samplePrioTheme.shortLabel}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="grid grid-cols-3 gap-2 rounded-xl bg-[#0F172A] p-2.5 text-center">
-                                <div>
-                                  <span className="text-[11px] font-bold text-sky-400 font-mono-tabular">
-                                    ทั้งหมด {Math.max(1, summaryMetrics.total)}
-                                  </span>
-                                </div>
-                                <div className="border-x border-slate-700">
-                                  <span className="text-[11px] font-bold text-amber-400 font-mono-tabular">
-                                    รอทำ {summaryMetrics.total === 0 ? 1 : summaryMetrics.pendingCount}
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="text-[11px] font-bold text-emerald-400 font-mono-tabular">
-                                    เสร็จแล้ว {summaryMetrics.completedCount}
+                                    {samplePrioLabel}
                                   </span>
                                 </div>
                               </div>
 
                               {lineSettings.includeOpenAppButton !== false && (
-                                <div className="pt-1">
-                                  <div className="w-full py-2 px-3 rounded-lg bg-[#06C755] text-white text-center text-xs font-bold">
-                                    📅 เปิดดูปฏิทินของทีม
+                                <div className="pt-1 space-y-1.5">
+                                  <div className="w-full py-2 px-3 rounded-lg bg-[#0F172A] text-white text-center text-xs font-bold">
+                                    เปิดตารางงานนำเสนอ (รายวัน)
+                                  </div>
+                                  <div className="w-full py-2 px-3 rounded-lg bg-slate-100 text-slate-800 text-center text-xs font-semibold">
+                                    เปิดดูปฏิทินและจัดการงาน
                                   </div>
                                 </div>
                               )}

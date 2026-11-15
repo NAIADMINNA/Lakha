@@ -53,6 +53,7 @@ interface CollaborativeWorkspaceState {
   spreadsheetUrl?: string;
   tasks: unknown[];
   categories: unknown[];
+  categoriesUpdatedAt?: number;
   teamMembers: unknown[];
 }
 
@@ -667,7 +668,17 @@ function buildSingleTaskReminderFlexMessage(params: {
     },
   ]);
 
-  const prioTheme = getPriorityHeaderTheme(params.priority, params.categoryName);
+  const prioKey = String(params.priority || 'medium').toLowerCase();
+  const isHigh = prioKey === 'high';
+  const isLow = prioKey === 'low';
+  const prioTagBg = isHigh ? '#DC2626' : isLow ? '#1E3A5F' : '#D97706';
+  const prioTagLabel = isHigh
+    ? 'ภารกิจด่วนมาก'
+    : isLow
+    ? 'ตามกำหนดการ'
+    : 'ความสำคัญปานกลาง';
+  const prioTextColor = isHigh ? '#B91C1C' : isLow ? '#334155' : '#B45309';
+
   const isCompact = params.messageFormat === 'compact_flex';
   const rawDesc = String(params.description || '').trim();
   const showDesc =
@@ -684,7 +695,6 @@ function buildSingleTaskReminderFlexMessage(params: {
   const titleSize =
     fontScale === 'lg' ? 'xl' : fontScale === 'sm' ? 'md' : isCompact ? 'md' : 'lg';
   const bodySize = fontScale === 'lg' ? 'sm' : fontScale === 'sm' ? 'xxs' : 'xs';
-  const timeValueSize = fontScale === 'lg' ? 'md' : fontScale === 'sm' ? 'xs' : 'sm';
   const textWeight = params.cardTitleWeight === 'regular' ? 'regular' : 'bold';
   const lineSpacingPx =
     params.cardLineSpacing === 'tight'
@@ -693,10 +703,6 @@ function buildSingleTaskReminderFlexMessage(params: {
       ? '4px'
       : '6px';
 
-  const catColorHex =
-    /^#[0-9A-Fa-f]{6}$/.test(params.categoryColor || '')
-      ? params.categoryColor!
-      : prioTheme.headerBg;
   const googleCalUrl = buildGoogleCalUrl(
     params.taskTitle,
     params.date,
@@ -709,28 +715,29 @@ function buildSingleTaskReminderFlexMessage(params: {
     : params.appUrl;
 
   const footerButtons: Record<string, unknown>[] = [];
-  if (showAppBtn) {
-    footerButtons.push({
-      type: 'button',
-      style: 'primary',
-      color: '#06C755',
-      height: 'sm',
-      action: {
-        type: 'uri',
-        label: '📅 เปิดดูปฏิทินของทีม',
-        uri: params.appUrl,
-      },
-    });
-  }
   if (!params.appUrl.includes('script.google.com')) {
     footerButtons.push({
       type: 'button',
-      style: 'secondary',
+      style: 'primary',
+      color: '#0F172A',
       height: 'sm',
       action: {
         type: 'uri',
-        label: '📺 เปิดตารางงานนำเสนอ (รายวัน)',
+        label: 'เปิดตารางงานนำเสนอ (รายวัน)',
         uri: scheduleBoardUrl,
+      },
+    });
+  }
+  if (showAppBtn) {
+    footerButtons.push({
+      type: 'button',
+      style: footerButtons.length === 0 ? 'primary' : 'secondary',
+      ...(footerButtons.length === 0 ? { color: '#0F172A' } : {}),
+      height: 'sm',
+      action: {
+        type: 'uri',
+        label: 'เปิดดูปฏิทินและจัดการงาน',
+        uri: params.appUrl,
       },
     });
   } else if (showCalBtn && footerButtons.length < 2) {
@@ -740,60 +747,54 @@ function buildSingleTaskReminderFlexMessage(params: {
       height: 'sm',
       action: {
         type: 'uri',
-        label: '+ เพิ่มลงแอป Google Calendar',
+        label: 'บันทึกเข้า Google Calendar',
         uri: googleCalUrl,
       },
     });
   }
 
   const detailCardContents: Record<string, unknown>[] = [
-    // Prominent Date & Time Highlight Box inside Body
     {
       type: 'box',
-      layout: 'vertical',
-      backgroundColor: prioTheme.badgeBg,
-      cornerRadius: '10px',
-      paddingAll: '12px',
-      borderWidth: '1px',
-      borderColor: prioTheme.borderAccent,
+      layout: 'horizontal',
+      alignItems: 'center',
       contents: [
         {
           type: 'box',
-          layout: 'horizontal',
-          alignItems: 'center',
+          layout: 'vertical',
+          backgroundColor: '#0F172A',
+          cornerRadius: '6px',
+          paddingStart: '10px',
+          paddingEnd: '10px',
+          paddingTop: '4px',
+          paddingBottom: '4px',
+          flex: 0,
           contents: [
             {
-              type: 'box',
-              layout: 'vertical',
-              backgroundColor: prioTheme.headerBg,
-              cornerRadius: '6px',
-              paddingStart: '10px',
-              paddingEnd: '10px',
-              paddingTop: '4px',
-              paddingBottom: '4px',
-              flex: 0,
-              contents: [
-                {
-                  type: 'text',
-                  text: `⏰ เวลา ${params.time} น.`,
-                  color: '#FFFFFF',
-                  size: 'md',
-                  weight: 'bold',
-                },
-              ],
+              type: 'text',
+              text: `เวลา ${params.time} น.`,
+              color: '#FFFFFF',
+              size: 'xs',
+              weight: 'bold',
             },
           ],
         },
         {
           type: 'text',
-          text: `🗓️ ${fullHeaderDate}`,
-          color: '#0F172A',
-          size: 'sm',
+          text: readableDate,
+          color: '#334155',
+          size: 'xs',
           weight: 'bold',
-          margin: 'sm',
+          align: 'end',
+          flex: 1,
           wrap: true,
         },
       ],
+    },
+    {
+      type: 'separator',
+      margin: 'md',
+      color: '#F1F5F9',
     },
     {
       type: 'box',
@@ -803,15 +804,15 @@ function buildSingleTaskReminderFlexMessage(params: {
       contents: [
         {
           type: 'text',
-          text: '🗂️ หมวดหมู่',
+          text: 'หมวดหมู่',
           color: '#64748B',
           size: bodySize,
           flex: 3,
         },
         {
           type: 'text',
-          text: params.categoryName || 'ทั่วไป',
-          color: catColorHex,
+          text: params.categoryName || 'ภารกิจทั่วไป',
+          color: '#0F172A',
           size: bodySize,
           weight: textWeight,
           flex: 7,
@@ -827,15 +828,15 @@ function buildSingleTaskReminderFlexMessage(params: {
       contents: [
         {
           type: 'text',
-          text: '⚡ ความสำคัญ',
+          text: 'ความสำคัญ',
           color: '#64748B',
           size: bodySize,
           flex: 3,
         },
         {
           type: 'text',
-          text: prioTheme.shortLabel,
-          color: prioTheme.badgeText,
+          text: prioTagLabel,
+          color: prioTextColor,
           size: bodySize,
           weight: textWeight,
           flex: 7,
@@ -849,7 +850,7 @@ function buildSingleTaskReminderFlexMessage(params: {
     detailCardContents.push({
       type: 'separator',
       margin: 'md',
-      color: '#E2E8F0',
+      color: '#F1F5F9',
     });
     detailCardContents.push({
       type: 'box',
@@ -861,10 +862,10 @@ function buildSingleTaskReminderFlexMessage(params: {
       contents: [
         {
           type: 'text',
-          text: '📝 รายละเอียดงาน',
+          text: 'รายละเอียดเพิ่มเติม',
           size: 'xxs',
           weight: 'bold',
-          color: '#475569',
+          color: '#64748B',
         },
         {
           type: 'text',
@@ -881,82 +882,157 @@ function buildSingleTaskReminderFlexMessage(params: {
 
   const summaryStats = params.stats;
 
-  const bodyContents: Record<string, unknown>[] = [
+  const headerContents: Record<string, unknown>[] = [
     {
       type: 'box',
       layout: 'horizontal',
-      backgroundColor: '#FFFFFF',
-      cornerRadius: '12px',
-      borderWidth: '1px',
-      borderColor: prioTheme.priorityKey === 'high' ? '#FCA5A5' : '#E2E8F0',
+      alignItems: 'center',
+      contents: [
+        {
+          type: 'text',
+          text: 'แจ้งเตือนกำหนดการปฏิบัติราชการ',
+          color: '#FBBF24',
+          size: 'xxs',
+          weight: 'bold',
+          flex: 1,
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          backgroundColor: prioTagBg,
+          cornerRadius: '4px',
+          paddingStart: '8px',
+          paddingEnd: '8px',
+          paddingTop: '3px',
+          paddingBottom: '3px',
+          flex: 0,
+          contents: [
+            {
+              type: 'text',
+              text: prioTagLabel,
+              color: '#FFFFFF',
+              size: 'xxs',
+              weight: 'bold',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      type: 'text',
+      text: params.taskTitle || 'รายการภารกิจแจ้งเตือน',
+      color: '#FFFFFF',
+      size: titleSize,
+      weight: textWeight,
+      lineSpacing: lineSpacingPx,
+      wrap: true,
+      margin: 'md',
+    },
+    {
+      type: 'text',
+      text: `${fullHeaderDate} · เวลา ${params.time} น.`,
+      color: '#CBD5E1',
+      size: 'xs',
+      margin: 'xs',
+      wrap: true,
+    },
+  ];
+
+  if (summaryStats) {
+    headerContents.push({
+      type: 'box',
+      layout: 'horizontal',
+      backgroundColor: '#132640',
+      cornerRadius: '8px',
+      paddingTop: '10px',
+      paddingBottom: '10px',
+      paddingStart: '8px',
+      paddingEnd: '8px',
+      margin: 'md',
+      alignItems: 'center',
       contents: [
         {
           type: 'box',
           layout: 'vertical',
-          width: '6px',
-          flex: 0,
-          backgroundColor: prioTheme.headerBg,
+          flex: 1,
+          contents: [
+            {
+              type: 'text',
+              text: String(summaryStats.total),
+              size: 'md',
+              weight: 'bold',
+              color: '#FFFFFF',
+              align: 'center',
+            },
+            {
+              type: 'text',
+              text: 'ทั้งหมด',
+              size: 'xxs',
+              color: '#94A3B8',
+              align: 'center',
+              margin: 'xs',
+            },
+          ],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          width: '1px',
+          height: '24px',
+          backgroundColor: '#1E3A5F',
           contents: [{ type: 'filler' }],
         },
         {
           type: 'box',
           layout: 'vertical',
           flex: 1,
-          paddingAll: '14px',
-          contents: detailCardContents,
-        },
-      ],
-    },
-  ];
-
-  if (summaryStats) {
-    bodyContents.push({
-      type: 'box',
-      layout: 'horizontal',
-      backgroundColor: '#0F172A',
-      cornerRadius: '10px',
-      paddingAll: '10px',
-      margin: 'md',
-      contents: [
-        {
-          type: 'box',
-          layout: 'vertical',
           contents: [
             {
               type: 'text',
-              text: `ทั้งหมด ${summaryStats.total}`,
-              size: 'xxs',
-              weight: 'bold',
-              color: '#38BDF8',
-              align: 'center',
-            },
-          ],
-        },
-        {
-          type: 'box',
-          layout: 'vertical',
-          contents: [
-            {
-              type: 'text',
-              text: `รอทำ ${summaryStats.pending}`,
-              size: 'xxs',
+              text: String(summaryStats.pending),
+              size: 'md',
               weight: 'bold',
               color: '#FBBF24',
               align: 'center',
             },
+            {
+              type: 'text',
+              text: 'รอดำเนินการ',
+              size: 'xxs',
+              color: '#94A3B8',
+              align: 'center',
+              margin: 'xs',
+            },
           ],
         },
         {
           type: 'box',
           layout: 'vertical',
+          width: '1px',
+          height: '24px',
+          backgroundColor: '#1E3A5F',
+          contents: [{ type: 'filler' }],
+        },
+        {
+          type: 'box',
+          layout: 'vertical',
+          flex: 1,
           contents: [
             {
               type: 'text',
-              text: `เสร็จแล้ว ${summaryStats.completed}`,
-              size: 'xxs',
+              text: String(summaryStats.completed),
+              size: 'md',
               weight: 'bold',
               color: '#34D399',
               align: 'center',
+            },
+            {
+              type: 'text',
+              text: 'เสร็จสิ้นแล้ว',
+              size: 'xxs',
+              color: '#94A3B8',
+              align: 'center',
+              margin: 'xs',
             },
           ],
         },
@@ -966,118 +1042,34 @@ function buildSingleTaskReminderFlexMessage(params: {
 
   return {
     type: 'flex',
-    altText: `🔔 แจ้งเตือนงาน: ${params.taskTitle} (${readableDate} เวลา ${params.time} น.)`,
+    altText: `แจ้งเตือนภารกิจ: ${params.taskTitle} (${readableDate} เวลา ${params.time} น.)`,
     contents: {
       type: 'bubble',
       size: isCompact ? 'kilo' : 'mega',
       header: {
         type: 'box',
         layout: 'vertical',
-        backgroundColor: prioTheme.headerBg,
-        paddingAll: isCompact ? '14px' : '18px',
-        contents: [
-          {
-            type: 'box',
-            layout: 'horizontal',
-            alignItems: 'center',
-            contents: [
-              {
-                type: 'box',
-                layout: 'vertical',
-                backgroundColor: prioTheme.badgeBg,
-                cornerRadius: '6px',
-                paddingStart: '8px',
-                paddingEnd: '8px',
-                paddingTop: '4px',
-                paddingBottom: '4px',
-                flex: 0,
-                contents: [
-                  {
-                    type: 'text',
-                    text: prioTheme.badgeLabel,
-                    color: prioTheme.badgeText,
-                    size: 'xxs',
-                    weight: 'bold',
-                  },
-                ],
-              },
-              {
-                type: 'text',
-                text: `🗂️ ${params.categoryName || 'ทั่วไป'}`,
-                color: '#FFFFFF',
-                size: 'xs',
-                weight: 'bold',
-                align: 'end',
-                wrap: false,
-              },
-            ],
-          },
-          {
-            type: 'text',
-            text: params.taskTitle || 'รายการงานแจ้งเตือน',
-            color: '#FFFFFF',
-            size: titleSize,
-            weight: textWeight,
-            lineSpacing: lineSpacingPx,
-            wrap: true,
-            margin: 'md',
-          },
-          // High-Contrast Date & Time Spotlight Banner inside Header
-          {
-            type: 'box',
-            layout: 'vertical',
-            backgroundColor: '#FFFFFF',
-            cornerRadius: '10px',
-            paddingAll: '10px',
-            margin: 'md',
-            contents: [
-              {
-                type: 'box',
-                layout: 'horizontal',
-                alignItems: 'center',
-                spacing: 'sm',
-                contents: [
-                  {
-                    type: 'box',
-                    layout: 'vertical',
-                    backgroundColor: '#0F172A',
-                    cornerRadius: '6px',
-                    paddingStart: '10px',
-                    paddingEnd: '10px',
-                    paddingTop: '4px',
-                    paddingBottom: '4px',
-                    flex: 0,
-                    contents: [
-                      {
-                        type: 'text',
-                        text: `⏰ ${params.time} น.`,
-                        color: '#FFFFFF',
-                        size: 'sm',
-                        weight: 'bold',
-                      },
-                    ],
-                  },
-                  {
-                    type: 'text',
-                    text: `🗓️ ${readableDate}`,
-                    color: prioTheme.badgeText,
-                    size: 'sm',
-                    weight: 'bold',
-                    flex: 1,
-                    wrap: true,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
+        backgroundColor: '#0B192C',
+        paddingAll: isCompact ? '16px' : '18px',
+        contents: headerContents,
       },
       body: {
         type: 'box',
         layout: 'vertical',
         paddingAll: isCompact ? '14px' : '16px',
-        backgroundColor: '#F1F5F9',
-        contents: bodyContents,
+        backgroundColor: '#F8FAFC',
+        contents: [
+          {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#FFFFFF',
+            cornerRadius: '10px',
+            borderWidth: '1px',
+            borderColor: isHigh ? '#FECDD3' : '#E2E8F0',
+            paddingAll: '14px',
+            contents: detailCardContents,
+          },
+        ],
       },
       ...(footerButtons.length > 0
         ? {
@@ -1179,6 +1171,7 @@ const PERMANENTLY_PURGED_TASK_IDS = [
   'task-1793666764668',
 ];
 const persistedDeletedTaskIds = new Set<string>(PERMANENTLY_PURGED_TASK_IDS);
+const persistedDeletedCategoryIds = new Set<string>();
 const WORKSPACE_CACHE_FILE = path.join(process.cwd(), '.sheetcal-workspace-cache.json');
 
 function loadPersistedWorkspaceCache(): void {
@@ -1227,6 +1220,11 @@ function loadPersistedWorkspaceCache(): void {
           if (id) persistedDeletedTaskIds.add(String(id));
         }
       }
+      if (Array.isArray(parsed.deletedCategoryIds)) {
+        for (const cid of parsed.deletedCategoryIds) {
+          if (cid) persistedDeletedCategoryIds.add(String(cid));
+        }
+      }
       if (parsed.workspaces && typeof parsed.workspaces === 'object') {
         for (const [k, v] of Object.entries(parsed.workspaces)) {
           if (v && typeof v === 'object') {
@@ -1236,6 +1234,13 @@ function loadPersistedWorkspaceCache(): void {
                 if (!t || typeof t !== 'object') return false;
                 const tid = String((t as Record<string, unknown>).id || '').trim();
                 return Boolean(tid && !persistedDeletedTaskIds.has(tid));
+              });
+            }
+            if (Array.isArray(ws.categories)) {
+              ws.categories = ws.categories.filter((c) => {
+                if (!c || typeof c !== 'object') return false;
+                const cid = String((c as Record<string, unknown>).id || '').trim();
+                return Boolean(cid && !persistedDeletedCategoryIds.has(cid));
               });
             }
             sharedWorkspaces.set(k, ws);
@@ -1266,6 +1271,7 @@ function savePersistedWorkspaceCache(): void {
           runtimeScheduleConfig,
           runtimeDirectorPresence,
           deletedTaskIds: Array.from(persistedDeletedTaskIds),
+          deletedCategoryIds: Array.from(persistedDeletedCategoryIds),
           workspaces: workspacesObj,
         },
         null,
@@ -1481,18 +1487,53 @@ async function startServer() {
   });
 
   const deletedTaskIds = persistedDeletedTaskIds;
+  const deletedCategoryIds = persistedDeletedCategoryIds;
   let lastGasPullMs = 0;
   let lastWorkspacePostMs = 0;
 
   const GAS_META_DELIM = '#SCMETA#';
 
+  function mergeCategoriesById(
+    primaryCats: unknown[],
+    secondaryCats: unknown[],
+    delCatSet: Set<string> = deletedCategoryIds
+  ): Record<string, unknown>[] {
+    const seenIds = new Set<string>();
+    const result: Record<string, unknown>[] = [];
+    for (const rawCat of [...primaryCats, ...secondaryCats]) {
+      if (!rawCat || typeof rawCat !== 'object') continue;
+      const rec = rawCat as Record<string, unknown>;
+      const cid = String(rec.id || '').trim();
+      const cname = String(rec.name || '').trim();
+      if (!cid || !cname || delCatSet.has(cid) || seenIds.has(cid)) continue;
+      seenIds.add(cid);
+      result.push({
+        id: cid,
+        name: cname,
+        color: String(rec.color || '#4F46E5').trim(),
+        description: rec.description ? String(rec.description) : '',
+      });
+    }
+    return result;
+  }
+
   function attachGasMetadataToTasks(
     taskList: unknown[],
     categoriesList?: unknown[],
-    teamMembersList?: unknown[]
+    teamMembersList?: unknown[],
+    categoriesUpdatedAtMs?: number,
+    deletedCatIdsList?: string[]
   ): Record<string, unknown>[] {
     const cleanCats = Array.isArray(categoriesList) && categoriesList.length > 0 ? categoriesList : undefined;
     const cleanMembers = Array.isArray(teamMembersList) && teamMembersList.length > 0 ? teamMembersList : undefined;
+    const cleanDelCats =
+      Array.isArray(deletedCatIdsList) && deletedCatIdsList.length > 0
+        ? deletedCatIdsList
+        : undefined;
+    const effectiveCu =
+      typeof categoriesUpdatedAtMs === 'number' && categoriesUpdatedAtMs > 0
+        ? categoriesUpdatedAtMs
+        : Date.now();
     return taskList
       .filter((t): t is Record<string, unknown> => Boolean(t && typeof t === 'object'))
       .map((t, idx) => {
@@ -1513,9 +1554,21 @@ async function startServer() {
         if (dateStr) metaObj.d = dateStr;
         if (timeStr) metaObj.t = timeStr;
         if (endDate) metaObj.e = endDate;
+        let nextUpdatedAt = t.updatedAt;
         if (idx === 0) {
-          if (cleanCats) metaObj.c = cleanCats;
+          if (cleanCats) {
+            metaObj.c = cleanCats;
+            metaObj.cu = effectiveCu;
+          }
+          if (cleanDelCats) {
+            metaObj.dc = cleanDelCats;
+          }
           if (cleanMembers) metaObj.m = cleanMembers;
+          // Ensure row 0 updatedAt is at least effectiveCu so Google Apps Script sync_tasks (even v2.7) always saves updated #SCMETA#
+          const curTaskMs = t.updatedAt ? new Date(String(t.updatedAt)).getTime() : 0;
+          if (cleanCats && effectiveCu > curTaskMs) {
+            nextUpdatedAt = new Date(effectiveCu).toISOString();
+          }
         }
         const encodedSource =
           Object.keys(metaObj).length > 0
@@ -1523,6 +1576,7 @@ async function startServer() {
             : rawSource;
         return {
           ...t,
+          updatedAt: nextUpdatedAt,
           source: encodedSource,
         };
       });
@@ -1531,9 +1585,13 @@ async function startServer() {
   function extractGasMetadataFromTasks(rawTasks: unknown[]): {
     tasks: Record<string, unknown>[];
     categories?: unknown[];
+    categoriesUpdatedAt?: number;
+    deletedCategoryIds?: string[];
     teamMembers?: unknown[];
   } {
     let extractedCategories: unknown[] | undefined;
+    let bestCategoriesCu = -1;
+    let extractedDeletedCatIds: string[] | undefined;
     let extractedMembers: unknown[] | undefined;
     const cleaned: Record<string, unknown>[] = [];
 
@@ -1551,6 +1609,8 @@ async function startServer() {
               t?: string;
               e?: string;
               c?: unknown[];
+              cu?: number;
+              dc?: string[];
               m?: unknown[];
             };
             if (typeof parsedMeta.d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.d)) {
@@ -1562,8 +1622,15 @@ async function startServer() {
             if (typeof parsedMeta.e === 'string' && parsedMeta.e && !rec.endDate) {
               rec.endDate = parsedMeta.e;
             }
-            if (Array.isArray(parsedMeta.c) && parsedMeta.c.length > 0 && !extractedCategories) {
-              extractedCategories = parsedMeta.c;
+            if (Array.isArray(parsedMeta.c) && parsedMeta.c.length > 0) {
+              const rowCu = typeof parsedMeta.cu === 'number' ? parsedMeta.cu : 0;
+              if (rowCu > bestCategoriesCu) {
+                bestCategoriesCu = rowCu;
+                extractedCategories = parsedMeta.c;
+                if (Array.isArray(parsedMeta.dc)) {
+                  extractedDeletedCatIds = parsedMeta.dc.map((x) => String(x || '').trim()).filter(Boolean);
+                }
+              }
             }
             if (Array.isArray(parsedMeta.m) && parsedMeta.m.length > 0 && !extractedMembers) {
               extractedMembers = parsedMeta.m;
@@ -1610,6 +1677,8 @@ async function startServer() {
     return {
       tasks: cleaned,
       categories: extractedCategories,
+      categoriesUpdatedAt: bestCategoriesCu > 0 ? bestCategoriesCu : undefined,
+      deletedCategoryIds: extractedDeletedCatIds,
       teamMembers: extractedMembers,
     };
   }
@@ -1791,11 +1860,33 @@ async function startServer() {
                 ? extractGasMetadataFromTasks(curState.tasks).tasks
                 : [];
               const merged = mergeTasksById(curTasks, validRemoteGas);
-              if (curState && JSON.stringify(merged) !== JSON.stringify(curState.tasks)) {
+              const remoteGasCats =
+                Array.isArray(gasData.categories) && gasData.categories.length > 0
+                  ? gasData.categories
+                  : decodedGas.categories || [];
+              const curCats = Array.isArray(curState?.categories) ? curState.categories : [];
+              const localCu = curState?.categoriesUpdatedAt || 0;
+              const remoteCu = decodedGas.categoriesUpdatedAt || 0;
+              if (remoteCu > localCu && Array.isArray(decodedGas.deletedCategoryIds)) {
+                for (const dcid of decodedGas.deletedCategoryIds) {
+                  if (dcid) deletedCategoryIds.add(dcid);
+                }
+              }
+              const mergedCats =
+                remoteCu > localCu
+                  ? mergeCategoriesById(remoteGasCats, curCats)
+                  : mergeCategoriesById(curCats, remoteGasCats);
+              if (
+                curState &&
+                (JSON.stringify(merged) !== JSON.stringify(curState.tasks) ||
+                  JSON.stringify(mergedCats) !== JSON.stringify(curCats))
+              ) {
                 const updatedState: CollaborativeWorkspaceState = {
                   ...curState,
                   updatedAt: new Date().toISOString(),
                   tasks: merged,
+                  categories: mergedCats.length > 0 ? mergedCats : curCats,
+                  categoriesUpdatedAt: Math.max(localCu, remoteCu),
                 };
                 sharedWorkspaces.set(workspaceId, updatedState);
                 sharedWorkspaces.set('sheetcal-team-clean', updatedState);
@@ -1821,7 +1912,9 @@ async function startServer() {
         const gasTasksWithMeta = attachGasMetadataToTasks(
           finalTasks,
           finalCats,
-          finalMembers
+          finalMembers,
+          latestState?.categoriesUpdatedAt,
+          Array.from(deletedCategoryIds)
         );
         const syncRes = await postToGoogleAppsScript(cleanGas, {
           action: 'sync_tasks',
@@ -1829,6 +1922,7 @@ async function startServer() {
           categories: finalCats,
           teamMembers: finalMembers,
           deletedTaskIds: Array.from(deletedTaskIds),
+          deletedCategoryIds: Array.from(deletedCategoryIds),
         });
         savePersistedWorkspaceCache();
         return {
@@ -1931,22 +2025,38 @@ async function startServer() {
             const remoteCats =
               Array.isArray(gasData.categories) && gasData.categories.length > 0
                 ? gasData.categories
-                : decodedGas.categories;
+                : decodedGas.categories || [];
             const remoteMembers =
               Array.isArray(gasData.teamMembers) && gasData.teamMembers.length > 0
                 ? gasData.teamMembers
                 : decodedGas.teamMembers;
 
-            const nextCats =
-              remoteCats && (!Array.isArray(state?.categories) || state.categories.length === 0)
-                ? remoteCats
-                : state?.categories || [];
+            const currentCats = Array.isArray(state?.categories) ? state.categories : [];
+            const localCu = state?.categoriesUpdatedAt || 0;
+            const remoteCu = decodedGas.categoriesUpdatedAt || 0;
+            if (remoteCu > localCu && Array.isArray(decodedGas.deletedCategoryIds)) {
+              for (const dcid of decodedGas.deletedCategoryIds) {
+                if (dcid) deletedCategoryIds.add(dcid);
+              }
+            }
+            const mergedCats =
+              remoteCu > localCu
+                ? mergeCategoriesById(remoteCats, currentCats)
+                : mergeCategoriesById(currentCats, remoteCats);
+            const nextCats = mergedCats.length > 0 ? mergedCats : currentCats;
+            const hasCategoryDiffWithGas =
+              nextCats.length > 0 && JSON.stringify(nextCats) !== JSON.stringify(remoteCats);
+
             const nextMembers =
               remoteMembers && (!Array.isArray(state?.teamMembers) || state.teamMembers.length === 0)
                 ? remoteMembers
                 : state?.teamMembers || [];
 
-            if (!state || JSON.stringify(merged) !== JSON.stringify(currentTasks)) {
+            if (
+              !state ||
+              JSON.stringify(merged) !== JSON.stringify(currentTasks) ||
+              JSON.stringify(nextCats) !== JSON.stringify(currentCats)
+            ) {
               state = {
                 workspaceId: state?.workspaceId || workspaceId,
                 updatedAt: new Date().toISOString(),
@@ -1955,6 +2065,7 @@ async function startServer() {
                 spreadsheetUrl: state?.spreadsheetUrl,
                 tasks: merged,
                 categories: nextCats,
+                categoriesUpdatedAt: Math.max(localCu, remoteCu),
                 teamMembers: nextMembers,
               };
               sharedWorkspaces.set(workspaceId, state);
@@ -1963,11 +2074,18 @@ async function startServer() {
               savePersistedWorkspaceCache();
             }
 
-            if (hasLocalTaskMissingInGas || hasDeletedTaskStillInGas) {
+            if (hasLocalTaskMissingInGas || hasDeletedTaskStillInGas || hasCategoryDiffWithGas) {
+              const effectiveSyncCu = Math.max(
+                localCu,
+                remoteCu,
+                hasCategoryDiffWithGas ? Date.now() : 0
+              );
               const gasTasksWithMeta = attachGasMetadataToTasks(
                 merged,
                 nextCats,
-                nextMembers
+                nextMembers,
+                effectiveSyncCu,
+                Array.from(deletedCategoryIds)
               );
               postToGoogleAppsScript(cleanGas, {
                 action: 'sync_tasks',
@@ -1975,6 +2093,7 @@ async function startServer() {
                 categories: nextCats,
                 teamMembers: nextMembers,
                 deletedTaskIds: Array.from(deletedTaskIds),
+                deletedCategoryIds: Array.from(deletedCategoryIds),
               }).catch(() => {});
             }
           }
@@ -1992,6 +2111,7 @@ async function startServer() {
       exists: true,
       workspace: state,
       deletedTaskIds: Array.from(deletedTaskIds),
+      deletedCategoryIds: Array.from(deletedCategoryIds),
     });
   });
 
@@ -2004,6 +2124,9 @@ async function startServer() {
       taskId,
       deletedTaskId,
       deletedTaskIds: incomingDeletedTaskIds,
+      deletedCategoryId,
+      deletedCategoryIds: incomingDeletedCategoryIds,
+      categoriesUpdatedAt: incomingCategoriesUpdatedAt,
       updatedBy,
       spreadsheetId,
       spreadsheetUrl,
@@ -2032,6 +2155,31 @@ async function startServer() {
         if (cleanId) {
           explicitDeletedIds.add(cleanId);
           deletedTaskIds.add(cleanId);
+        }
+      }
+    }
+
+    const singleDeletedCatId = String(deletedCategoryId || '').trim();
+    if (singleDeletedCatId) {
+      deletedCategoryIds.add(singleDeletedCatId);
+    }
+    if (Array.isArray(incomingDeletedCategoryIds)) {
+      for (const rawCid of incomingDeletedCategoryIds) {
+        const cleanCid = String(rawCid || '').trim();
+        if (cleanCid) deletedCategoryIds.add(cleanCid);
+      }
+    }
+    // If client explicitly re-added or saved a category, ensure its ID is not blocked in tombstones
+    if (Array.isArray(categories) && !singleDeletedCatId) {
+      const incomingCatUpdated = typeof incomingCategoriesUpdatedAt === 'number' && incomingCategoriesUpdatedAt > 0;
+      if (incomingCatUpdated) {
+        for (const c of categories) {
+          if (c && typeof c === 'object') {
+            const cid = String((c as Record<string, unknown>).id || '').trim();
+            if (cid && cid !== singleDeletedCatId) {
+              deletedCategoryIds.delete(cid);
+            }
+          }
         }
       }
     }
@@ -2070,10 +2218,37 @@ async function startServer() {
       });
     }
 
-    const nextCategories =
-      Array.isArray(categories) && categories.length > 0
-        ? categories
-        : existing?.categories || [];
+    const existingCats = Array.isArray(existing?.categories) ? existing.categories : [];
+    const incomingCats = Array.isArray(categories) ? categories : [];
+    const existingCu = existing?.categoriesUpdatedAt || 0;
+    const incomingCu =
+      typeof incomingCategoriesUpdatedAt === 'number' && incomingCategoriesUpdatedAt > 0
+        ? incomingCategoriesUpdatedAt
+        : 0;
+    const mergedCategories =
+      incomingCats.length > 0
+        ? incomingCu >= existingCu
+          ? mergeCategoriesById(incomingCats, existingCats)
+          : mergeCategoriesById(existingCats, incomingCats)
+        : mergeCategoriesById(existingCats, []);
+    const nextCategories = mergedCategories.length > 0 ? mergedCategories : existingCats;
+    const categoriesChanged = JSON.stringify(nextCategories) !== JSON.stringify(existingCats);
+    const nextCategoriesUpdatedAt = categoriesChanged
+      ? Math.max(Date.now(), incomingCu, existingCu)
+      : Math.max(incomingCu, existingCu);
+
+    // Bump row 0 updatedAt when categories change so Google Apps Script sync_tasks immediately persists #SCMETA#
+    if ((categoriesChanged || incomingCu > existingCu) && nextTasks.length > 0) {
+      nextTasks = nextTasks.map((t, idx) =>
+        idx === 0
+          ? {
+              ...t,
+              updatedAt: new Date(Math.max(Date.now(), nextCategoriesUpdatedAt)).toISOString(),
+            }
+          : t
+      );
+    }
+
     const nextTeamMembers =
       Array.isArray(teamMembers) && teamMembers.length > 0
         ? teamMembers
@@ -2087,6 +2262,7 @@ async function startServer() {
       spreadsheetUrl: spreadsheetUrl ?? existing?.spreadsheetUrl,
       tasks: nextTasks,
       categories: nextCategories,
+      categoriesUpdatedAt: nextCategoriesUpdatedAt,
       teamMembers: nextTeamMembers,
     };
     sharedWorkspaces.set(workspaceId, nextState);
@@ -2103,6 +2279,7 @@ async function startServer() {
       ok: true,
       workspace: nextState,
       deletedTaskIds: Array.from(deletedTaskIds),
+      deletedCategoryIds: Array.from(deletedCategoryIds),
     });
   });
 
@@ -2114,8 +2291,10 @@ async function startServer() {
         channelAccessToken,
         tasks,
         categories,
+        categoriesUpdatedAt: incomingCategoriesUpdatedAt,
         teamMembers,
         deletedTaskIds: incomingDeletedIds,
+        deletedCategoryIds: incomingDeletedCategoryIds,
         mode,
       } = req.body || {};
       const token = sanitizeToken(channelAccessToken || runtimeChannelAccessToken || '');
@@ -2125,6 +2304,12 @@ async function startServer() {
         for (const rawId of incomingDeletedIds) {
           const cid = String(rawId || '').trim();
           if (cid) deletedTaskIds.add(cid);
+        }
+      }
+      if (Array.isArray(incomingDeletedCategoryIds)) {
+        for (const rawCid of incomingDeletedCategoryIds) {
+          const dcid = String(rawCid || '').trim();
+          if (dcid) deletedCategoryIds.add(dcid);
         }
       }
 
@@ -2146,10 +2331,19 @@ async function startServer() {
           ? extractGasMetadataFromTasks(existingWs.tasks).tasks
           : [];
         const mergedTasks = mergeTasksById(cleanPushTasks, existingTasks);
-        const effectiveCats =
+        const rawIncomingCats =
           Array.isArray(categories) && categories.length > 0
             ? categories
-            : decodedIncoming.categories || existingWs?.categories || [];
+            : decodedIncoming.categories || [];
+        const existingCats = Array.isArray(existingWs?.categories) ? existingWs.categories : [];
+        const mergedCats = mergeCategoriesById(rawIncomingCats, existingCats);
+        const effectiveCats = mergedCats.length > 0 ? mergedCats : existingCats;
+        const effectiveCu = Math.max(
+          Date.now(),
+          typeof incomingCategoriesUpdatedAt === 'number' ? incomingCategoriesUpdatedAt : 0,
+          decodedIncoming.categoriesUpdatedAt || 0,
+          existingWs?.categoriesUpdatedAt || 0
+        );
         const effectiveMembers =
           Array.isArray(teamMembers) && teamMembers.length > 0
             ? teamMembers
@@ -2163,6 +2357,7 @@ async function startServer() {
           spreadsheetUrl: existingWs?.spreadsheetUrl,
           tasks: mergedTasks,
           categories: effectiveCats,
+          categoriesUpdatedAt: effectiveCu,
           teamMembers: effectiveMembers,
         };
         sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
@@ -2175,7 +2370,9 @@ async function startServer() {
           gasUrl: targetGasUrl,
           version: syncRes.version,
           deletedTaskIds: Array.from(deletedTaskIds),
+          deletedCategoryIds: Array.from(deletedCategoryIds),
           categories: effectiveCats,
+          categoriesUpdatedAt: effectiveCu,
           teamMembers: effectiveMembers,
           response: syncRes.json,
         });
@@ -2192,10 +2389,14 @@ async function startServer() {
         return Boolean(id && !deletedTaskIds.has(id));
       });
       const existingWs = sharedWorkspaces.get('sheetcal-team-clean');
-      const effectiveCats =
-        Array.isArray(existingWs?.categories) && existingWs.categories.length > 0
-          ? existingWs.categories
-          : decodedRemote.categories || [];
+      const existingCats = Array.isArray(existingWs?.categories) ? existingWs.categories : [];
+      const localCu = existingWs?.categoriesUpdatedAt || 0;
+      const remoteCu = decodedRemote.categoriesUpdatedAt || 0;
+      const mergedPullCats =
+        remoteCu > localCu
+          ? mergeCategoriesById(decodedRemote.categories || [], existingCats)
+          : mergeCategoriesById(existingCats, decodedRemote.categories || []);
+      const effectiveCats = mergedPullCats.length > 0 ? mergedPullCats : existingCats;
       const effectiveMembers =
         Array.isArray(existingWs?.teamMembers) && existingWs.teamMembers.length > 0
           ? existingWs.teamMembers
@@ -2217,8 +2418,10 @@ async function startServer() {
         version: pullRes.json.version,
         detectedGroupId: detectedGrp || runtimeDetectedGroupId || undefined,
         deletedTaskIds: Array.from(deletedTaskIds),
+        deletedCategoryIds: Array.from(deletedCategoryIds),
         tasks: remoteTasks,
         categories: effectiveCats,
+        categoriesUpdatedAt: Math.max(localCu, remoteCu),
         teamMembers: effectiveMembers,
       });
     } catch (err: unknown) {

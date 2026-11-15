@@ -104,6 +104,8 @@ const STORAGE_KEYS = {
   LINE_SETTINGS: 'sheetcal_line_settings_v2',
   SHEET_META: 'sheetcal_sheet_meta_v1',
   WORKSPACE_ID: 'sheetcal_workspace_id_v3_clean',
+  DELETED_CATEGORIES: 'sheetcal_deleted_category_ids_v1',
+  CATEGORIES_UPDATED_AT: 'sheetcal_categories_updated_at_v1',
 };
 
 export default function App() {
@@ -714,6 +716,103 @@ export default function App() {
     [PERMANENTLY_PURGED_IDS]
   );
 
+  const deletedCategoryIdsRef = useRef<Set<string>>((() => {
+    const initialCatSet = new Set<string>();
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.DELETED_CATEGORIES);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((cid) => {
+            if (cid) initialCatSet.add(String(cid));
+          });
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return initialCatSet;
+  })());
+
+  const categoriesUpdatedAtRef = useRef<number>((() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.CATEGORIES_UPDATED_AT);
+      const parsed = raw ? Number(raw) : 0;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  })());
+
+  const bumpCategoriesUpdatedAt = useCallback((ts?: number): number => {
+    const nextTs = Math.max(Date.now(), ts || 0, categoriesUpdatedAtRef.current);
+    categoriesUpdatedAtRef.current = nextTs;
+    try {
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES_UPDATED_AT, String(nextTs));
+    } catch {
+      // Ignore
+    }
+    return nextTs;
+  }, []);
+
+  const recordDeletedCategoryIds = useCallback((ids: string[]) => {
+    let changed = false;
+    for (const cid of ids) {
+      const clean = String(cid || '').trim();
+      if (clean && !deletedCategoryIdsRef.current.has(clean)) {
+        deletedCategoryIdsRef.current.add(clean);
+        changed = true;
+      }
+    }
+    if (changed) {
+      try {
+        localStorage.setItem(
+          STORAGE_KEYS.DELETED_CATEGORIES,
+          JSON.stringify(Array.from(deletedCategoryIdsRef.current))
+        );
+      } catch {
+        // Ignore
+      }
+    }
+  }, []);
+
+  const removeDeletedCategoryId = useCallback((cid: string) => {
+    const clean = String(cid || '').trim();
+    if (clean && deletedCategoryIdsRef.current.delete(clean)) {
+      try {
+        localStorage.setItem(
+          STORAGE_KEYS.DELETED_CATEGORIES,
+          JSON.stringify(Array.from(deletedCategoryIdsRef.current))
+        );
+      } catch {
+        // Ignore
+      }
+    }
+  }, []);
+
+  const mergeCategoriesLists = useCallback(
+    (primaryList: Category[], secondaryList: Category[]): Category[] => {
+      const seenIds = new Set<string>();
+      const merged: Category[] = [];
+      for (const item of [...primaryList, ...secondaryList]) {
+        if (!item || typeof item !== 'object') continue;
+        const cid = String(item.id || '').trim();
+        const cname = String(item.name || '').trim();
+        if (!cid || !cname) continue;
+        if (deletedCategoryIdsRef.current.has(cid) || seenIds.has(cid)) continue;
+        seenIds.add(cid);
+        merged.push({
+          id: cid,
+          name: cname,
+          color: String(item.color || '#4F46E5').trim(),
+          description: item.description ? String(item.description) : '',
+        });
+      }
+      return merged;
+    },
+    []
+  );
+
   const isTaskPurgedOrDeleted = useCallback(
     (t: { id?: string; date?: string; updatedAt?: string } | null | undefined, extraDeletedSet?: Set<string>): boolean => {
       if (!t || !t.id) return true;
@@ -885,6 +984,8 @@ export default function App() {
       categoriesList: Category[],
       teamMembersList: TeamMember[]
     ): Task[] => {
+      const effectiveCu = categoriesUpdatedAtRef.current || Date.now();
+      const delCatArr = Array.from(deletedCategoryIdsRef.current);
       return taskList.map((t, idx) => {
         const baseSource = (String(t.source || 'web').split(GAS_META_DELIM)[0] || 'web') as
           | 'web'
@@ -900,9 +1001,18 @@ export default function App() {
         if (t.endDate && t.endDate > t.date) {
           metaObj.e = t.endDate;
         }
+        let nextUpdatedAt = t.updatedAt;
         if (idx === 0) {
           if (Array.isArray(categoriesList) && categoriesList.length > 0) {
             metaObj.c = categoriesList;
+            metaObj.cu = effectiveCu;
+            const curMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+            if (effectiveCu > curMs) {
+              nextUpdatedAt = new Date(effectiveCu).toISOString();
+            }
+          }
+          if (delCatArr.length > 0) {
+            metaObj.dc = delCatArr;
           }
           if (Array.isArray(teamMembersList) && teamMembersList.length > 0) {
             metaObj.m = teamMembersList;
@@ -914,6 +1024,7 @@ export default function App() {
             : baseSource;
         return {
           ...t,
+          updatedAt: nextUpdatedAt,
           source: encodedSource,
         };
       });
@@ -927,9 +1038,13 @@ export default function App() {
     ): {
       tasks: Task[];
       categories?: Category[];
+      categoriesUpdatedAt?: number;
+      deletedCategoryIds?: string[];
       teamMembers?: TeamMember[];
     } => {
       let extractedCategories: Category[] | undefined;
+      let bestCategoriesCu = -1;
+      let extractedDeletedCatIds: string[] | undefined;
       let extractedMembers: TeamMember[] | undefined;
       const cleaned: Task[] = [];
 
@@ -947,6 +1062,8 @@ export default function App() {
                 t?: string;
                 e?: string;
                 c?: Category[];
+                cu?: number;
+                dc?: string[];
                 m?: TeamMember[];
               };
               if (
@@ -964,12 +1081,17 @@ export default function App() {
               if (typeof parsedMeta.e === 'string' && parsedMeta.e && !copy.endDate) {
                 copy.endDate = parsedMeta.e;
               }
-              if (
-                Array.isArray(parsedMeta.c) &&
-                parsedMeta.c.length > 0 &&
-                !extractedCategories
-              ) {
-                extractedCategories = parsedMeta.c;
+              if (Array.isArray(parsedMeta.c) && parsedMeta.c.length > 0) {
+                const rowCu = typeof parsedMeta.cu === 'number' ? parsedMeta.cu : 0;
+                if (rowCu > bestCategoriesCu) {
+                  bestCategoriesCu = rowCu;
+                  extractedCategories = parsedMeta.c;
+                  if (Array.isArray(parsedMeta.dc)) {
+                    extractedDeletedCatIds = parsedMeta.dc
+                      .map((x) => String(x || '').trim())
+                      .filter(Boolean);
+                  }
+                }
               }
               if (
                 Array.isArray(parsedMeta.m) &&
@@ -1019,6 +1141,8 @@ export default function App() {
       return {
         tasks: cleaned,
         categories: extractedCategories,
+        categoriesUpdatedAt: bestCategoriesCu > 0 ? bestCategoriesCu : undefined,
+        deletedCategoryIds: extractedDeletedCatIds,
         teamMembers: extractedMembers,
       };
     },
@@ -1031,7 +1155,8 @@ export default function App() {
       nextTasks: Task[],
       nextCategories: Category[],
       nextMembers: TeamMember[],
-      deletedTaskId?: string | string[]
+      deletedTaskId?: string | string[],
+      deletedCategoryId?: string
     ): Promise<Task[]> => {
       lastLocalMutationMsRef.current = Date.now();
       const explicitDeleted = Array.isArray(deletedTaskId)
@@ -1041,6 +1166,9 @@ export default function App() {
         : [];
       if (explicitDeleted.length > 0) {
         recordDeletedTaskIds(explicitDeleted);
+      }
+      if (deletedCategoryId) {
+        recordDeletedCategoryIds([deletedCategoryId]);
       }
       const extractedLocal = extractGasMetadataFromTasks(nextTasks).tasks.filter(
         (t) => !isTaskPurgedOrDeleted(t)
@@ -1053,6 +1181,8 @@ export default function App() {
         recordDeletedTaskIds(discardedIds);
       }
       const allDeletedIds = Array.from(deletedTaskIdsRef.current);
+      const allDeletedCatIds = Array.from(deletedCategoryIdsRef.current);
+      const activeCu = categoriesUpdatedAtRef.current || Date.now();
 
       let workspacePostSucceeded = false;
       let authoritativeTasks: Task[] = cleanNextTasks;
@@ -1069,6 +1199,10 @@ export default function App() {
               deletedTaskId:
                 typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
               deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+              deletedCategoryId: deletedCategoryId || undefined,
+              deletedCategoryIds:
+                allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
+              categoriesUpdatedAt: activeCu,
               tasks: cleanNextTasks,
               categories: nextCategories,
               teamMembers: nextMembers,
@@ -1080,6 +1214,32 @@ export default function App() {
           const data = await res.json();
           if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
             recordDeletedTaskIds(data.deletedTaskIds);
+          }
+          if (
+            Array.isArray(data.deletedCategoryIds) &&
+            data.deletedCategoryIds.length > 0
+          ) {
+            recordDeletedCategoryIds(data.deletedCategoryIds);
+          }
+          if (typeof data.workspace?.categoriesUpdatedAt === 'number') {
+            bumpCategoriesUpdatedAt(data.workspace.categoriesUpdatedAt);
+          }
+          if (
+            Array.isArray(data.workspace?.categories) &&
+            data.workspace.categories.length > 0
+          ) {
+            const mergedServerCats = mergeCategoriesLists(
+              nextCategories,
+              data.workspace.categories as Category[]
+            );
+            if (mergedServerCats.length > 0) {
+              categoriesRef.current = mergedServerCats;
+              setCategories((prev) =>
+                JSON.stringify(prev) === JSON.stringify(mergedServerCats)
+                  ? prev
+                  : mergedServerCats
+              );
+            }
           }
           if (data.workspace?.updatedAt) {
             lastSyncedTimestampRef.current = data.workspace.updatedAt;
@@ -1123,8 +1283,11 @@ export default function App() {
               gasUrl: activeGasUrl,
               tasks: gasTasksWithMeta,
               categories: nextCategories,
+              categoriesUpdatedAt: activeCu,
               teamMembers: nextMembers,
               deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+              deletedCategoryIds:
+                allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
             }),
           });
           const ct = proxyRes.headers.get('content-type') || '';
@@ -1146,6 +1309,8 @@ export default function App() {
                 categories: nextCategories,
                 teamMembers: nextMembers,
                 deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+                deletedCategoryIds:
+                  allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
               }),
             });
           } catch {
@@ -1159,9 +1324,12 @@ export default function App() {
     [
       areTaskListsEqual,
       attachGasMetadataToTasks,
+      bumpCategoriesUpdatedAt,
       deduplicateAndMergeTasks,
       extractGasMetadataFromTasks,
       isTaskPurgedOrDeleted,
+      mergeCategoriesLists,
+      recordDeletedCategoryIds,
       recordDeletedTaskIds,
       sheetMeta?.spreadsheetId,
       sheetMeta?.spreadsheetUrl,
@@ -1296,7 +1464,8 @@ export default function App() {
       successMsg?: string,
       calendarDateToOpen?: string,
       deletedTaskId?: string | string[],
-      nextTeamMembers: TeamMember[] = teamMembers
+      nextTeamMembers: TeamMember[] = teamMembers,
+      deletedCategoryId?: string
     ) => {
       const deletedSet = new Set<string>(
         Array.isArray(deletedTaskId)
@@ -1309,7 +1478,8 @@ export default function App() {
         nextTasks,
         nextCategories,
         nextTeamMembers,
-        deletedTaskId
+        deletedTaskId,
+        deletedCategoryId
       );
 
       const token = await getAccessToken();
@@ -2555,12 +2725,24 @@ export default function App() {
                   }
                 }
               }
+              const remoteWsCu =
+                typeof wsData.workspace.categoriesUpdatedAt === 'number'
+                  ? wsData.workspace.categoriesUpdatedAt
+                  : 0;
+              if (
+                remoteWsCu >= categoriesUpdatedAtRef.current &&
+                Array.isArray(wsData.deletedCategoryIds) &&
+                wsData.deletedCategoryIds.length > 0
+              ) {
+                recordDeletedCategoryIds(wsData.deletedCategoryIds);
+              }
               const wsCats = Array.isArray(wsData.workspace.categories)
                 ? (wsData.workspace.categories as Category[])
                 : [];
               if (
                 !isDefaultCategoryList(categoriesRef.current) &&
-                isDefaultCategoryList(wsCats)
+                isDefaultCategoryList(wsCats) &&
+                categoriesUpdatedAtRef.current >= remoteWsCu
               ) {
                 pushCollaborativeWorkspace(
                   cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
@@ -2569,11 +2751,31 @@ export default function App() {
                 );
               } else if (
                 wsCats.length > 0 &&
-                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
+                Date.now() - lastLocalMutationMsRef.current > 5000
               ) {
-                setCategories((prev) =>
-                  JSON.stringify(prev) === JSON.stringify(wsCats) ? prev : wsCats
-                );
+                const localCu = categoriesUpdatedAtRef.current;
+                const mergedWsCats =
+                  remoteWsCu > localCu || localCu === 0
+                    ? mergeCategoriesLists(wsCats, categoriesRef.current)
+                    : mergeCategoriesLists(categoriesRef.current, wsCats);
+                if (remoteWsCu > localCu) {
+                  bumpCategoriesUpdatedAt(remoteWsCu);
+                }
+                if (mergedWsCats.length > 0) {
+                  setCategories((prev) => {
+                    if (JSON.stringify(prev) === JSON.stringify(mergedWsCats)) return prev;
+                    categoriesRef.current = mergedWsCats;
+                    return mergedWsCats;
+                  });
+                  // If client had newer custom categories missing on server, sync them back up
+                  if (JSON.stringify(mergedWsCats) !== JSON.stringify(wsCats)) {
+                    pushCollaborativeWorkspace(
+                      cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
+                      mergedWsCats,
+                      teamMembersRef.current
+                    );
+                  }
+                }
               }
               if (
                 Array.isArray(wsData.workspace.teamMembers) &&
@@ -2599,8 +2801,10 @@ export default function App() {
             detectedGroupId?: string;
             tasks?: Task[];
             categories?: Category[];
+            categoriesUpdatedAt?: number;
             teamMembers?: TeamMember[];
             deletedTaskIds?: string[];
+            deletedCategoryIds?: string[];
           } | null = null;
 
           // 1. Try full-stack Server Proxy first
@@ -2691,6 +2895,21 @@ export default function App() {
               Array.isArray(data.categories) && data.categories.length > 0
                 ? data.categories
                 : decodedGas.categories;
+            const remoteGasCu = Math.max(
+              typeof data.categoriesUpdatedAt === 'number' ? data.categoriesUpdatedAt : 0,
+              decodedGas.categoriesUpdatedAt || 0
+            );
+            const remoteDelCats = Array.isArray(data.deletedCategoryIds)
+              ? data.deletedCategoryIds
+              : decodedGas.deletedCategoryIds;
+            if (
+              remoteGasCu >= categoriesUpdatedAtRef.current &&
+              Array.isArray(remoteDelCats) &&
+              remoteDelCats.length > 0
+            ) {
+              recordDeletedCategoryIds(remoteDelCats);
+            }
+
             const remoteGasMembers =
               Array.isArray(data.teamMembers) && data.teamMembers.length > 0
                 ? data.teamMembers
@@ -2699,13 +2918,23 @@ export default function App() {
             if (
               Array.isArray(remoteGasCats) &&
               remoteGasCats.length > 0 &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
+              Date.now() - lastLocalMutationMsRef.current > 5000
             ) {
-              setCategories((prev) =>
-                JSON.stringify(prev) === JSON.stringify(remoteGasCats)
-                  ? prev
-                  : remoteGasCats
-              );
+              const localCu = categoriesUpdatedAtRef.current;
+              const mergedGasCats =
+                remoteGasCu > localCu || localCu === 0
+                  ? mergeCategoriesLists(remoteGasCats, categoriesRef.current)
+                  : mergeCategoriesLists(categoriesRef.current, remoteGasCats);
+              if (remoteGasCu > localCu) {
+                bumpCategoriesUpdatedAt(remoteGasCu);
+              }
+              if (mergedGasCats.length > 0) {
+                setCategories((prev) => {
+                  if (JSON.stringify(prev) === JSON.stringify(mergedGasCats)) return prev;
+                  categoriesRef.current = mergedGasCats;
+                  return mergedGasCats;
+                });
+              }
             }
 
             if (
@@ -3444,14 +3673,34 @@ export default function App() {
 
   // Category CRUD handlers
   const handleSaveCategory = (category: Category, isNew: boolean) => {
-    const nextCategories = isNew
-      ? [...categories, category]
-      : categories.map((c) => (c.id === category.id ? category : c));
+    lastLocalMutationMsRef.current = Date.now();
+    const nowCu = bumpCategoriesUpdatedAt();
+    removeDeletedCategoryId(category.id);
 
+    const baseCats = categoriesRef.current;
+    const nextCategories = isNew
+      ? baseCats.some((c) => c.id === category.id)
+        ? baseCats.map((c) => (c.id === category.id ? category : c))
+        : [...baseCats, category]
+      : baseCats.map((c) => (c.id === category.id ? category : c));
+
+    categoriesRef.current = nextCategories;
     setCategories(nextCategories);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(nextCategories));
+    } catch {
+      // Ignore
+    }
+
+    // Bump row 0 updatedAt so Google Apps Script sync_tasks immediately persists the updated category list
+    const tasksToSync = tasksRef.current.map((t, idx) =>
+      idx === 0 ? { ...t, updatedAt: new Date(nowCu).toISOString() } : t
+    );
+    tasksRef.current = tasksToSync;
+
     if (sheetMeta && accessToken) {
       syncAllToConnectedSheet(
-        tasks,
+        tasksToSync,
         nextCategories,
         lineLogs,
         isNew
@@ -3459,10 +3708,14 @@ export default function App() {
           : `แก้ไขหมวดหมู่ "${category.name}" และอัปเดตสี/ข้อความไปที่ปฏิทินของทีมเรียบร้อยแล้ว`,
         undefined,
         undefined,
-        teamMembers
+        teamMembersRef.current
       );
     } else {
-      pushCollaborativeWorkspace(tasks, nextCategories, teamMembers);
+      pushCollaborativeWorkspace(
+        tasksToSync,
+        nextCategories,
+        teamMembersRef.current
+      );
       showNotice(
         'success',
         isNew
@@ -3473,8 +3726,9 @@ export default function App() {
   };
 
   const handleDeleteCategory = (category: Category) => {
-    if (categories.length <= 1) return;
-    const fallbackCategory = categories.find((c) => c.id !== category.id) || categories[0];
+    if (categoriesRef.current.length <= 1) return;
+    const fallbackCategory =
+      categoriesRef.current.find((c) => c.id !== category.id) || categoriesRef.current[0];
 
     setConfirmDialog({
       isOpen: true,
@@ -3484,12 +3738,34 @@ export default function App() {
       confirmLabel: 'ยืนยันการลบหมวดหมู่',
       isDestructive: true,
       onConfirm: async () => {
-        const nextCategories = categories.filter((c) => c.id !== category.id);
-        const nextTasks = tasks.map((t) =>
-          t.categoryId === category.id ? { ...t, categoryId: fallbackCategory.id } : t
-        );
+        lastLocalMutationMsRef.current = Date.now();
+        const nowCu = bumpCategoriesUpdatedAt();
+        recordDeletedCategoryIds([category.id]);
+
+        const nextCategories = categoriesRef.current.filter((c) => c.id !== category.id);
+        const nowIso = new Date(nowCu).toISOString();
+        const nextTasks = tasksRef.current.map((t, idx) => {
+          const reassigned = t.categoryId === category.id;
+          if (reassigned || idx === 0) {
+            return {
+              ...t,
+              categoryId: reassigned ? fallbackCategory.id : t.categoryId,
+              updatedAt: nowIso,
+            };
+          }
+          return t;
+        });
+
+        categoriesRef.current = nextCategories;
+        tasksRef.current = nextTasks;
         setCategories(nextCategories);
         setTasks(nextTasks);
+        try {
+          localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(nextCategories));
+        } catch {
+          // Ignore
+        }
+
         if (sheetMeta && accessToken) {
           await syncAllToConnectedSheet(
             nextTasks,
@@ -3498,10 +3774,17 @@ export default function App() {
             `ลบหมวดหมู่ "${category.name}" และอัปเดตปฏิทินของทีมเรียบร้อยแล้ว`,
             undefined,
             undefined,
-            teamMembers
+            teamMembersRef.current,
+            category.id
           );
         } else {
-          await pushCollaborativeWorkspace(nextTasks, nextCategories, teamMembers);
+          await pushCollaborativeWorkspace(
+            nextTasks,
+            nextCategories,
+            teamMembersRef.current,
+            undefined,
+            category.id
+          );
           showNotice(
             'success',
             `ลบหมวดหมู่ "${category.name}" และอัปเดตปฏิทินของทีมเรียบร้อยแล้ว`
