@@ -3091,7 +3091,7 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: rmRes.ok ? 'ok' : 'error',
         mode: 'gas_clear_richmenu',
-        version: '2.7-group-portal-clean',
+        version: '3.0-executive-card',
         ok: rmRes.ok,
         deletedCount: rmRes.deletedCount
       })).setMimeType(ContentService.MimeType.JSON);
@@ -3191,7 +3191,7 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: savedOk ? 'ok' : 'error',
         mode: 'gas_sync_tasks',
-        version: '2.8-group-portal-safe-merge',
+        version: '3.0-executive-card',
         detectedGroupId: getSavedGroupId(),
         ok: savedOk,
         count: mergedToSave.length
@@ -3249,7 +3249,7 @@ function doPost(e) {
             return ContentService.createTextOutput(JSON.stringify({
               status: 'ok',
               mode: 'gas_push_line',
-              version: '2.7-quota-guard',
+              version: '3.0-executive-card',
               ok: true,
               deduplicated: true,
               deliveryMethod: 'deduplicated'

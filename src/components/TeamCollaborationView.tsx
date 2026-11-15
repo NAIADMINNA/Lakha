@@ -174,7 +174,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
       setGroupDetectNotice({
         ok: true,
         message:
-          '✅ คัดลอกโค้ด Apps Script v2.7 (แก้บั๊กปุ่มกดหน้าเว็บทีม + ซิงค์ข้อมูลอัตโนมัติ) เรียบร้อยแล้ว! นำไปวางทับใน Google Sheets > Extensions > Apps Script กด Save แล้วกดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy ได้เลยครับ',
+          '✅ คัดลอกโค้ด Apps Script ล่าสุด v3.0 (ดีไซน์ผู้บริหาร + ซิงค์ข้อมูลอัตโนมัติ) เรียบร้อยแล้ว! นำไปวางทับใน Google Sheets > Extensions > Apps Script กด Save แล้วกดปุ่ม Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy ได้เลยครับ',
       });
     } catch {
       // Ignore clipboard error
@@ -273,7 +273,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
       if (hasPortalSyntaxBug) {
         setGroupDetectNotice({
           ok: false,
-          message: `⚠️ รหัสกลุ่ม (${detected || effectiveGroupId || 'C...'}) ถูกต้องแล้ว แต่ลิงก์ Google Apps Script ที่ Deploy อยู่ยังเป็นโค้ดตัวเก่าที่มีบั๊กปุ่มกดบนเว็บ! วิธีแก้: กดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.7" ด้านล่าง > นำไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy แล้วทีมจะกดเพิ่ม/ติ๊กงานบนเว็บได้ 100% ครับ`,
+          message: `⚠️ รหัสกลุ่ม (${detected || effectiveGroupId || 'C...'}) ถูกต้องแล้ว แต่ลิงก์ Google Apps Script ที่ Deploy อยู่ยังเป็นโค้ดตัวเก่า! วิธีแก้: กดปุ่ม "📋 คัดลอกโค้ด Apps Script v3.0" ด้านล่าง > นำไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก "New version" > กด Deploy ครับ`,
         });
       } else if (detected && /^[CR][0-9a-fA-F]{32}$/.test(detected)) {
         setGroupDetectNotice({
@@ -293,7 +293,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
         setGroupDetectNotice({
           ok: false,
           message:
-            '❌ ลิงก์ Google Apps Script ปัจจุบันยังเป็นโค้ดเวอร์ชันเก่า: กรุณากดปุ่ม "📋 คัดลอกโค้ด Apps Script v2.7" ด้านล่างไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > เลือก "New version" > กด Deploy ครับ',
+            '❌ ลิงก์ Google Apps Script ปัจจุบันยังเป็นโค้ดเวอร์ชันเก่า: กรุณากดปุ่ม "📋 คัดลอกโค้ด Apps Script v3.0" ด้านล่างไปวางทับใน Apps Script > กด Deploy > Manage deployments > กดรูปดินสอ (Edit) > เลือก "New version" > กด Deploy ครับ',
         });
       } else {
         setGroupDetectNotice({
@@ -849,12 +849,12 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   {copiedGasCode ? (
                     <>
                       <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>คัดลอกโค้ด v2.7 แล้ว! นำไปอัปเดต Deploy ได้เลย</span>
+                      <span>คัดลอกโค้ด v3.0 แล้ว! นำไปอัปเดต Deploy ได้เลย</span>
                     </>
                   ) : (
                     <>
                       <Copy className="h-3.5 w-3.5 text-indigo-700" />
-                      <span>📋 คัดลอกโค้ด Apps Script v2.7 (แก้บั๊กหน้าเว็บทีม)</span>
+                      <span>📋 คัดลอกโค้ด Apps Script ล่าสุด (v3.0)</span>
                     </>
                   )}
                 </button>
@@ -906,7 +906,7 @@ export const TeamCollaborationView: React.FC<TeamCollaborationViewProps> = ({
                   </ul>
                 </li>
                 <li>
-                  <strong className="text-slate-900">วางลิงก์ Web App URL (/exec) จาก Google Apps Script:</strong> หลังวางโค้ด v2.6 และกด Deploy ใน Google Apps Script แล้ว ให้คัดลอกลิงก์{' '}
+                  <strong className="text-slate-900">วางลิงก์ Web App URL (/exec) จาก Google Apps Script:</strong> หลังวางโค้ด v3.0 และกด Deploy ใน Google Apps Script แล้ว ให้คัดลอกลิงก์{' '}
                   <code className="font-bold bg-white px-1.5 py-0.5 rounded border">
                     https://script.google.com/macros/s/.../exec
                   </code>{' '}

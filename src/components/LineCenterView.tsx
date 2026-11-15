@@ -392,26 +392,33 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 targetGroupId: gasDetectedGroup,
               });
             }
+            const realGasVer = String(
+              gasJson.cardDesignVersion || gasJson.version || ''
+            ).trim();
+            const isV3Card =
+              realGasVer === '3.0-executive-card' || realGasVer.startsWith('3.');
             if (
+              isV3Card ||
               gasJson.mode === 'gas_bridge_ready' ||
-              gasJson.version === '2.6-group-bridge' ||
-              gasJson.version === '2.5-gas-bridge'
+              realGasVer.startsWith('2.')
             ) {
               serverSteps.push({
-                step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
-                status: 'ok',
-                detail: `ลิงก์ Google Apps Script ของคุณพร้อมส่งแจ้งเตือนเข้า LINE (${String(
-                  gasJson.version || 'Bridge Ready'
-                )})${
-                  gasDetectedGroup ? ` · ตรวจพบรหัสกลุ่มล่าสุด: ${gasDetectedGroup}` : ''
-                }`,
+                step: '4. ตรวจสอบเวอร์ชัน Google Apps Script Bridge',
+                status: isV3Card ? 'ok' : 'warn',
+                detail: isV3Card
+                  ? `ลิงก์ Google Apps Script เป็นเวอร์ชันล่าสุดแล้ว (${realGasVer} — ดีไซน์การ์ดผู้บริหาร v3.0)${
+                      gasDetectedGroup ? ` · ตรวจพบรหัสกลุ่มล่าสุด: ${gasDetectedGroup}` : ''
+                    }`
+                  : `ลิงก์เชื่อมต่อส่งงานได้แล้ว แต่ยังรันเวอร์ชันเก่า (${
+                      realGasVer || 'ก่อน v3.0'
+                    }) จึงยังส่งการ์ดดีไซน์เดิม — หากกด New deployment ไปแล้วให้นำลิงก์ /exec อันใหม่มาวางทับ หรือกด Manage deployments > รูปดินสอ > เลือก New version บนลิงก์เดิม`,
               });
             } else {
               serverSteps.push({
-                step: '4. ตรวจสอบความพร้อมสำหรับรันบนเว็บจริง (GitHub Pages Bridge)',
+                step: '4. ตรวจสอบเวอร์ชัน Google Apps Script Bridge',
                 status: 'warn',
                 detail:
-                  '⚠️ พบสาเหตุที่รันเป็นเว็บจริง (GitHub Pages) แล้วไม่แจ้งเตือน! ลิงก์ Google Apps Script ปัจจุบันของคุณยังเป็นโค้ดเวอร์ชันเก่า — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
+                  '⚠️ ลิงก์ Google Apps Script ปัจจุบันของคุณยังเป็นโค้ดเวอร์ชันเก่า — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script ล่าสุด (v3.0)" ด้านล่าง ไปวางทับใน Google Sheets > Extensions > Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
               });
             }
           } catch {
@@ -701,13 +708,14 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
     setIsTestingGas(true);
     setGasVerifyResult(null);
+    checkLiveGasCardVersion(trimmedUrl);
 
     const sampleText = withSampleTask
       ? `ทดสอบส่งงานจาก LINE วันนี้ 15:30 #สูง`
       : undefined;
 
     try {
-      // 1. ลองเรียกผ่าน Backend API ก่อน (กรณีรันบน Full-stack Server)
+      // 1. ลองเรียกผ่าน Backend API ก่อน (กรณีรันบน Full-stack Server — อ่านเวอร์ชันจริงจาก Apps Script แม่นยำไม่ติด CORS)
       let handledByBackend = false;
       try {
         const res = await fetch('/api/line/test-gas-webhook', {
@@ -726,6 +734,15 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             ok: Boolean(data.ok),
             message: data.message || 'ตรวจสอบเสร็จสิ้น',
           });
+          if (typeof data.detectedVersion === 'string' && data.detectedVersion) {
+            const isV3 =
+              Boolean(data.isLatestV3) || data.detectedVersion.startsWith('3.');
+            setGasCardVersionInfo({
+              checking: false,
+              status: isV3 ? 'up_to_date' : 'outdated',
+              detectedVersion: data.detectedVersion,
+            });
+          }
           if (withSampleTask && data.ok) {
             if (onPullFromSheets && spreadsheetId.trim()) {
               await onPullFromSheets();
@@ -738,8 +755,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
         handledByBackend = false;
       }
 
-      // 2. ตรวจสอบตรงจากเบราว์เซอร์ไปที่ Google Apps Script (อ่าน JSON Response เพื่อเช็คเวอร์ชันโค้ดจริง)
-      if (!handledByBackend || !withSampleTask) {
+      // 2. กรณีรันบน Static Hosting (เช่น GitHub Pages ที่ไม่มี Backend API) ให้ตรวจสอบตรงจากเบราว์เซอร์ไปที่ Google Apps Script
+      if (!handledByBackend) {
         const webhookPayload = sampleText
           ? {
               events: [
@@ -753,7 +770,6 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           : { action: 'check_bridge', events: [] };
 
         try {
-          // ใช้ text/plain แบบปกติก่อนเพื่ออ่าน JSON ตรวจสอบว่าโค้ด Apps Script อัปเดตเป็น v2.5 หรือยัง
           const directRes = await fetch(trimmedUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -767,6 +783,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             parsed = {};
           }
 
+          const realVer = String(
+            parsed.cardDesignVersion || parsed.version || ''
+          ).trim();
+          const isLatestV3 =
+            realVer === '3.0-executive-card' || realVer.startsWith('3.');
+
           if (withSampleTask && sampleText) {
             onSendChatCommand(sampleText);
             if (onPullFromSheets && spreadsheetId.trim()) {
@@ -778,23 +800,29 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               ok: true,
               message: `ส่งข้อความ "${sampleText}" ไปยัง Google Apps Script และเพิ่มงานเข้าปฏิทินเรียบร้อยแล้ว!`,
             });
-          } else if (parsed.mode === 'gas_bridge_ready' || parsed.version === '2.5-gas-bridge') {
+          } else if (isLatestV3) {
             setGasVerifyResult({
               ok: true,
-              message:
-                '✅ ลิงก์ Google Apps Script พร้อมใช้งาน 100% (โค้ดเวอร์ชันล่าสุด v2.5 รองรับทั้งขารับ Webhook และขาส่งแจ้งเตือน LINE จากเว็บ GitHub Pages)',
+              message: `✅ ลิงก์ Google Apps Script พร้อมใช้งาน 100% (โค้ดเวอร์ชันล่าสุด ${realVer} — ดีไซน์การ์ดผู้บริหาร v3.0)`,
+            });
+          } else if (parsed.mode === 'gas_bridge_ready' || realVer.startsWith('2.')) {
+            setGasVerifyResult({
+              ok: false,
+              message: `⚠️ ลิงก์เชื่อมต่อได้ แต่ลิงก์ /exec นี้ยังรันโค้ดเวอร์ชันเก่า (${
+                realVer || 'ก่อน v3.0'
+              }) ยังไม่ใช่ v3.0! 💡 หากคุณกดอัปเดตหลายรอบแล้วแต่ยังไม่เปลี่ยน แปลว่าเผลอกด "Deploy > New deployment" (ซึ่งจะได้ลิงก์ /exec อันใหม่คนละรหัส) — ให้นำลิงก์ /exec อันใหม่ล่าสุดมาวางทับในช่องนี้ หรือกด "Deploy > Manage deployments > รูปดินสอ (Edit) > เลือก New version > กด Deploy" บนลิงก์เดิมครับ`,
             });
           } else if (parsed.status === 'verified') {
             setGasVerifyResult({
               ok: false,
               message:
-                '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ด Apps Script เวอร์ชันเก่า" (จึงทำให้เวลาเปิดเว็บจริงบน GitHub Pages แล้วไม่แจ้งเตือนเข้า LINE) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
+                '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ด Apps Script เวอร์ชันเก่า" — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script ล่าสุด (v3.0)" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
             });
           } else {
             setGasVerifyResult({
               ok: true,
               message:
-                'เชื่อมต่อลิงก์ Google Apps Script สำเร็จ! (หากต้องการให้ส่ง LINE จากเว็บ GitHub Pages ได้ อย่าลืมคัดลอกโค้ดด้านล่างไปอัปเดตเป็น New version)',
+                'เชื่อมต่อลิงก์ Google Apps Script สำเร็จ! (อย่าลืมตรวจสอบแถบด้านบนว่าเป็นเวอร์ชัน 3.0-executive-card แล้ว)',
             });
           }
         } catch {
@@ -3751,8 +3779,20 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             </div>
 
             <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-2">
-              <div className="text-xs font-medium text-slate-700">
-                ลิงก์ Web App URL ของคุณ
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <div className="text-xs font-medium text-slate-700">
+                  ลิงก์ Web App URL ของคุณ
+                </div>
+                {gasCardVersionInfo.status === 'up_to_date' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[11px] font-bold">
+                    ✓ เวอร์ชันล่าสุด: {gasCardVersionInfo.detectedVersion || '3.0-executive-card'}
+                  </span>
+                )}
+                {gasCardVersionInfo.status === 'outdated' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[11px] font-bold">
+                    ! ลิงก์นี้ยังเป็น: {gasCardVersionInfo.detectedVersion} (รออัปเดตเป็น v3.0)
+                  </span>
+                )}
               </div>
               <input
                 type="text"
@@ -3768,7 +3808,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                   onClick={() => handleTestGasWebhook(false)}
                   className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
                 >
-                  {isTestingGas ? 'กำลังตรวจสอบ...' : 'ตรวจสอบลิงก์'}
+                  {isTestingGas ? 'กำลังตรวจสอบ...' : 'ตรวจสอบลิงก์ & เช็กเวอร์ชันจริง'}
                 </button>
                 <button
                   type="button"
@@ -3781,10 +3821,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               </div>
               {gasVerifyResult && (
                 <div
-                  className={`p-2 rounded-md text-xs ${
+                  className={`p-2.5 rounded-md text-xs leading-relaxed ${
                     gasVerifyResult.ok
                       ? 'bg-emerald-50 border border-emerald-200 text-emerald-900'
-                      : 'bg-red-50 border border-red-200 text-red-800'
+                      : 'bg-amber-50 border border-amber-300 text-amber-950'
                   }`}
                 >
                   {gasVerifyResult.message}
@@ -3796,17 +3836,17 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               <button
                 type="button"
                 onClick={handleCopyScript}
-                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors whitespace-nowrap shrink-0"
+                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#0B192C] rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
               >
                 {copiedScript ? (
                   <>
-                    <Check className="h-3.5 w-3.5 text-emerald-300" />
-                    <span>คัดลอกโค้ดแล้ว</span>
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>คัดลอกโค้ด v3.0 แล้ว!</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>คัดลอกโค้ด Apps Script (รองรับการ์ดสรุปงาน)</span>
+                    <Copy className="h-3.5 w-3.5 text-amber-400" />
+                    <span>คัดลอกโค้ด Apps Script ล่าสุด (v3.0 ดีไซน์ผู้บริหาร)</span>
                   </>
                 )}
               </button>

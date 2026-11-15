@@ -3930,7 +3930,7 @@ async function startServer() {
               },
             ],
           }
-        : { events: [] };
+        : { action: 'check_bridge', events: [] };
 
       const postRes = await fetch(url, {
         method: 'POST',
@@ -3951,22 +3951,47 @@ async function startServer() {
         bodyText = await postRes.text();
       }
 
+      let parsedJson: Record<string, unknown> = {};
+      try {
+        parsedJson = JSON.parse(bodyText);
+      } catch {
+        parsedJson = {};
+      }
+
       const isJsonOk =
-        bodyText.includes('"status":"verified"') || bodyText.includes('"status":"ok"');
-      const isV26 =
-        bodyText.includes('2.6-group-bridge') || bodyText.includes('gas_bridge_ready');
+        parsedJson.status === 'verified' ||
+        parsedJson.status === 'ok' ||
+        bodyText.includes('"status":"verified"') ||
+        bodyText.includes('"status":"ok"');
+      const detectedVersion = String(
+        parsedJson.cardDesignVersion || parsedJson.version || ''
+      ).trim();
+      const caps = Array.isArray(parsedJson.capabilities) ? parsedJson.capabilities : [];
+      const isLatestV3 =
+        detectedVersion === '3.0-executive-card' ||
+        detectedVersion.startsWith('3.') ||
+        caps.includes('executive_card_v3');
+      const hasBridgeSupport =
+        isLatestV3 ||
+        parsedJson.mode === 'gas_bridge_ready' ||
+        detectedVersion.startsWith('2.');
 
       res.status(200).json({
-        ok: isJsonOk,
-        isV26,
+        ok: isJsonOk && (Boolean(testText) || isLatestV3),
+        reachable: isJsonOk,
+        isLatestV3,
+        hasBridgeSupport,
+        detectedVersion: detectedVersion || undefined,
         httpStatus: postRes.status,
         responsePreview: bodyText.slice(0, 300),
         message: isJsonOk
           ? testText
             ? `ส่งข้อความ "${testText}" เข้า Google Apps Script สำเร็จ (เขียนลง Google Sheets เรียบร้อย!)`
-            : isV26
-            ? '✅ ตรวจสอบสำเร็จ! ลิงก์ Google Apps Script ของคุณเป็นเวอร์ชันล่าสุด (v2.6 รองรับคำสั่ง "เชื่อมกลุ่ม" และการแจ้งเตือนกลุ่ม LINE ครบถ้วน 100%)'
-            : '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ดเวอร์ชันเก่า" (จึงทำให้พิมพ์ "เชื่อมกลุ่ม" ในกลุ่ม LINE แล้วบอทไม่ตอบกลับรหัส C...) — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy'
+            : isLatestV3
+            ? `✅ ลิงก์ Google Apps Script เป็นโค้ดเวอร์ชันล่าสุดแล้ว (${detectedVersion} — ดีไซน์การ์ดผู้บริหาร v3.0 พร้อมใช้งานครบ 100%)`
+            : hasBridgeSupport
+            ? `⚠️ ลิงก์เชื่อมต่อได้ แต่ลิงก์ /exec นี้ยังรันโค้ดเวอร์ชันเก่า (${detectedVersion || 'ก่อน v3.0'}) ยังไม่ใช่ v3.0! 💡 สาเหตุที่อัปเดตหลายรอบแล้วยังเป็นตัวเก่า: หากคุณเผลอกด "Deploy > New deployment" ระบบ Google จะสร้างลิงก์ /exec อันใหม่ (ทำให้ลิงก์เดิมในช่องนี้ไม่เปลี่ยน) — วิธีแก้: ให้นำลิงก์ /exec อันใหม่ล่าสุดมาวางทับในช่องนี้ หรือกด "Deploy > Manage deployments > กดรูปดินสอ (Edit) > ช่อง Version เลือก New version > กด Deploy" บนรายการเดิมครับ`
+            : '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ดเวอร์ชันเก่า" — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script ล่าสุด (v3.0)" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy'
           : `ได้รับการตอบกลับจาก Apps Script: ${bodyText.slice(0, 140)}`,
       });
     } catch (err: unknown) {
@@ -4142,8 +4167,10 @@ async function startServer() {
           if (
             parsed.status === 'verified' &&
             parsed.mode !== 'gas_bridge_ready' &&
-            !String(parsed.version || '').includes('2.6') &&
-            !String(parsed.version || '').includes('2.7')
+            !String(parsed.version || '').includes('3.') &&
+            !String(parsed.version || '').includes('2.8') &&
+            !String(parsed.version || '').includes('2.7') &&
+            !String(parsed.version || '').includes('2.6')
           ) {
             isOutdatedGas = true;
           }
