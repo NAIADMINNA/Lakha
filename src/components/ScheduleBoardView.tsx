@@ -1657,9 +1657,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             : 'bg-white border-slate-200'
         }`}
       >
-        {/* Day Header Bar (100% Solid Opaque so task rows never show through or above) */}
+        {/* Day Header Bar (Single-line layout, 100% Solid Opaque so task rows never show through or above) */}
         <div
-          className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 ${
+          className={`px-4 sm:px-5 py-3 border-b flex flex-nowrap items-center justify-between gap-3 ${
             stickyHeaderInsideScroll ? 'sticky top-0 z-10 rounded-t-2xl ' : ''
           }${
             isDarkDisplay
@@ -1673,9 +1673,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               : 'bg-slate-50 border-slate-200/90'
           }`}
         >
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-nowrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
             <CalendarIcon
-              className={`h-6 w-6 shrink-0 ${
+              className={`h-5 w-5 shrink-0 ${
                 isTodayGroup
                   ? isEmeraldExec
                     ? 'text-emerald-700'
@@ -1684,8 +1684,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               }`}
             />
             <h2
-              className={`font-extrabold text-slate-900 ${
-                isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
+              className={`font-extrabold text-slate-900 whitespace-nowrap truncate ${
+                isLargeText ? 'text-lg sm:text-xl xl:text-2xl' : 'text-sm sm:text-base lg:text-lg'
               }`}
             >
               {!expandMultiDay && !isTodayGroup && layoutMode !== 'single_day'
@@ -1696,8 +1696,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 : formatFullThaiDayHeader(group.date)}
             </h2>
             <span
-              className={`${
-                isLargeText ? 'text-lg sm:text-xl' : 'text-sm sm:text-base'
+              className={`whitespace-nowrap shrink-0 ${
+                isLargeText ? 'text-sm sm:text-base xl:text-lg' : 'text-xs sm:text-sm'
               } font-bold ${
                 rel.tone === 'today'
                   ? 'text-emerald-600'
@@ -1711,23 +1711,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
 
           <div
-            className={`flex flex-wrap items-center gap-4 ${
-              isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+            className={`flex flex-nowrap items-center gap-2.5 sm:gap-3 shrink-0 whitespace-nowrap ${
+              isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
             }`}
           >
-            <div className="font-sans tabular-nums font-bold text-slate-700">
+            <div className="font-sans tabular-nums font-bold text-slate-700 whitespace-nowrap">
               รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
             </div>
             <button
               type="button"
               onClick={() => onAddTaskForDate(group.date)}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-white font-bold transition-colors whitespace-nowrap shrink-0 ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm text-white font-bold transition-colors whitespace-nowrap shrink-0 ${
                 isEmeraldExec
                   ? 'bg-emerald-600 hover:bg-emerald-700'
                   : 'bg-indigo-600 hover:bg-indigo-700'
               }`}
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5 shrink-0" />
               <span>เพิ่มงานวันนี้</span>
             </button>
           </div>
