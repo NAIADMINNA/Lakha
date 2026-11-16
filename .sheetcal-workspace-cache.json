@@ -25,7 +25,7 @@
   "runtimeDirectorPresence": {
     "mode": "auto",
     "customNote": "",
-    "updatedAt": "2026-11-15T23:55:13.159Z"
+    "updatedAt": "2026-11-16T05:36:09.811Z"
   },
   "deletedTaskIds": [
     "task-1793454460187",
@@ -40,13 +40,16 @@
     "task-1793611662385",
     "task-1793668054359",
     "task-1793630653911",
-    "task-1793666764668"
+    "task-1793666764668",
+    "task-1794297320839",
+    "task-1794125434463",
+    "task-1793953672701"
   ],
   "deletedCategoryIds": [],
   "workspaces": {
     "sheetcal-team-clean": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-15T23:41:17.496Z",
+      "updatedAt": "2026-11-16T04:46:35.025Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -63,7 +66,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-15T23:38:12.241Z"
+          "updatedAt": "2026-11-16T04:41:38.333Z"
         },
         {
           "id": "task-1793856779434",
@@ -179,20 +182,6 @@
           "updatedAt": "2026-11-13T05:40:40.109Z"
         },
         {
-          "id": "task-1794125434463",
-          "title": "ผอ.สปร ขอเข้าพบ",
-          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nผอ ขอเข้าพบเพื่อแสดงความยินดี",
-          "date": "2026-11-13",
-          "time": "10:30",
-          "categoryId": "cat-client",
-          "priority": "medium",
-          "status": "completed",
-          "remindMinutesBefore": 15,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-13T05:40:43.872Z"
-        },
-        {
           "id": "task-1794548954641",
           "title": "บรีฟ ประชุมคณะอนุฯ NGOs",
           "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
@@ -212,13 +201,13 @@
           "description": "สถานที่: ชั้น 9 ห้องอธิบดี\nผอ.ไปบรีฟ อธิบดี UNHCR",
           "date": "2026-11-16",
           "time": "09:00",
-          "categoryId": "cat-1794758710264",
+          "categoryId": "cat-1794787774478",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 15,
-          "lineNotified": false,
+          "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-15T23:37:51.334Z"
+          "updatedAt": "2026-11-16T04:35:27.582Z"
         },
         {
           "id": "task-1794370586553",
@@ -379,9 +368,15 @@
           "name": "บรีฟข้อมูล",
           "color": "#D97706",
           "description": ""
+        },
+        {
+          "id": "cat-1794787774478",
+          "name": "บรีฟข้อมูลต่างๆ",
+          "color": "#D97706",
+          "description": ""
         }
       ],
-      "categoriesUpdatedAt": 1794785892241,
+      "categoriesUpdatedAt": 1794804098333,
       "teamMembers": [
         {
           "id": "member-owner",
@@ -396,8 +391,8 @@
       ]
     },
     "team-default": {
-      "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-15T23:41:17.496Z",
+      "workspaceId": "team-default",
+      "updatedAt": "2026-11-16T04:46:35.025Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -414,7 +409,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-15T23:38:12.241Z"
+          "updatedAt": "2026-11-16T04:41:38.333Z"
         },
         {
           "id": "task-1793856779434",
@@ -530,20 +525,6 @@
           "updatedAt": "2026-11-13T05:40:40.109Z"
         },
         {
-          "id": "task-1794125434463",
-          "title": "ผอ.สปร ขอเข้าพบ",
-          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nผอ ขอเข้าพบเพื่อแสดงความยินดี",
-          "date": "2026-11-13",
-          "time": "10:30",
-          "categoryId": "cat-client",
-          "priority": "medium",
-          "status": "completed",
-          "remindMinutesBefore": 15,
-          "lineNotified": false,
-          "source": "web",
-          "updatedAt": "2026-11-13T05:40:43.872Z"
-        },
-        {
           "id": "task-1794548954641",
           "title": "บรีฟ ประชุมคณะอนุฯ NGOs",
           "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
@@ -563,13 +544,13 @@
           "description": "สถานที่: ชั้น 9 ห้องอธิบดี\nผอ.ไปบรีฟ อธิบดี UNHCR",
           "date": "2026-11-16",
           "time": "09:00",
-          "categoryId": "cat-1794758710264",
+          "categoryId": "cat-1794787774478",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 15,
-          "lineNotified": false,
+          "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-15T23:37:51.334Z"
+          "updatedAt": "2026-11-16T04:35:27.582Z"
         },
         {
           "id": "task-1794370586553",
@@ -730,9 +711,15 @@
           "name": "บรีฟข้อมูล",
           "color": "#D97706",
           "description": ""
+        },
+        {
+          "id": "cat-1794787774478",
+          "name": "บรีฟข้อมูลต่างๆ",
+          "color": "#D97706",
+          "description": ""
         }
       ],
-      "categoriesUpdatedAt": 1794785892241,
+      "categoriesUpdatedAt": 1794804098333,
       "teamMembers": [
         {
           "id": "member-owner",

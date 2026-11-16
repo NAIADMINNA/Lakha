@@ -261,37 +261,71 @@ const LiveBangkokClockDisplay: React.FC<{
     };
   }, []);
 
-  const formattedSec = useMemo(() => {
+  const [hh, mm, ss] = useMemo(() => {
     try {
-      return new Intl.DateTimeFormat('en-GB', {
+      const str = new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Bangkok',
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
         hour12: false,
       }).format(clockTick);
+      const parts = str.split(':');
+      if (parts.length === 3) return [parts[0], parts[1], parts[2]];
+      return [parts[0] || '00', parts[1] || '00', '00'];
     } catch {
-      return formatLocalTimeHM(clockTick);
+      const fallback = formatLocalTimeHM(clockTick).split(':');
+      return [fallback[0] || '00', fallback[1] || '00', '00'];
     }
   }, [clockTick]);
 
+  const hmSizeClasses = isLargeText
+    ? 'text-5xl sm:text-6xl md:text-[64px]'
+    : 'text-4xl sm:text-5xl md:text-[54px]';
+
+  const secSizeClasses = isLargeText
+    ? 'text-2xl sm:text-3xl md:text-[36px]'
+    : 'text-xl sm:text-2xl md:text-[30px]';
+
+  const primaryDigitColor = isNavyGold || isDarkDisplay
+    ? 'text-white'
+    : isEmeraldExec
+    ? 'text-emerald-950'
+    : 'text-slate-950';
+
+  const colonColor = isNavyGold
+    ? 'text-amber-400'
+    : isDarkDisplay
+    ? 'text-sky-400'
+    : isEmeraldExec
+    ? 'text-emerald-600'
+    : 'text-indigo-600';
+
+  const secColor = isNavyGold
+    ? 'text-amber-200/90'
+    : isDarkDisplay
+    ? 'text-sky-300/90'
+    : isEmeraldExec
+    ? 'text-emerald-700/85'
+    : 'text-indigo-700/85';
+
   return (
-    <span
-      className={`font-sans tabular-nums font-extrabold tracking-widest leading-none ${
-        isLargeText
-          ? 'text-4xl sm:text-5xl md:text-[50px]'
-          : 'text-3xl sm:text-4xl md:text-[42px]'
-      } ${
-        isNavyGold
-          ? 'text-white'
-          : isDarkDisplay
-          ? 'text-white'
-          : isEmeraldExec
-          ? 'text-emerald-950'
-          : 'text-indigo-950'
-      }`}
-    >
-      {formattedSec}
+    <span className="inline-flex items-baseline font-sans tabular-nums leading-none select-none">
+      <span className={`font-black tracking-tight ${hmSizeClasses} ${primaryDigitColor}`}>
+        {hh}
+      </span>
+      <span
+        aria-hidden="true"
+        className={`mx-1 sm:mx-1.5 -translate-y-[3px] inline-block font-extrabold ${hmSizeClasses} ${colonColor}`}
+      >
+        :
+      </span>
+      <span className={`font-black tracking-tight ${hmSizeClasses} ${primaryDigitColor}`}>
+        {mm}
+      </span>
+      <span className={`ml-1.5 font-bold tracking-tight ${secSizeClasses} ${secColor}`}>
+        :{ss}
+      </span>
     </span>
   );
 });
@@ -847,16 +881,22 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    let isStaticEndpoint = false;
 
     const pullDirectorPresence = async () => {
-      if (Date.now() - lastPresenceWriteMsRef.current < 1500) return;
+      if (isStaticEndpoint || Date.now() - lastPresenceWriteMsRef.current < 1500) return;
       try {
         const res = await fetch('/api/collab/director-presence', {
           method: 'GET',
+          cache: 'no-store',
           headers: { Accept: 'application/json' },
         });
         const ct = res.headers.get('content-type') || '';
-        if (!res.ok || !ct.includes('application/json') || cancelled) return;
+        if (res.status === 404 || !ct.includes('application/json')) {
+          isStaticEndpoint = true;
+          return;
+        }
+        if (!res.ok || cancelled) return;
         const data = await res.json();
         const remote = data?.presence;
         if (!remote || typeof remote.mode !== 'string') return;
@@ -867,7 +907,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
 
     pullDirectorPresence();
-    const intervalId = window.setInterval(pullDirectorPresence, 4000);
+    const intervalId = window.setInterval(pullDirectorPresence, 3000);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         pullDirectorPresence();
@@ -891,10 +931,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         nextCustomNote !== undefined
           ? nextCustomNote.trim().slice(0, 160)
           : directorPresence.customNote;
+      const prevDpMs = directorPresence.updatedAt
+        ? new Date(directorPresence.updatedAt).getTime()
+        : 0;
+      const safePrevDpMs = Number.isFinite(prevDpMs) ? prevDpMs : 0;
+      const monotonicDpIso = new Date(
+        Math.max(Date.now(), safePrevDpMs + 1000)
+      ).toISOString();
       const optimistic: DirectorPresenceState = {
         mode: nextMode,
         customNote: resolvedNote,
-        updatedAt: new Date().toISOString(),
+        updatedAt: monotonicDpIso,
       };
       setDirectorPresence(optimistic);
       // Broadcast immediately in 0ms across HDMI / multi-tab windows on the same device
@@ -904,6 +951,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       try {
         const res = await fetch('/api/collab/director-presence', {
           method: 'POST',
+          cache: 'no-store',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mode: nextMode,
@@ -939,7 +987,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         onPresenceStaticSync?.();
       }
     },
-    [directorPresence.customNote, onPresenceStaticSync]
+    [directorPresence.customNote, directorPresence.updatedAt, onPresenceStaticSync]
   );
 
   const handleCycleTaskStatus = useCallback(
@@ -1841,37 +1889,48 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
 
             {/* Right Live Thailand Digital Clock */}
-            <div className="flex items-center shrink-0">
+            <div className="flex items-center shrink-0 w-full lg:w-auto">
               <div
-                className={`w-full sm:w-auto min-w-[275px] sm:min-w-[340px] rounded-2xl border px-5 py-3.5 sm:px-7 sm:py-4 text-right transition-colors ${
+                className={`w-full lg:w-auto min-w-[300px] sm:min-w-[420px] xl:min-w-[470px] rounded-2xl border overflow-hidden transition-colors ${
                   isNavyGold
-                    ? 'bg-[#091526]/90 border-amber-400/45 text-white shadow-inner'
+                    ? 'bg-[#081221] border-amber-400/50 text-white'
                     : isDarkDisplay
-                    ? 'bg-slate-950/90 border-slate-700/80 text-white shadow-inner'
+                    ? 'bg-slate-950 border-slate-700/90 text-white'
                     : isEmeraldExec
-                    ? 'bg-white/95 border-emerald-200/90 text-slate-900 shadow-xs'
-                    : 'bg-white/95 border-indigo-200/80 text-slate-900 shadow-xs'
+                    ? 'bg-white border-emerald-200/95 text-slate-900'
+                    : 'bg-white border-indigo-200/90 text-slate-900'
                 }`}
               >
                 <div
-                  className={`flex items-center justify-end gap-1.5 font-bold tracking-tight pb-2 border-b ${
+                  className={`flex items-center justify-center gap-2.5 px-6 sm:px-8 py-2.5 sm:py-3 border-b font-bold tracking-tight text-center sm:whitespace-nowrap ${
                     isLargeText
-                      ? 'text-base sm:text-lg md:text-xl'
-                      : 'text-sm sm:text-base md:text-lg'
+                      ? 'text-lg sm:text-2xl md:text-[26px]'
+                      : 'text-base sm:text-xl md:text-[22px]'
                   } ${
                     isNavyGold
-                      ? 'text-amber-300 border-amber-400/20'
+                      ? 'bg-amber-400/12 border-amber-400/25 text-amber-200'
                       : isDarkDisplay
-                      ? 'text-sky-300 border-slate-800'
+                      ? 'bg-slate-900/95 border-slate-800 text-sky-200'
                       : isEmeraldExec
-                      ? 'text-emerald-800 border-emerald-100'
-                      : 'text-indigo-800 border-indigo-100/90'
+                      ? 'bg-emerald-50/85 border-emerald-100 text-emerald-950'
+                      : 'bg-indigo-50/80 border-indigo-100 text-indigo-950'
                   }`}
                 >
-                  <Clock className="h-4 w-4 shrink-0 opacity-85" />
+                  <CalendarIcon
+                    className={`h-4 w-4 sm:h-5 sm:w-5 shrink-0 ${
+                      isNavyGold
+                        ? 'text-amber-300'
+                        : isDarkDisplay
+                        ? 'text-sky-400'
+                        : isEmeraldExec
+                        ? 'text-emerald-700'
+                        : 'text-indigo-700'
+                    }`}
+                  />
                   <span>{formatFullThaiDayHeader(todayStr)}</span>
                 </div>
-                <div className="mt-2.5 flex items-baseline justify-end gap-2">
+
+                <div className="px-6 sm:px-8 py-3.5 sm:py-4 flex items-baseline justify-center gap-2">
                   <LiveBangkokClockDisplay
                     isLargeText={isLargeText}
                     isNavyGold={isNavyGold}
@@ -1879,16 +1938,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     isEmeraldExec={isEmeraldExec}
                   />
                   <span
-                    className={`font-bold ${
-                      isLargeText ? 'text-xl sm:text-2xl' : 'text-lg sm:text-xl'
+                    className={`font-extrabold tracking-tight ml-0.5 ${
+                      isLargeText
+                        ? 'text-xl sm:text-2xl md:text-[28px]'
+                        : 'text-lg sm:text-xl md:text-2xl'
                     } ${
                       isNavyGold
                         ? 'text-amber-300'
                         : isDarkDisplay
                         ? 'text-sky-300'
                         : isEmeraldExec
-                        ? 'text-emerald-700'
-                        : 'text-indigo-700'
+                        ? 'text-emerald-800'
+                        : 'text-indigo-800'
                     }`}
                   >
                     น.

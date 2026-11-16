@@ -1015,13 +1015,14 @@ export default function App() {
         let nextUpdatedAt = t.updatedAt;
         if (idx === 0) {
           const localPresence = readLocalDirectorPresence();
-          const dpMs = localPresence.updatedAt
+          const rawDpMs = localPresence.updatedAt
             ? new Date(localPresence.updatedAt).getTime()
             : 0;
+          const dpMs = Number.isFinite(rawDpMs) ? rawDpMs : 0;
           if (localPresence.updatedAt && dpMs > 0) {
             metaObj.dp = localPresence;
           }
-          const recentDelTaskArr = Array.from(deletedTaskIdsRef.current).slice(-80);
+          const recentDelTaskArr = Array.from(deletedTaskIdsRef.current).slice(-120);
           if (recentDelTaskArr.length > 0) {
             metaObj.dt = recentDelTaskArr;
           }
@@ -1029,14 +1030,15 @@ export default function App() {
             metaObj.c = categoriesList;
             metaObj.cu = effectiveCu;
           }
-          const curMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+          const rawCurMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+          const curMs = Number.isFinite(rawCurMs) ? rawCurMs : 0;
           const maxMetaMs = Math.max(
+            Date.now(),
+            curMs + 1,
             Array.isArray(categoriesList) && categoriesList.length > 0 ? effectiveCu : 0,
             dpMs
           );
-          if (maxMetaMs > curMs) {
-            nextUpdatedAt = new Date(maxMetaMs).toISOString();
-          }
+          nextUpdatedAt = new Date(maxMetaMs).toISOString();
           if (delCatArr.length > 0) {
             metaObj.dc = delCatArr;
           }
@@ -1199,6 +1201,10 @@ export default function App() {
     []
   );
 
+  // Remember when running on static hosting (e.g. GitHub Pages) so sync calls go straight to GAS without 404/405 round-trips
+  const isStaticHostRef = useRef<boolean>(false);
+  const sheetWriteTimerRef = useRef<number | null>(null);
+
   // Push collaborative workspace state to server so shared calendar collaborators stay in sync
   const pushCollaborativeWorkspace = useCallback(
     async (
@@ -1247,84 +1253,90 @@ export default function App() {
 
       let workspacePostSucceeded = false;
       let authoritativeTasks: Task[] = cleanNextTasks;
-      try {
-        const res = await fetch(
-          `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              clientOriginId: getClientTabId(),
-              updatedBy: user?.email || 'สมาชิกทีม',
-              spreadsheetId: sheetMeta?.spreadsheetId,
-              spreadsheetUrl: sheetMeta?.spreadsheetUrl,
-              deletedTaskId:
-                typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
-              deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
-              deletedCategoryId: deletedCategoryId || undefined,
-              deletedCategoryIds:
-                allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
-              categoriesUpdatedAt: activeCu,
-              tasks: cleanNextTasks,
-              categories: nextCategories,
-              teamMembers: nextMembers,
-            }),
-          }
-        );
-        if (res.ok) {
-          workspacePostSucceeded = true;
-          const data = await res.json();
-          if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
-            recordDeletedTaskIds(data.deletedTaskIds);
-          }
-          if (
-            Array.isArray(data.deletedCategoryIds) &&
-            data.deletedCategoryIds.length > 0
-          ) {
-            recordDeletedCategoryIds(data.deletedCategoryIds);
-          }
-          if (typeof data.workspace?.categoriesUpdatedAt === 'number') {
-            bumpCategoriesUpdatedAt(data.workspace.categoriesUpdatedAt);
-          }
-          if (
-            Array.isArray(data.workspace?.categories) &&
-            data.workspace.categories.length > 0
-          ) {
-            const mergedServerCats = mergeCategoriesLists(
-              nextCategories,
-              data.workspace.categories as Category[]
-            );
-            if (mergedServerCats.length > 0) {
-              categoriesRef.current = mergedServerCats;
-              setCategories((prev) =>
-                JSON.stringify(prev) === JSON.stringify(mergedServerCats)
-                  ? prev
-                  : mergedServerCats
+      if (!isStaticHostRef.current) {
+        try {
+          const res = await fetch(
+            `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
+            {
+              method: 'POST',
+              cache: 'no-store',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                clientOriginId: getClientTabId(),
+                updatedBy: user?.email || 'สมาชิกทีม',
+                spreadsheetId: sheetMeta?.spreadsheetId,
+                spreadsheetUrl: sheetMeta?.spreadsheetUrl,
+                deletedTaskId:
+                  typeof deletedTaskId === 'string' ? deletedTaskId : undefined,
+                deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+                deletedCategoryId: deletedCategoryId || undefined,
+                deletedCategoryIds:
+                  allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
+                categoriesUpdatedAt: activeCu,
+                tasks: cleanNextTasks,
+                categories: nextCategories,
+                teamMembers: nextMembers,
+              }),
+            }
+          );
+          const ct = res.headers.get('content-type') || '';
+          if (res.ok && ct.includes('application/json')) {
+            workspacePostSucceeded = true;
+            const data = await res.json();
+            if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
+              recordDeletedTaskIds(data.deletedTaskIds);
+            }
+            if (
+              Array.isArray(data.deletedCategoryIds) &&
+              data.deletedCategoryIds.length > 0
+            ) {
+              recordDeletedCategoryIds(data.deletedCategoryIds);
+            }
+            if (typeof data.workspace?.categoriesUpdatedAt === 'number') {
+              bumpCategoriesUpdatedAt(data.workspace.categoriesUpdatedAt);
+            }
+            if (
+              Array.isArray(data.workspace?.categories) &&
+              data.workspace.categories.length > 0
+            ) {
+              const mergedServerCats = mergeCategoriesLists(
+                nextCategories,
+                data.workspace.categories as Category[]
               );
+              if (mergedServerCats.length > 0) {
+                categoriesRef.current = mergedServerCats;
+                setCategories((prev) =>
+                  JSON.stringify(prev) === JSON.stringify(mergedServerCats)
+                    ? prev
+                    : mergedServerCats
+                );
+              }
             }
-          }
-          if (data.workspace?.updatedAt) {
-            lastSyncedTimestampRef.current = data.workspace.updatedAt;
-            setLastCollabSyncAt(data.workspace.updatedAt);
-          }
-          if (Array.isArray(data.workspace?.tasks)) {
-            const decodedServer = extractGasMetadataFromTasks(
-              data.workspace.tasks as Task[]
-            ).tasks.filter((t) => !isTaskPurgedOrDeleted(t));
-            const mergedRes = deduplicateAndMergeTasks(decodedServer, cleanNextTasks);
-            if (mergedRes.discardedIds.length > 0) {
-              recordDeletedTaskIds(mergedRes.discardedIds);
+            if (data.workspace?.updatedAt) {
+              lastSyncedTimestampRef.current = data.workspace.updatedAt;
+              setLastCollabSyncAt(data.workspace.updatedAt);
             }
-            authoritativeTasks = mergedRes.tasks;
-            setTasks((prev) => {
-              if (areTaskListsEqual(prev, authoritativeTasks)) return prev;
-              tasksRef.current = authoritativeTasks;
-              return authoritativeTasks;
-            });
+            if (Array.isArray(data.workspace?.tasks)) {
+              const decodedServer = extractGasMetadataFromTasks(
+                data.workspace.tasks as Task[]
+              ).tasks.filter((t) => !isTaskPurgedOrDeleted(t));
+              const mergedRes = deduplicateAndMergeTasks(decodedServer, cleanNextTasks);
+              if (mergedRes.discardedIds.length > 0) {
+                recordDeletedTaskIds(mergedRes.discardedIds);
+              }
+              authoritativeTasks = mergedRes.tasks;
+              setTasks((prev) => {
+                if (areTaskListsEqual(prev, authoritativeTasks)) return prev;
+                tasksRef.current = authoritativeTasks;
+                return authoritativeTasks;
+              });
+            }
+          } else if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+            isStaticHostRef.current = true;
           }
+        } catch {
+          workspacePostSucceeded = false;
         }
-      } catch {
-        workspacePostSucceeded = false;
       }
 
       // Only send a separate GAS bridge push from the browser if the server workspace POST did not already handle it (e.g. static GitHub Pages)
@@ -1336,28 +1348,31 @@ export default function App() {
           nextMembers
         );
         let proxySynced = false;
-        try {
-          const proxyRes = await fetch('/api/line/gas-bridge-sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              mode: 'push',
-              gasUrl: activeGasUrl,
-              tasks: gasTasksWithMeta,
-              categories: nextCategories,
-              categoriesUpdatedAt: activeCu,
-              teamMembers: nextMembers,
-              deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
-              deletedCategoryIds:
-                allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
-            }),
-          });
-          const ct = proxyRes.headers.get('content-type') || '';
-          if (proxyRes.ok && ct.includes('application/json')) {
-            proxySynced = true;
+        if (!isStaticHostRef.current) {
+          try {
+            const proxyRes = await fetch('/api/line/gas-bridge-sync', {
+              method: 'POST',
+              cache: 'no-store',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                mode: 'push',
+                gasUrl: activeGasUrl,
+                tasks: gasTasksWithMeta,
+                categories: nextCategories,
+                categoriesUpdatedAt: activeCu,
+                teamMembers: nextMembers,
+                deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+                deletedCategoryIds:
+                  allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
+              }),
+            });
+            const ct = proxyRes.headers.get('content-type') || '';
+            if (proxyRes.ok && ct.includes('application/json')) {
+              proxySynced = true;
+            }
+          } catch {
+            proxySynced = false;
           }
-        } catch {
-          proxySynced = false;
         }
 
         if (!proxySynced && activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
@@ -1517,7 +1532,7 @@ export default function App() {
     showNotice('info', 'ออกจากระบบบัญชี Google เรียบร้อยแล้ว');
   };
 
-  // Helper to sync current state to Google Sheets (when connected) — merges remote LINE tasks first so we never overwrite them
+  // Helper to sync current state to Google Sheets (when connected) — broadcasts immediately via WebSocket/GAS and debounces direct OAuth write so it never races GAS sync_tasks
   const syncAllToConnectedSheet = useCallback(
     async (
       nextTasks: Task[],
@@ -1536,7 +1551,7 @@ export default function App() {
           ? [deletedTaskId]
           : []
       );
-      const authoritativeTasks = await pushCollaborativeWorkspace(
+      await pushCollaborativeWorkspace(
         nextTasks,
         nextCategories,
         nextTeamMembers,
@@ -1544,38 +1559,39 @@ export default function App() {
         deletedCategoryId
       );
 
-      const token = await getAccessToken();
-      if (!token || !sheetMeta?.spreadsheetId) {
-        if (successMsg) {
-          showNotice('success', successMsg, calendarDateToOpen);
-        }
-        return;
+      if (successMsg) {
+        showNotice('success', successMsg, calendarDateToOpen);
       }
-      setIsSyncing(true);
-      try {
-        const mergedTasks = authoritativeTasks.filter(
-          (t) => !isTaskPurgedOrDeleted(t, deletedSet)
-        );
-        const mergedLogs = nextLogs;
 
-        await writeDatabaseToSheet(
-          token,
-          sheetMeta.spreadsheetId,
-          mergedTasks,
-          nextCategories,
-          mergedLogs,
-          nextTeamMembers
-        );
-        if (successMsg) {
-          showNotice('success', successMsg, calendarDateToOpen);
-        }
-      } catch {
-        if (successMsg) {
-          showNotice('success', successMsg, calendarDateToOpen);
-        }
-      } finally {
-        setIsSyncing(false);
+      const targetSheetId = sheetMeta?.spreadsheetId;
+      if (!targetSheetId) return;
+
+      if (sheetWriteTimerRef.current !== null) {
+        window.clearTimeout(sheetWriteTimerRef.current);
       }
+      sheetWriteTimerRef.current = window.setTimeout(async () => {
+        sheetWriteTimerRef.current = null;
+        const token = await getAccessToken();
+        if (!token || !targetSheetId) return;
+        setIsSyncing(true);
+        try {
+          const latestCleanTasks = tasksRef.current.filter(
+            (t) => !isTaskPurgedOrDeleted(t, deletedSet)
+          );
+          await writeDatabaseToSheet(
+            token,
+            targetSheetId,
+            latestCleanTasks,
+            categoriesRef.current,
+            nextLogs,
+            teamMembersRef.current
+          );
+        } catch {
+          // Silent background OAuth sheet sync
+        } finally {
+          setIsSyncing(false);
+        }
+      }, 2200);
     },
     [isTaskPurgedOrDeleted, pushCollaborativeWorkspace, sheetMeta, showNotice, teamMembers]
   );
@@ -2734,135 +2750,146 @@ export default function App() {
         // 0. First try Collaborative Workspace endpoint if running on Full-Stack Server
         let workspaceHandled = false;
         let wsTaskCount = 0;
-        try {
-          const wsRes = await fetch(
-            `/api/collab/workspace/${encodeURIComponent(workspaceId)}`
-          );
-          const wsCt = wsRes.headers.get('content-type') || '';
-          if (wsRes.ok && wsCt.includes('application/json')) {
-            const wsData = await wsRes.json();
-            if (wsData.exists && wsData.workspace) {
-              if (wsData.workspace.updatedAt) {
-                lastSyncedTimestampRef.current = wsData.workspace.updatedAt;
-                setLastCollabSyncAt(wsData.workspace.updatedAt);
-              }
-              if (
-                Array.isArray(wsData.deletedTaskIds) &&
-                wsData.deletedTaskIds.length > 0
-              ) {
-                recordDeletedTaskIds(wsData.deletedTaskIds);
-              }
-              let cleanWsTasks: Task[] = [];
-              if (Array.isArray(wsData.workspace.tasks)) {
-                const delSet = new Set<string>([
-                  ...(Array.isArray(wsData.deletedTaskIds) ? wsData.deletedTaskIds : []),
-                  ...Array.from(deletedTaskIdsRef.current),
-                ]);
-                const decodedWs = extractGasMetadataFromTasks(
-                  wsData.workspace.tasks as Task[]
-                );
-                if (
-                  Array.isArray(decodedWs.deletedTaskIds) &&
-                  decodedWs.deletedTaskIds.length > 0
-                ) {
-                  recordDeletedTaskIds(decodedWs.deletedTaskIds);
-                  decodedWs.deletedTaskIds.forEach((id) => delSet.add(id));
+        if (!isStaticHostRef.current) {
+          try {
+            const wsRes = await fetch(
+              `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
+              { cache: 'no-store' }
+            );
+            const wsCt = wsRes.headers.get('content-type') || '';
+            if (wsRes.ok && wsCt.includes('application/json')) {
+              const wsData = await wsRes.json();
+              if (wsData.exists && wsData.workspace) {
+                if (wsData.workspace.updatedAt) {
+                  lastSyncedTimestampRef.current = wsData.workspace.updatedAt;
+                  setLastCollabSyncAt(wsData.workspace.updatedAt);
                 }
-                if (decodedWs.directorPresence) {
-                  emitRemotePresenceFromGas(decodedWs.directorPresence);
-                }
-                cleanWsTasks = decodedWs.tasks.filter(
-                  (t) => !isTaskPurgedOrDeleted(t, delSet)
-                );
-                wsTaskCount = cleanWsTasks.length;
-                workspaceHandled = true;
                 if (
-                  showFeedback ||
-                  Date.now() - lastLocalMutationMsRef.current > 2000
+                  Array.isArray(wsData.deletedTaskIds) &&
+                  wsData.deletedTaskIds.length > 0
                 ) {
-                  let newlyDiscarded: string[] = [];
-                  setTasks((prev) => {
-                    const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
-                      cleanWsTasks,
-                      prev,
-                      delSet
-                    );
-                    newlyDiscarded = discardedIds;
-                    if (areTaskListsEqual(prev, mergedList)) return prev;
-                    tasksRef.current = mergedList;
-                    return mergedList;
-                  });
-                  if (newlyDiscarded.length > 0) {
-                    recordDeletedTaskIds(newlyDiscarded);
+                  recordDeletedTaskIds(wsData.deletedTaskIds);
+                }
+                let cleanWsTasks: Task[] = [];
+                if (Array.isArray(wsData.workspace.tasks)) {
+                  const delSet = new Set<string>([
+                    ...(Array.isArray(wsData.deletedTaskIds) ? wsData.deletedTaskIds : []),
+                    ...Array.from(deletedTaskIdsRef.current),
+                  ]);
+                  const decodedWs = extractGasMetadataFromTasks(
+                    wsData.workspace.tasks as Task[]
+                  );
+                  if (
+                    Array.isArray(decodedWs.deletedTaskIds) &&
+                    decodedWs.deletedTaskIds.length > 0
+                  ) {
+                    recordDeletedTaskIds(decodedWs.deletedTaskIds);
+                    decodedWs.deletedTaskIds.forEach((id) => delSet.add(id));
+                  }
+                  if (decodedWs.directorPresence) {
+                    emitRemotePresenceFromGas(decodedWs.directorPresence);
+                  }
+                  cleanWsTasks = decodedWs.tasks.filter(
+                    (t) => !isTaskPurgedOrDeleted(t, delSet)
+                  );
+                  wsTaskCount = cleanWsTasks.length;
+                  workspaceHandled = true;
+                  if (
+                    showFeedback ||
+                    Date.now() - lastLocalMutationMsRef.current > 1500
+                  ) {
+                    let newlyDiscarded: string[] = [];
+                    const nowCheckMs = Date.now();
+                    setTasks((prev) => {
+                      const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
+                        cleanWsTasks,
+                        prev.filter((p) => {
+                          if (delSet.has(p.id)) return false;
+                          if (cleanWsTasks.some((r) => r.id === p.id)) return true;
+                          const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+                          return Number.isFinite(pMs) && nowCheckMs - pMs < 12000;
+                        }),
+                        delSet
+                      );
+                      newlyDiscarded = discardedIds;
+                      if (areTaskListsEqual(prev, mergedList)) return prev;
+                      tasksRef.current = mergedList;
+                      return mergedList;
+                    });
+                    if (newlyDiscarded.length > 0) {
+                      recordDeletedTaskIds(newlyDiscarded);
+                    }
                   }
                 }
-              }
-              const remoteWsCu =
-                typeof wsData.workspace.categoriesUpdatedAt === 'number'
-                  ? wsData.workspace.categoriesUpdatedAt
-                  : 0;
-              if (
-                remoteWsCu >= categoriesUpdatedAtRef.current &&
-                Array.isArray(wsData.deletedCategoryIds) &&
-                wsData.deletedCategoryIds.length > 0
-              ) {
-                recordDeletedCategoryIds(wsData.deletedCategoryIds);
-              }
-              const wsCats = Array.isArray(wsData.workspace.categories)
-                ? (wsData.workspace.categories as Category[])
-                : [];
-              if (
-                !isDefaultCategoryList(categoriesRef.current) &&
-                isDefaultCategoryList(wsCats) &&
-                categoriesUpdatedAtRef.current >= remoteWsCu
-              ) {
-                pushCollaborativeWorkspace(
-                  cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
-                  categoriesRef.current,
-                  teamMembersRef.current
-                );
-              } else if (
-                wsCats.length > 0 &&
-                Date.now() - lastLocalMutationMsRef.current > 5000
-              ) {
-                const localCu = categoriesUpdatedAtRef.current;
-                const mergedWsCats =
-                  remoteWsCu > localCu || localCu === 0
-                    ? mergeCategoriesLists(wsCats, categoriesRef.current)
-                    : mergeCategoriesLists(categoriesRef.current, wsCats);
-                if (remoteWsCu > localCu) {
-                  bumpCategoriesUpdatedAt(remoteWsCu);
+                const remoteWsCu =
+                  typeof wsData.workspace.categoriesUpdatedAt === 'number'
+                    ? wsData.workspace.categoriesUpdatedAt
+                    : 0;
+                if (
+                  remoteWsCu >= categoriesUpdatedAtRef.current &&
+                  Array.isArray(wsData.deletedCategoryIds) &&
+                  wsData.deletedCategoryIds.length > 0
+                ) {
+                  recordDeletedCategoryIds(wsData.deletedCategoryIds);
                 }
-                if (mergedWsCats.length > 0) {
-                  setCategories((prev) => {
-                    if (JSON.stringify(prev) === JSON.stringify(mergedWsCats)) return prev;
-                    categoriesRef.current = mergedWsCats;
-                    return mergedWsCats;
-                  });
-                  // If client had newer custom categories missing on server, sync them back up
-                  if (JSON.stringify(mergedWsCats) !== JSON.stringify(wsCats)) {
-                    pushCollaborativeWorkspace(
-                      cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
-                      mergedWsCats,
-                      teamMembersRef.current
-                    );
+                const wsCats = Array.isArray(wsData.workspace.categories)
+                  ? (wsData.workspace.categories as Category[])
+                  : [];
+                if (
+                  !isDefaultCategoryList(categoriesRef.current) &&
+                  isDefaultCategoryList(wsCats) &&
+                  categoriesUpdatedAtRef.current >= remoteWsCu
+                ) {
+                  pushCollaborativeWorkspace(
+                    cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
+                    categoriesRef.current,
+                    teamMembersRef.current
+                  );
+                } else if (
+                  wsCats.length > 0 &&
+                  Date.now() - lastLocalMutationMsRef.current > 2500
+                ) {
+                  const localCu = categoriesUpdatedAtRef.current;
+                  const mergedWsCats =
+                    remoteWsCu > localCu || localCu === 0
+                      ? mergeCategoriesLists(wsCats, categoriesRef.current)
+                      : mergeCategoriesLists(categoriesRef.current, wsCats);
+                  if (remoteWsCu > localCu) {
+                    bumpCategoriesUpdatedAt(remoteWsCu);
+                  }
+                  if (mergedWsCats.length > 0) {
+                    setCategories((prev) => {
+                      if (JSON.stringify(prev) === JSON.stringify(mergedWsCats)) return prev;
+                      categoriesRef.current = mergedWsCats;
+                      return mergedWsCats;
+                    });
+                    // If client had newer custom categories missing on server, sync them back up
+                    if (JSON.stringify(mergedWsCats) !== JSON.stringify(wsCats)) {
+                      pushCollaborativeWorkspace(
+                        cleanWsTasks.length > 0 ? cleanWsTasks : tasksRef.current,
+                        mergedWsCats,
+                        teamMembersRef.current
+                      );
+                    }
                   }
                 }
+                if (
+                  Array.isArray(wsData.workspace.teamMembers) &&
+                  wsData.workspace.teamMembers.length > 0 &&
+                  (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
+                ) {
+                  const wsMembers = wsData.workspace.teamMembers as TeamMember[];
+                  setTeamMembers((prev) =>
+                    JSON.stringify(prev) === JSON.stringify(wsMembers) ? prev : wsMembers
+                  );
+                }
               }
-              if (
-                Array.isArray(wsData.workspace.teamMembers) &&
-                wsData.workspace.teamMembers.length > 0 &&
-                (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
-              ) {
-                const wsMembers = wsData.workspace.teamMembers as TeamMember[];
-                setTeamMembers((prev) =>
-                  JSON.stringify(prev) === JSON.stringify(wsMembers) ? prev : wsMembers
-                );
-              }
+            } else if (wsRes.status === 404 || !wsCt.includes('application/json')) {
+              isStaticHostRef.current = true;
             }
+          } catch {
+            // Static host fallback
           }
-        } catch {
-          // Static host fallback
         }
 
         // Only pull from GAS Bridge directly if the full-stack Collaborative Workspace did not handle it (e.g. on GitHub Pages) or had 0 tasks
@@ -2879,62 +2906,67 @@ export default function App() {
             deletedCategoryIds?: string[];
           } | null = null;
 
-          // 1. Try full-stack Server Proxy first
-          try {
-            const res = await fetch('/api/line/gas-bridge-sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                mode: 'pull',
-                gasUrl: activeGasUrl,
-              }),
-            });
-            const ct = res.headers.get('content-type') || '';
-            if (res.ok && ct.includes('application/json')) {
-              data = await res.json();
+          // 1. Try full-stack Server Proxy first (skip when static hosting is already detected)
+          if (!isStaticHostRef.current) {
+            try {
+              const res = await fetch('/api/line/gas-bridge-sync', {
+                method: 'POST',
+                cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  mode: 'pull',
+                  gasUrl: activeGasUrl,
+                }),
+              });
+              const ct = res.headers.get('content-type') || '';
+              if (res.ok && ct.includes('application/json')) {
+                data = await res.json();
+              } else if (res.status === 404 || res.status === 405 || !ct.includes('application/json')) {
+                isStaticHostRef.current = true;
+              }
+            } catch {
+              data = null;
             }
-          } catch {
-            data = null;
           }
 
           // 2. Fallback for static hosting (e.g. GitHub Pages https://naiadminna.github.io/Lakha/)
           if (!data && activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
             try {
-              const directRes = await fetch(activeGasUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'check_bridge' }),
-              });
-              if (directRes.ok) {
-                const directJson = await directRes.json();
+              const getRes = await fetch(
+                `${activeGasUrl}?action=get_tasks&format=json&_t=${Date.now()}`
+              );
+              if (getRes.ok) {
+                const getJson = await getRes.json();
                 data = {
                   gasUrl: activeGasUrl,
-                  detectedGroupId: directJson.detectedGroupId,
-                  tasks: Array.isArray(directJson.tasks) ? directJson.tasks : [],
-                  categories: Array.isArray(directJson.categories)
-                    ? directJson.categories
+                  detectedGroupId: getJson.detectedGroupId,
+                  tasks: Array.isArray(getJson.tasks) ? getJson.tasks : [],
+                  categories: Array.isArray(getJson.categories)
+                    ? getJson.categories
                     : undefined,
-                  teamMembers: Array.isArray(directJson.teamMembers)
-                    ? directJson.teamMembers
+                  teamMembers: Array.isArray(getJson.teamMembers)
+                    ? getJson.teamMembers
                     : undefined,
                 };
               }
             } catch {
               try {
-                const getRes = await fetch(
-                  `${activeGasUrl}?action=get_tasks&format=json`
-                );
-                if (getRes.ok) {
-                  const getJson = await getRes.json();
+                const directRes = await fetch(activeGasUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                  body: JSON.stringify({ action: 'check_bridge' }),
+                });
+                if (directRes.ok) {
+                  const directJson = await directRes.json();
                   data = {
                     gasUrl: activeGasUrl,
-                    detectedGroupId: getJson.detectedGroupId,
-                    tasks: Array.isArray(getJson.tasks) ? getJson.tasks : [],
-                    categories: Array.isArray(getJson.categories)
-                      ? getJson.categories
+                    detectedGroupId: directJson.detectedGroupId,
+                    tasks: Array.isArray(directJson.tasks) ? directJson.tasks : [],
+                    categories: Array.isArray(directJson.categories)
+                      ? directJson.categories
                       : undefined,
-                    teamMembers: Array.isArray(getJson.teamMembers)
-                      ? getJson.teamMembers
+                    teamMembers: Array.isArray(directJson.teamMembers)
+                      ? directJson.teamMembers
                       : undefined,
                   };
                 }
@@ -2999,7 +3031,7 @@ export default function App() {
             if (
               Array.isArray(remoteGasCats) &&
               remoteGasCats.length > 0 &&
-              Date.now() - lastLocalMutationMsRef.current > 5000
+              Date.now() - lastLocalMutationMsRef.current > 2500
             ) {
               const localCu = categoriesUpdatedAtRef.current;
               const mergedGasCats =
@@ -3021,7 +3053,7 @@ export default function App() {
             if (
               Array.isArray(remoteGasMembers) &&
               remoteGasMembers.length > 0 &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
+              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
             ) {
               setTeamMembers((prev) =>
                 JSON.stringify(prev) === JSON.stringify(remoteGasMembers)
@@ -3033,15 +3065,16 @@ export default function App() {
             if (
               !workspaceHandled &&
               Array.isArray(data.tasks) &&
-              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 2000)
+              (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
             ) {
               let newlyDiscardedGas: string[] = [];
+              const gasDelSet = new Set<string>(deletedTaskIdsRef.current);
               setTasks((prev) => {
                 const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
                 const nextRemoteTasks: Task[] = [];
                 for (const rt of decodedGas.tasks) {
                   if (!rt || !rt.id || !rt.title || !rt.date) continue;
-                  if (isTaskPurgedOrDeleted(rt)) continue;
+                  if (isTaskPurgedOrDeleted(rt, gasDelSet)) continue;
                   const existing = prevById.get(rt.id);
                   let inferredEndDate = rt.endDate ?? existing?.endDate;
                   const descText = rt.description ?? existing?.description ?? '';
@@ -3088,9 +3121,16 @@ export default function App() {
                   });
                 }
 
+                const nowGasCheckMs = Date.now();
                 const { tasks: mergedGasTasks, discardedIds } = deduplicateAndMergeTasks(
                   nextRemoteTasks,
-                  prev
+                  prev.filter((p) => {
+                    if (gasDelSet.has(p.id)) return false;
+                    if (nextRemoteTasks.some((r) => r.id === p.id)) return true;
+                    const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+                    return Number.isFinite(pMs) && nowGasCheckMs - pMs < 12000;
+                  }),
+                  gasDelSet
                 );
                 newlyDiscardedGas = discardedIds;
                 if (areTaskListsEqual(prev, mergedGasTasks)) return prev;
@@ -3180,10 +3220,23 @@ export default function App() {
         const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
         let newlyDiscarded: string[] = [];
         setTasks((prev) => {
+          if (ev.type === 'sync:init' && cleanRemoteTasks.length === 0 && prev.length > 0) {
+            return prev;
+          }
+          const nowWsMs = Date.now();
+          const secondaryList =
+            ev.type === 'sync:init'
+              ? prev.filter((p) => !delSet.has(p.id))
+              : prev.filter((p) => {
+                  if (delSet.has(p.id)) return false;
+                  if (cleanRemoteTasks.some((r) => r.id === p.id)) return true;
+                  const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+                  return Number.isFinite(pMs) && nowWsMs - pMs < 12000;
+                });
           // For explicit remote updates (workspace:updated), remote is primary; merge by updatedAt idempotently
           const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
             cleanRemoteTasks,
-            prev.filter((p) => !delSet.has(p.id) && cleanRemoteTasks.some((r) => r.id === p.id)),
+            secondaryList,
             delSet
           );
           newlyDiscarded = discardedIds;
@@ -3245,7 +3298,9 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
 
-    if (!sheetAutoSyncConfig.autoPullEnabled) {
+    // Always keep live sync active when viewing TV Presentation Board ('schedule'), even if autoPullEnabled was turned off earlier
+    const isTvScheduleBoard = activeSection === 'schedule';
+    if (!sheetAutoSyncConfig.autoPullEnabled && !isTvScheduleBoard) {
       return () => {
         document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
         window.removeEventListener('focus', handleVisibilityOrFocus);
@@ -3253,10 +3308,12 @@ export default function App() {
     }
 
     const baseSec = sheetAutoSyncConfig.autoPullIntervalSec || 5;
-    const intervalMs = Math.max(3000, baseSec * 1000);
+    const intervalMs = isTvScheduleBoard
+      ? 2500
+      : Math.max(2500, baseSec * 1000);
     const gasTimer = setInterval(() => {
-      // When WebSocket is connected, real-time updates arrive instantly; still run lightweight background sync for safety
-      if (!isRealtimeWebSocketConnected() || Date.now() - lastLocalMutationMsRef.current > 3500) {
+      // When WebSocket is connected, real-time updates arrive instantly; still run crisp background sync across separate Cloud Run / GitHub Pages instances
+      if (!isRealtimeWebSocketConnected() || Date.now() - lastLocalMutationMsRef.current > 1800) {
         pullLatestTeamCalendar(false);
       }
     }, intervalMs);
@@ -3266,6 +3323,7 @@ export default function App() {
       window.removeEventListener('focus', handleVisibilityOrFocus);
     };
   }, [
+    activeSection,
     pullLatestTeamCalendar,
     sheetAutoSyncConfig.autoPullEnabled,
     sheetAutoSyncConfig.autoPullIntervalSec,
@@ -3351,49 +3409,30 @@ export default function App() {
         target.time !== taskData.time ||
         target.remindMinutesBefore !== taskData.remindMinutesBefore ||
         target.status !== taskData.status;
+      const prevMs = target?.updatedAt ? new Date(target.updatedAt).getTime() : 0;
+      const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+      const monotonicIso = new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString();
       const updatedTask: Task = {
         ...taskData,
         id: existingId,
         lineNotified: scheduleChanged ? false : target?.lineNotified || false,
-        updatedAt: new Date().toISOString(),
+        updatedAt: monotonicIso,
       };
       const nextTasks = currentList.map((t) => (t.id === existingId ? updatedTask : t));
+      tasksRef.current = nextTasks;
+      setTasks(nextTasks);
 
       if (sheetMeta && accessToken) {
-        setConfirmDialog({
-          isOpen: true,
-          title: 'ยืนยันการแก้ไขข้อมูลงานใน Google Sheets?',
-          description:
-            'การแก้ไขรายละเอียดงานนี้จะทำการอัปเดตข้อมูลแถวงานในแท็บ Tasks บนไฟล์ Google Sheets ของคุณ',
-          affectedItemSummary: `แก้ไขงาน: "${updatedTask.title}" (วันที่ ${formatTaskDateRangeLabel(updatedTask)} เวลา ${updatedTask.time} น.)`,
-          confirmLabel: 'ยืนยันการแก้ไข',
-          isDestructive: false,
-          onConfirm: async () => {
-            lastLocalMutationMsRef.current = Date.now();
-            const freshUpdatedTask: Task = {
-              ...updatedTask,
-              updatedAt: new Date().toISOString(),
-            };
-            const latestList = tasksRef.current.map((t) =>
-              t.id === existingId ? freshUpdatedTask : t
-            );
-            tasksRef.current = latestList;
-            setTasks(latestList);
-            await syncAllToConnectedSheet(
-              latestList,
-              categoriesRef.current,
-              lineLogs,
-              `แก้ไขงาน "${freshUpdatedTask.title}" และอัปเดตลง Google Sheets เรียบร้อยแล้ว`,
-              freshUpdatedTask.date,
-              undefined,
-              teamMembersRef.current
-            );
-            closeConfirmDialog();
-          },
-        });
+        syncAllToConnectedSheet(
+          nextTasks,
+          categoriesRef.current,
+          lineLogs,
+          `บันทึกการแก้ไขงาน "${updatedTask.title}" และซิงก์ขึ้นจอเรียบร้อยแล้ว`,
+          updatedTask.date,
+          undefined,
+          teamMembersRef.current
+        );
       } else {
-        tasksRef.current = nextTasks;
-        setTasks(nextTasks);
         pushCollaborativeWorkspace(
           nextTasks,
           categoriesRef.current,
@@ -3410,6 +3449,11 @@ export default function App() {
       const existingSameTask = currentList.find(
         (t) => !isTaskPurgedOrDeleted(t) && normalizeTaskSemanticKey(t) === candidateSig
       );
+      const prevSameMs = existingSameTask?.updatedAt
+        ? new Date(existingSameTask.updatedAt).getTime()
+        : 0;
+      const safePrevSameMs = Number.isFinite(prevSameMs) ? prevSameMs : 0;
+      const newMonotonicIso = new Date(Math.max(Date.now(), safePrevSameMs + 1000)).toISOString();
 
       const newTask: Task = existingSameTask
         ? {
@@ -3418,7 +3462,7 @@ export default function App() {
             id: existingSameTask.id,
             endDate: taskData.endDate ?? existingSameTask.endDate,
             lineNotified: false,
-            updatedAt: new Date().toISOString(),
+            updatedAt: newMonotonicIso,
           }
         : {
             ...taskData,
@@ -3470,11 +3514,16 @@ export default function App() {
   // Update Task Status (Pending / In Progress / Completed)
   const handleUpdateTaskStatus = (task: Task, nextStatus: TaskStatus) => {
     lastLocalMutationMsRef.current = Date.now();
-    const nextTasks = tasksRef.current.map((t) =>
-      t.id === task.id
-        ? { ...t, status: nextStatus, updatedAt: new Date().toISOString() }
-        : t
-    );
+    const nextTasks = tasksRef.current.map((t) => {
+      if (t.id !== task.id) return t;
+      const prevMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+      const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+      return {
+        ...t,
+        status: nextStatus,
+        updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString(),
+      };
+    });
 
     tasksRef.current = nextTasks;
     setTasks(nextTasks);
@@ -4611,7 +4660,13 @@ export default function App() {
       )}
 
       {/* Main Content Container */}
-      <main className="flex-1 max-w-[1360px] w-full mx-auto px-6 py-6">
+      <main
+        className={`flex-1 w-full mx-auto px-4 sm:px-6 py-6 transition-[max-width] duration-200 ${
+          activeSection === 'schedule'
+            ? 'max-w-[1800px] 2xl:max-w-[1920px]'
+            : 'max-w-[1360px]'
+        }`}
+      >
         {activeSection === 'dashboard' && (
           <div className="space-y-5">
             {/* Executive Mission Header Banner on Main Dashboard */}

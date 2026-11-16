@@ -87,9 +87,60 @@ function taskToRow(
   if (t.endDate && t.endDate > t.date) {
     metaObj.e = t.endDate;
   }
+  let rowUpdatedAt = t.updatedAt || new Date().toISOString();
   if (idx === 0) {
-    if (categories.length > 0) metaObj.c = categories;
+    let effectiveCu = Date.now();
+    let dpMs = 0;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const rawCu = Number(window.localStorage.getItem('sheetcal_categories_updated_at_v1') || '0');
+        if (Number.isFinite(rawCu) && rawCu > 0) effectiveCu = rawCu;
+      } catch {
+        // ignore storage read error
+      }
+      try {
+        const rawDc = JSON.parse(
+          window.localStorage.getItem('sheetcal_deleted_category_ids_v1') || '[]'
+        );
+        if (Array.isArray(rawDc) && rawDc.length > 0) {
+          metaObj.dc = rawDc.slice(-60);
+        }
+      } catch {
+        // ignore storage read error
+      }
+      try {
+        const rawDt = JSON.parse(
+          window.localStorage.getItem('sheetcal_deleted_task_ids_v3_clean') || '[]'
+        );
+        if (Array.isArray(rawDt) && rawDt.length > 0) {
+          metaObj.dt = rawDt.slice(-120);
+        }
+      } catch {
+        // ignore storage read error
+      }
+      try {
+        const rawDp = JSON.parse(
+          window.localStorage.getItem('sheetcal_director_presence_v1') || 'null'
+        );
+        if (rawDp && typeof rawDp === 'object' && rawDp.updatedAt) {
+          metaObj.dp = rawDp;
+          const parsedDpMs = new Date(String(rawDp.updatedAt)).getTime();
+          if (Number.isFinite(parsedDpMs) && parsedDpMs > 0) dpMs = parsedDpMs;
+        }
+      } catch {
+        // ignore storage read error
+      }
+    }
+    if (categories.length > 0) {
+      metaObj.c = categories;
+      metaObj.cu = effectiveCu;
+    }
     if (teamMembers.length > 0) metaObj.m = teamMembers;
+    const curMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+    const safeCurMs = Number.isFinite(curMs) ? curMs : 0;
+    rowUpdatedAt = new Date(
+      Math.max(Date.now(), safeCurMs + 1, categories.length > 0 ? effectiveCu : 0, dpMs)
+    ).toISOString();
   }
   const encodedSource =
     Object.keys(metaObj).length > 0
@@ -108,7 +159,7 @@ function taskToRow(
     String(t.remindMinutesBefore),
     t.lineNotified ? 'TRUE' : 'FALSE',
     encodedSource,
-    t.updatedAt,
+    rowUpdatedAt,
     t.assigneeId || '',
     t.assigneeName || '',
     t.endDate && t.endDate > t.date ? t.endDate : '',

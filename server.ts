@@ -1693,7 +1693,7 @@ async function startServer() {
           if (cleanDelCats) {
             metaObj.dc = cleanDelCats;
           }
-          const recentDelTasks = Array.from(deletedTaskIds).slice(-80);
+          const recentDelTasks = Array.from(deletedTaskIds).slice(-120);
           if (recentDelTasks.length > 0) {
             metaObj.dt = recentDelTasks;
           }
@@ -1701,15 +1701,20 @@ async function startServer() {
             metaObj.dp = runtimeDirectorPresence;
           }
           if (cleanMembers) metaObj.m = cleanMembers;
-          // Ensure row 0 updatedAt is at least max(effectiveCu, dp.updatedAt) so Google Apps Script sync_tasks (even v2.7) always saves updated #SCMETA#
-          const curTaskMs = t.updatedAt ? new Date(String(t.updatedAt)).getTime() : 0;
-          const dpMs = runtimeDirectorPresence.updatedAt
+          // Always advance row 0 updatedAt strictly above its previous value so Google Apps Script sync_tasks (even v2.7) always saves updated #SCMETA# (dt, dp, c, cu, dc, m)
+          const rawCurTaskMs = t.updatedAt ? new Date(String(t.updatedAt)).getTime() : 0;
+          const curTaskMs = Number.isFinite(rawCurTaskMs) ? rawCurTaskMs : 0;
+          const rawDpMs = runtimeDirectorPresence.updatedAt
             ? new Date(runtimeDirectorPresence.updatedAt).getTime()
             : 0;
-          const maxMetaMs = Math.max(cleanCats ? effectiveCu : 0, dpMs);
-          if (maxMetaMs > curTaskMs) {
-            nextUpdatedAt = new Date(maxMetaMs).toISOString();
-          }
+          const dpMs = Number.isFinite(rawDpMs) ? rawDpMs : 0;
+          const targetMetaMs = Math.max(
+            Date.now(),
+            curTaskMs + 1,
+            cleanCats ? effectiveCu : 0,
+            dpMs
+          );
+          nextUpdatedAt = new Date(targetMetaMs).toISOString();
         }
         const encodedSource =
           Object.keys(metaObj).length > 0
@@ -2020,10 +2025,13 @@ async function startServer() {
       try {
         // 1. Pull latest tasks from GAS first so a web save NEVER wipes out a task just added in LINE Group
         try {
-          const gasGetRes = await fetch(`${cleanGas}?action=get_tasks&format=json`, {
-            method: 'GET',
-            redirect: 'follow',
-          });
+          const gasGetRes = await fetch(
+            `${cleanGas}?action=get_tasks&format=json&_t=${Date.now()}`,
+            {
+              method: 'GET',
+              redirect: 'follow',
+            }
+          );
           if (gasGetRes.ok) {
             const gasData = (await gasGetRes.json().catch(() => ({}))) as {
               tasks?: unknown[];
@@ -2039,6 +2047,20 @@ async function startServer() {
             }
             if (Array.isArray(gasData.tasks) && gasData.tasks.length > 0) {
               const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
+              if (Array.isArray(decodedGas.deletedTaskIds)) {
+                for (const dtid of decodedGas.deletedTaskIds) {
+                  if (dtid) deletedTaskIds.add(dtid);
+                }
+              }
+              if (decodedGas.directorPresence && decodedGas.directorPresence.updatedAt) {
+                const curDpMs = runtimeDirectorPresence.updatedAt
+                  ? new Date(runtimeDirectorPresence.updatedAt).getTime()
+                  : 0;
+                const remDpMs = new Date(decodedGas.directorPresence.updatedAt).getTime();
+                if (remDpMs > curDpMs) {
+                  runtimeDirectorPresence = decodedGas.directorPresence;
+                }
+              }
               const validRemoteGas = decodedGas.tasks.filter((rt) => {
                 const rid = String(rt.id || '').trim();
                 return Boolean(rid && !deletedTaskIds.has(rid));
@@ -2147,7 +2169,13 @@ async function startServer() {
     if (typeof customNote === 'string') {
       runtimeDirectorPresence.customNote = customNote.trim().slice(0, 160);
     }
-    runtimeDirectorPresence.updatedAt = new Date().toISOString();
+    const prevDpMs = runtimeDirectorPresence.updatedAt
+      ? new Date(runtimeDirectorPresence.updatedAt).getTime()
+      : 0;
+    const safePrevDpMs = Number.isFinite(prevDpMs) ? prevDpMs : 0;
+    runtimeDirectorPresence.updatedAt = new Date(
+      Math.max(Date.now(), safePrevDpMs + 1000)
+    ).toISOString();
     savePersistedWorkspaceCache();
 
     // Immediately push presence update over WebSocket to all TV / Presentation screens
@@ -2182,13 +2210,13 @@ async function startServer() {
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
       cleanGas.startsWith('https://script.google.com/macros/s/') &&
-      nowMs - lastGasPullMs > 3500 &&
-      nowMs - lastWorkspacePostMs > 2500
+      nowMs - lastGasPullMs > 2000 &&
+      nowMs - lastWorkspacePostMs > 1800
     ) {
       lastGasPullMs = nowMs;
       try {
         const gasRes = await fetch(
-          `${cleanGas}?action=get_tasks&format=json`,
+          `${cleanGas}?action=get_tasks&format=json&_t=${nowMs}`,
           { method: 'GET', redirect: 'follow' }
         );
         if (gasRes.ok) {
@@ -2416,9 +2444,40 @@ async function startServer() {
     const existingTasks = Array.isArray(existing?.tasks)
       ? extractGasMetadataFromTasks(existing.tasks).tasks
       : [];
-    const incomingTasks = Array.isArray(tasks)
+    const existingById = new Map<string, Record<string, unknown>>();
+    for (const et of existingTasks) {
+      const eid = String(et.id || '').trim();
+      if (eid) existingById.set(eid, et);
+    }
+
+    const rawIncomingTasks = Array.isArray(tasks)
       ? extractGasMetadataFromTasks(tasks).tasks
       : [];
+    // Protect explicit client edits/toggles from PC clock skew (e.g. Admin PC clock behind Cloud server clock)
+    const incomingTasks = rawIncomingTasks.map((it) => {
+      const iid = String(it.id || '').trim();
+      const prevTask = iid ? existingById.get(iid) : undefined;
+      if (!prevTask) return it;
+      const contentChanged =
+        String(it.status || '') !== String(prevTask.status || '') ||
+        String(it.title || '') !== String(prevTask.title || '') ||
+        String(it.description || '') !== String(prevTask.description || '') ||
+        String(it.date || '') !== String(prevTask.date || '') ||
+        String(it.endDate || '') !== String(prevTask.endDate || '') ||
+        String(it.time || '') !== String(prevTask.time || '') ||
+        String(it.categoryId || '') !== String(prevTask.categoryId || '') ||
+        String(it.priority || '') !== String(prevTask.priority || '') ||
+        String(it.assigneeId || '') !== String(prevTask.assigneeId || '');
+      if (!contentChanged) return it;
+      const prevMs = prevTask.updatedAt ? new Date(String(prevTask.updatedAt)).getTime() : 0;
+      const incMs = it.updatedAt ? new Date(String(it.updatedAt)).getTime() : 0;
+      const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+      const safeIncMs = Number.isFinite(incMs) ? incMs : 0;
+      return {
+        ...it,
+        updatedAt: new Date(Math.max(Date.now(), safeIncMs, safePrevMs + 1000)).toISOString(),
+      };
+    });
 
     // Merge incoming tasks with existing server tasks so newly added tasks are never lost across tabs/devices
     let nextTasks = mergeTasksById(incomingTasks, existingTasks);
@@ -2430,13 +2489,14 @@ async function startServer() {
     } else if (action === 'toggle_task' && taskId) {
       nextTasks = nextTasks.map((t) => {
         const rec = t as Record<string, unknown>;
-        return String(rec.id) === String(taskId)
-          ? {
-              ...rec,
-              status: rec.status === 'completed' ? 'pending' : 'completed',
-              updatedAt: new Date().toISOString(),
-            }
-          : rec;
+        if (String(rec.id) !== String(taskId)) return rec;
+        const prevMs = rec.updatedAt ? new Date(String(rec.updatedAt)).getTime() : 0;
+        const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+        return {
+          ...rec,
+          status: rec.status === 'completed' ? 'pending' : 'completed',
+          updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString(),
+        };
       });
     }
 
@@ -4799,21 +4859,24 @@ async function startServer() {
     }
   }, 20000);
 
-  // Real-time External Change Watcher: When at least 1 TV / WebSocket client is connected,
-  // check Google Apps Script every 3.5s so edits from LINE Group or GitHub Pages also push instantly to TV screens!
+  // Real-time External & Cross-Machine Change Watcher: When at least 1 TV / WebSocket client is connected,
+  // check Google Apps Script every 2s so edits from another machine/URL (ais-dev, ais-pre, GitHub Pages, or LINE Group) push immediately to TV screens!
   setInterval(async () => {
     try {
       if (wsClients.size === 0) return;
       const nowMs = Date.now();
-      if (nowMs - lastWorkspacePostMs < 3500 || nowMs - lastGasPullMs < 3500) return;
+      if (nowMs - lastWorkspacePostMs < 1800 || nowMs - lastGasPullMs < 1800) return;
       const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
       if (!cleanGas.startsWith('https://script.google.com/macros/s/')) return;
       lastGasPullMs = nowMs;
 
-      const gasRes = await fetch(`${cleanGas}?action=get_tasks&format=json`, {
-        method: 'GET',
-        redirect: 'follow',
-      });
+      const gasRes = await fetch(
+        `${cleanGas}?action=get_tasks&format=json&_t=${nowMs}`,
+        {
+          method: 'GET',
+          redirect: 'follow',
+        }
+      );
       if (!gasRes.ok) return;
       const gasData = (await gasRes.json().catch(() => ({}))) as {
         tasks?: unknown[];
@@ -4901,7 +4964,7 @@ async function startServer() {
     } catch {
       // Ignore transient watcher error
     }
-  }, 3500);
+  }, 2000);
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
