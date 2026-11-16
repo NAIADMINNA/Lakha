@@ -12,6 +12,7 @@ import {
   Circle,
   Clock,
   Edit3,
+  Link2,
   MapPin,
   Maximize2,
   Minimize2,
@@ -24,6 +25,7 @@ import {
   SlidersHorizontal,
   Sun,
   Sunset,
+  Tv,
   Users,
   X,
 } from 'lucide-react';
@@ -228,12 +230,86 @@ interface DayGroupEntry {
   }>;
 }
 
+interface TvStageMetrics {
+  viewportW: number;
+  viewportH: number;
+  stageW: number;
+  stageH: number;
+  scale: number;
+  isLandscape: boolean;
+}
+
+function detectAutoTvEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tvParam = (
+      params.get('tv') ||
+      params.get('present') ||
+      params.get('mode') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    if (tvParam === '1' || tvParam === 'true' || tvParam === 'tv') {
+      return true;
+    }
+    const ua = String(window.navigator?.userAgent || '');
+    if (
+      /SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|AFTB|AFTT|AFTS|AFTM|AFTR|Android TV|GoogleTV|Viera|CrKey|MiBOX/i.test(
+        ua
+      )
+    ) {
+      return true;
+    }
+  } catch {
+    // Ignore environment read error
+  }
+  return false;
+}
+
+function computeTvStageMetrics(): TvStageMetrics {
+  if (typeof window === 'undefined') {
+    return {
+      viewportW: 1920,
+      viewportH: 1080,
+      stageW: 1920,
+      stageH: 1080,
+      scale: 1,
+      isLandscape: true,
+    };
+  }
+  const vw = Math.max(
+    320,
+    Math.round(window.visualViewport?.width || window.innerWidth || 1920)
+  );
+  const vh = Math.max(
+    320,
+    Math.round(window.visualViewport?.height || window.innerHeight || 1080)
+  );
+  const isLandscape = vw >= vh;
+  const refW = isLandscape ? 1920 : 1080;
+  const refH = isLandscape ? 1080 : 1920;
+  const rawScale = Math.min(vw / refW, vh / refH);
+  const clampedScale = Math.min(2.5, Math.max(0.45, rawScale));
+  const finalScale = Math.abs(clampedScale - 1) < 0.015 ? 1 : Number(clampedScale.toFixed(4));
+  return {
+    viewportW: vw,
+    viewportH: vh,
+    stageW: Math.round(vw / finalScale),
+    stageH: Math.round(vh / finalScale),
+    scale: finalScale,
+    isLandscape,
+  };
+}
+
 const LiveBangkokClockDisplay: React.FC<{
   isLargeText: boolean;
   isNavyGold: boolean;
   isDarkDisplay: boolean;
   isEmeraldExec: boolean;
-}> = React.memo(({ isLargeText, isNavyGold, isDarkDisplay, isEmeraldExec }) => {
+  isTvStageActive?: boolean;
+}> = React.memo(({ isLargeText, isNavyGold, isDarkDisplay, isEmeraldExec, isTvStageActive }) => {
   const [clockTick, setClockTick] = useState<Date>(() => getInternetNow());
 
   useEffect(() => {
@@ -282,11 +358,19 @@ const LiveBangkokClockDisplay: React.FC<{
     }
   }, [clockTick]);
 
-  const hmSizeClasses = isLargeText
+  const hmSizeClasses = isTvStageActive
+    ? isLargeText
+      ? 'text-[62px]'
+      : 'text-[52px]'
+    : isLargeText
     ? 'text-5xl sm:text-6xl md:text-[64px]'
     : 'text-4xl sm:text-5xl md:text-[54px]';
 
-  const secSizeClasses = isLargeText
+  const secSizeClasses = isTvStageActive
+    ? isLargeText
+      ? 'text-[34px]'
+      : 'text-[28px]'
+    : isLargeText
     ? 'text-2xl sm:text-3xl md:text-[36px]'
     : 'text-xl sm:text-2xl md:text-[30px]';
 
@@ -412,18 +496,124 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [expandMultiDay, setExpandMultiDay] = useState<boolean>(() =>
     Boolean(initialBoardSettings?.expandMultiDay)
   );
+  const isTvLaunchEnv = useMemo(() => detectAutoTvEnvironment(), []);
   const [boardTheme, setBoardTheme] = useState<BoardThemeMode>(
     () => initialBoardSettings?.boardTheme || 'light'
   );
+  const [isTvAutoFit, setIsTvAutoFit] = useState<boolean>(() =>
+    initialBoardSettings?.tvAutoFit !== undefined ? initialBoardSettings.tvAutoFit : true
+  );
   const [isLargeText, setIsLargeText] = useState<boolean>(() =>
-    Boolean(initialBoardSettings?.isLargeText)
+    isTvLaunchEnv ? true : Boolean(initialBoardSettings?.isLargeText)
   );
-  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
+  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(() => isTvLaunchEnv);
   const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
-    useState<boolean>(false);
+    useState<boolean>(() => isTvLaunchEnv);
   const [isAutoScroll, setIsAutoScroll] = useState<boolean>(() =>
-    Boolean(initialBoardSettings?.isAutoScroll)
+    isTvLaunchEnv ? true : Boolean(initialBoardSettings?.isAutoScroll)
   );
+  const [tvStageMetrics, setTvStageMetrics] = useState<TvStageMetrics>(() =>
+    computeTvStageMetrics()
+  );
+  const [isTvControlsIdle, setIsTvControlsIdle] = useState<boolean>(false);
+  const [copiedTvLink, setCopiedTvLink] = useState<boolean>(false);
+  const tvIdleTimerRef = useRef<number | null>(null);
+
+  const wakeTvControls = useCallback(() => {
+    setIsTvControlsIdle((prev) => (prev ? false : prev));
+    if (tvIdleTimerRef.current !== null) {
+      window.clearTimeout(tvIdleTimerRef.current);
+      tvIdleTimerRef.current = null;
+    }
+    if (isPresentationMode && isTvAutoFit && isToolbarCollapsedInFullscreen) {
+      tvIdleTimerRef.current = window.setTimeout(() => {
+        setIsTvControlsIdle(true);
+      }, 6500);
+    }
+  }, [isPresentationMode, isTvAutoFit, isToolbarCollapsedInFullscreen]);
+
+  useEffect(() => {
+    if (!isPresentationMode || !isTvAutoFit || !isToolbarCollapsedInFullscreen) {
+      setIsTvControlsIdle(false);
+      if (tvIdleTimerRef.current !== null) {
+        window.clearTimeout(tvIdleTimerRef.current);
+        tvIdleTimerRef.current = null;
+      }
+      return;
+    }
+    tvIdleTimerRef.current = window.setTimeout(() => {
+      setIsTvControlsIdle(true);
+    }, 6500);
+    return () => {
+      if (tvIdleTimerRef.current !== null) {
+        window.clearTimeout(tvIdleTimerRef.current);
+        tvIdleTimerRef.current = null;
+      }
+    };
+  }, [isPresentationMode, isTvAutoFit, isToolbarCollapsedInFullscreen]);
+
+  // Real-time TV resolution, DPI scale, orientation, Esc, and browser Fullscreen synchronization
+  useEffect(() => {
+    const syncViewportMetrics = () => {
+      setTvStageMetrics((prev) => {
+        const next = computeTvStageMetrics();
+        if (
+          prev.viewportW === next.viewportW &&
+          prev.viewportH === next.viewportH &&
+          prev.scale === next.scale &&
+          prev.isLandscape === next.isLandscape
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+
+    const handleFullscreenChange = () => {
+      syncViewportMetrics();
+      if (document.fullscreenElement) {
+        setIsPresentationMode(true);
+        if (isTvAutoFit) {
+          isRemoteBoardApplyRef.current = true;
+          setIsLargeText(true);
+          setIsAutoScroll(true);
+          setIsToolbarCollapsedInFullscreen(true);
+        }
+      } else if (!isTvLaunchEnv) {
+        setIsPresentationMode(false);
+        setIsToolbarCollapsedInFullscreen(false);
+      }
+    };
+
+    const handleKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && isPresentationMode) {
+        setIsPresentationMode(false);
+        setIsToolbarCollapsedInFullscreen(false);
+      } else if (isPresentationMode) {
+        wakeTvControls();
+      }
+    };
+
+    syncViewportMetrics();
+    window.addEventListener('resize', syncViewportMetrics);
+    window.addEventListener('orientationchange', syncViewportMetrics);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown);
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', syncViewportMetrics);
+    }
+
+    return () => {
+      window.removeEventListener('resize', syncViewportMetrics);
+      window.removeEventListener('orientationchange', syncViewportMetrics);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (vv) {
+        vv.removeEventListener('resize', syncViewportMetrics);
+      }
+    };
+  }, [isPresentationMode, isTvAutoFit, isTvLaunchEnv, wakeTvControls]);
 
   // Broadcast board display controls to TV screens whenever Admin clicks any toolbar control
   useEffect(() => {
@@ -452,6 +642,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       boardTheme,
       isLargeText,
       isAutoScroll,
+      tvAutoFit: isTvAutoFit,
       updatedAt: nextIso,
     };
     broadcastBoardSettingsChange(nextSettings);
@@ -461,6 +652,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     focusDate,
     isAutoScroll,
     isLargeText,
+    isTvAutoFit,
     layoutMode,
     rangeMode,
     selectedCategoryId,
@@ -469,6 +661,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   ]);
 
   const isToolbarCollapsed = isPresentationMode && isToolbarCollapsedInFullscreen;
+  const isTvStageActive = isPresentationMode && isTvAutoFit;
+  const isLandscapeTvStage = isTvStageActive && tvStageMetrics.isLandscape;
+  const isPortraitTvStage = isTvStageActive && !tvStageMetrics.isLandscape;
+  const isTvCleanSignage =
+    isPresentationMode &&
+    isTvAutoFit &&
+    isToolbarCollapsedInFullscreen &&
+    isTvControlsIdle;
 
   const isDarkDisplay = boardTheme === 'dark' || boardTheme === 'navy_gold';
   const isNavyGold = boardTheme === 'navy_gold';
@@ -505,12 +705,42 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     return map;
   }, [categories]);
 
+  const handleToggleTvAutoFit = () => {
+    setIsTvAutoFit((prev) => {
+      const next = !prev;
+      if (next && isPresentationMode) {
+        isRemoteBoardApplyRef.current = true;
+        setIsLargeText(true);
+        setIsAutoScroll(true);
+        setIsToolbarCollapsedInFullscreen(true);
+      }
+      return next;
+    });
+  };
+
+  const handleCopyTvLink = async () => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('section', 'schedule');
+      url.searchParams.set('tv', '1');
+      await navigator.clipboard.writeText(url.toString());
+      setCopiedTvLink(true);
+      window.setTimeout(() => setCopiedTvLink(false), 2400);
+    } catch {
+      // Ignore clipboard restriction
+    }
+  };
+
   const handleTogglePresentationFullscreen = async () => {
     const nextState = !isPresentationMode;
     setIsPresentationMode(nextState);
     if (nextState) {
       isRemoteBoardApplyRef.current = true;
       setIsLargeText(true);
+      if (isTvAutoFit) {
+        setIsAutoScroll(true);
+        setIsToolbarCollapsedInFullscreen(true);
+      }
       try {
         if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
           await document.documentElement.requestFullscreen();
@@ -520,6 +750,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
     } else {
       setIsToolbarCollapsedInFullscreen(false);
+      setIsTvControlsIdle(false);
       try {
         if (document.fullscreenElement && document.exitFullscreen) {
           await document.exitFullscreen();
@@ -975,6 +1206,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         setBoardTheme(ev.settings.boardTheme);
         setIsLargeText(ev.settings.isLargeText);
         setIsAutoScroll(ev.settings.isAutoScroll);
+        if (ev.settings.tvAutoFit !== undefined) {
+          setIsTvAutoFit(ev.settings.tvAutoFit);
+        }
       }
     });
     return () => unsubscribeRealtime();
@@ -1368,7 +1602,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       return (
         <div
           key={`${displayDate}-${task.id}-${idxKey}`}
-          className={`px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors ${
+          className={`px-6 py-4 flex ${
+            isTvStageActive ? 'flex-row items-center' : 'flex-col md:flex-row md:items-center'
+          } justify-between gap-4 transition-colors ${
             isNextUpcomingRow
               ? isDarkDisplay
                 ? 'bg-amber-500/10 hover:bg-amber-500/15'
@@ -1381,10 +1617,16 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           {/* Left: Time Column + Task Details */}
           <div className="flex items-start gap-5 min-w-0">
             {/* Distinct Time Slot Column */}
-            <div className="w-36 sm:w-44 shrink-0">
+            <div className={`${isTvStageActive ? 'w-44' : 'w-36 sm:w-44'} shrink-0`}>
               <div
                 className={`inline-flex items-center gap-2 font-sans tabular-nums font-bold ${
-                  isLargeText ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl'
+                  isTvStageActive
+                    ? isLargeText
+                      ? 'text-3xl'
+                      : 'text-xl'
+                    : isLargeText
+                    ? 'text-2xl sm:text-3xl'
+                    : 'text-lg sm:text-xl'
                 } ${
                   isDone
                     ? 'text-slate-400 line-through'
@@ -1718,6 +1960,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       <section
         key={group.date}
         className={`rounded-2xl border ${
+          scrollRowsOnly && isPresentationMode ? 'flex-1 min-h-0 flex flex-col ' : ''
+        }${
           stickyHeaderInsideScroll ? '' : 'overflow-hidden'
         } transition-colors ${
           isTodayGroup
@@ -1739,7 +1983,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       >
         {/* Day Header Bar (Single-line layout, 100% Solid Opaque so task rows never show through or above) */}
         <div
-          className={`px-4 sm:px-5 py-3 border-b flex flex-nowrap items-center justify-between gap-3 ${
+          className={`shrink-0 px-4 sm:px-5 py-3 border-b flex flex-nowrap items-center justify-between gap-3 ${
             stickyHeaderInsideScroll ? 'sticky top-0 z-10 rounded-t-2xl ' : ''
           }${
             isDarkDisplay
@@ -1765,7 +2009,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             />
             <h2
               className={`font-extrabold text-slate-900 whitespace-nowrap truncate ${
-                isLargeText ? 'text-lg sm:text-xl xl:text-2xl' : 'text-sm sm:text-base lg:text-lg'
+                isTvStageActive
+                  ? isLargeText
+                    ? 'text-2xl'
+                    : 'text-lg'
+                  : isLargeText
+                  ? 'text-lg sm:text-xl xl:text-2xl'
+                  : 'text-sm sm:text-base lg:text-lg'
               }`}
             >
               {!expandMultiDay && !isTodayGroup && layoutMode !== 'single_day'
@@ -1777,7 +2027,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </h2>
             <span
               className={`whitespace-nowrap shrink-0 ${
-                isLargeText ? 'text-sm sm:text-base xl:text-lg' : 'text-xs sm:text-sm'
+                isTvStageActive
+                  ? isLargeText
+                    ? 'text-lg'
+                    : 'text-sm'
+                  : isLargeText
+                  ? 'text-sm sm:text-base xl:text-lg'
+                  : 'text-xs sm:text-sm'
               } font-bold ${
                 rel.tone === 'today'
                   ? 'text-emerald-600'
@@ -1798,18 +2054,20 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             <div className="font-sans tabular-nums font-bold text-slate-700 whitespace-nowrap">
               รวม {group.items.length} งาน (รอทำ {pendingInDay} · เสร็จแล้ว {doneInDay})
             </div>
-            <button
-              type="button"
-              onClick={() => onAddTaskForDate(group.date)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm text-white font-bold transition-colors whitespace-nowrap shrink-0 ${
-                isEmeraldExec
-                  ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : 'bg-indigo-600 hover:bg-indigo-700'
-              }`}
-            >
-              <Plus className="h-3.5 w-3.5 shrink-0" />
-              <span>เพิ่มงานวันนี้</span>
-            </button>
+            {!isTvCleanSignage && (
+              <button
+                type="button"
+                onClick={() => onAddTaskForDate(group.date)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm text-white font-bold transition-colors whitespace-nowrap shrink-0 ${
+                  isEmeraldExec
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <span>เพิ่มงานวันนี้</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1819,19 +2077,27 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           style={
             scrollRowsOnly && !isPresentationMode
               ? { maxHeight: `${autoScrollMaxHeight}px` }
-              : scrollRowsOnly && isPresentationMode
-              ? { maxHeight: isToolbarCollapsed ? 'calc(100vh - 260px)' : 'calc(100vh - 380px)' }
+              : isPinnedInStack
+              ? {
+                  maxHeight: isTvStageActive
+                    ? `${Math.round(tvStageMetrics.stageH * 0.32)}px`
+                    : '34vh',
+                }
               : undefined
           }
           className={`${
             stickyHeaderInsideScroll ? 'rounded-b-2xl overflow-hidden ' : ''
           }${
             scrollRowsOnly
-              ? isAutoScroll
+              ? isPresentationMode
+                ? isAutoScroll
+                  ? 'flex-1 min-h-0 overflow-hidden'
+                  : 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden'
+                : isAutoScroll
                 ? 'overflow-hidden'
                 : 'overflow-y-auto overflow-x-hidden'
               : isPinnedInStack
-              ? 'max-h-[34vh] overflow-y-auto overflow-x-hidden'
+              ? 'overflow-y-auto overflow-x-hidden'
               : ''
           }`}
         >
@@ -1862,27 +2128,57 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     );
   };
 
+  const presentationSurfaceClasses = isNavyGold
+    ? 'bg-[#0A1628] text-slate-100'
+    : isDarkDisplay
+    ? 'bg-slate-950 text-slate-100'
+    : isEmeraldExec
+    ? 'bg-[#F0FDF4] text-slate-900'
+    : 'bg-slate-50 text-slate-900';
+
   return (
     <div
-      ref={containerRef}
-      className={`transition-colors ${
+      onMouseMove={isPresentationMode ? wakeTvControls : undefined}
+      onPointerDown={isPresentationMode ? wakeTvControls : undefined}
+      onTouchStart={isPresentationMode ? wakeTvControls : undefined}
+      onWheel={isPresentationMode ? wakeTvControls : undefined}
+      className={
         isPresentationMode
-          ? isNavyGold
-            ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#0A1628] text-slate-100 p-6 sm:p-8 gap-3.5'
-            : isDarkDisplay
-            ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-slate-950 text-slate-100 p-6 sm:p-8 gap-3.5'
-            : isEmeraldExec
-            ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#F0FDF4] text-slate-900 p-6 sm:p-8 gap-3.5'
-            : 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-slate-50 text-slate-900 p-6 sm:p-8 gap-3.5'
-          : isNavyGold
-          ? 'space-y-4 bg-[#0A1628] text-slate-100 rounded-2xl p-6 border border-amber-400/40'
-          : isDarkDisplay
-          ? 'space-y-4 bg-slate-950 text-slate-100 rounded-2xl p-6 border border-slate-800'
-          : isEmeraldExec
-          ? 'space-y-4 bg-[#F0FDF4] text-slate-900 rounded-2xl p-6 border border-emerald-200'
-          : 'space-y-4'
-      }`}
+          ? `fixed inset-0 z-50 overflow-hidden transition-colors ${presentationSurfaceClasses} ${
+              isTvCleanSignage ? 'cursor-none' : ''
+            }`
+          : ''
+      }
     >
+      <div
+        ref={containerRef}
+        style={
+          isTvStageActive
+            ? {
+                width: `${tvStageMetrics.stageW}px`,
+                height: `${tvStageMetrics.stageH}px`,
+                transform:
+                  tvStageMetrics.scale !== 1 ? `scale(${tvStageMetrics.scale})` : undefined,
+                transformOrigin: 'top left',
+              }
+            : undefined
+        }
+        className={`transition-colors ${
+          isPresentationMode
+            ? `flex flex-col overflow-hidden ${presentationSurfaceClasses} ${
+                isTvAutoFit
+                  ? 'px-[2.2%] py-[1.6%] gap-3.5'
+                  : 'h-full w-full p-6 sm:p-8 gap-3.5'
+              }`
+            : isNavyGold
+            ? 'space-y-4 bg-[#0A1628] text-slate-100 rounded-2xl p-6 border border-amber-400/40'
+            : isDarkDisplay
+            ? 'space-y-4 bg-slate-950 text-slate-100 rounded-2xl p-6 border border-slate-800'
+            : isEmeraldExec
+            ? 'space-y-4 bg-[#F0FDF4] text-slate-900 rounded-2xl p-6 border border-emerald-200'
+            : 'space-y-4'
+        }`}
+      >
       {/* Unified Solid Opaque Top Header Stack (Zero Open Gaps Above or Between Sticky Headers) */}
       <div
         ref={topStackRef}
@@ -1896,7 +2192,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         }
         className={
           isPresentationMode
-            ? 'shrink-0 space-y-3.5'
+            ? 'shrink-0 space-y-3'
             : 'sticky z-30 -mx-2 px-2 pt-2 pb-3 space-y-3.5'
         }
       >
@@ -1927,11 +2223,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           }`}
         />
 
-        <div className="p-5 sm:p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-            <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
+        <div className={isTvStageActive ? 'px-6 py-4' : 'p-5 sm:p-6'}>
+          <div
+            className={`flex ${
+              isLandscapeTvStage
+                ? 'flex-row items-center'
+                : isPortraitTvStage
+                ? 'flex-col items-stretch'
+                : 'flex-col lg:flex-row lg:items-center'
+            } justify-between gap-5`}
+          >
+            <div className="flex items-center gap-4 sm:gap-5 min-w-0">
               <div
-                className={`h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full bg-white overflow-hidden border-2 flex items-center justify-center shrink-0 transition-shadow ${
+                className={`${
+                  isTvStageActive
+                    ? 'h-24 w-24'
+                    : 'h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28'
+                } rounded-full bg-white overflow-hidden border-2 flex items-center justify-center shrink-0 transition-shadow ${
                   isNavyGold
                     ? 'border-amber-300 ring-4 ring-amber-400/20 shadow-md'
                     : isDarkDisplay
@@ -1958,7 +2266,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               <div className="min-w-0 space-y-1.5">
                 <h1
                   className={`font-extrabold tracking-tight leading-tight text-balance ${
-                    isLargeText
+                    isTvStageActive
+                      ? isLargeText
+                        ? 'text-[42px]'
+                        : 'text-[34px]'
+                      : isLargeText
                       ? 'text-3xl sm:text-4xl md:text-[44px]'
                       : 'text-2xl sm:text-3xl md:text-[36px]'
                   } ${
@@ -1973,7 +2285,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 </h1>
                 <div
                   className={`font-semibold tracking-wide ${
-                    isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
+                    isTvStageActive
+                      ? isLargeText
+                        ? 'text-base'
+                        : 'text-sm'
+                      : isLargeText
+                      ? 'text-sm sm:text-base'
+                      : 'text-xs sm:text-sm'
                   } ${
                     isNavyGold
                       ? 'text-amber-300/95'
@@ -1990,9 +2308,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
 
             {/* Right Live Thailand Digital Clock */}
-            <div className="flex items-center shrink-0 w-full lg:w-auto">
+            <div
+              className={`flex items-center shrink-0 ${
+                isLandscapeTvStage
+                  ? 'w-auto'
+                  : isPortraitTvStage
+                  ? 'w-full'
+                  : 'w-full lg:w-auto'
+              }`}
+            >
               <div
-                className={`w-full lg:w-auto min-w-[300px] sm:min-w-[420px] xl:min-w-[470px] rounded-2xl border overflow-hidden transition-colors ${
+                className={`${
+                  isLandscapeTvStage
+                    ? 'w-auto min-w-[460px]'
+                    : isPortraitTvStage
+                    ? 'w-full'
+                    : 'w-full lg:w-auto min-w-[300px] sm:min-w-[420px] xl:min-w-[470px]'
+                } rounded-2xl border overflow-hidden transition-colors ${
                   isNavyGold
                     ? 'bg-[#081221] border-amber-400/50 text-white'
                     : isDarkDisplay
@@ -2003,8 +2335,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 }`}
               >
                 <div
-                  className={`flex items-center justify-center gap-2.5 px-6 sm:px-8 py-2.5 sm:py-3 border-b font-bold tracking-tight text-center sm:whitespace-nowrap ${
-                    isLargeText
+                  className={`flex items-center justify-center gap-2.5 px-6 sm:px-8 py-2.5 border-b font-bold tracking-tight text-center whitespace-nowrap ${
+                    isTvStageActive
+                      ? isLargeText
+                        ? 'text-[25px]'
+                        : 'text-[21px]'
+                      : isLargeText
                       ? 'text-lg sm:text-2xl md:text-[26px]'
                       : 'text-base sm:text-xl md:text-[22px]'
                   } ${
@@ -2015,7 +2351,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       : isEmeraldExec
                       ? 'bg-emerald-50/85 border-emerald-100 text-emerald-950'
                       : 'bg-indigo-50/80 border-indigo-100 text-indigo-950'
-                  }`}
+                }`}
                 >
                   <CalendarIcon
                     className={`h-4 w-4 sm:h-5 sm:w-5 shrink-0 ${
@@ -2031,16 +2367,21 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                   <span>{formatFullThaiDayHeader(todayStr)}</span>
                 </div>
 
-                <div className="px-6 sm:px-8 py-3.5 sm:py-4 flex items-baseline justify-center gap-2">
+                <div className="px-6 sm:px-8 py-3 flex items-baseline justify-center gap-2">
                   <LiveBangkokClockDisplay
                     isLargeText={isLargeText}
                     isNavyGold={isNavyGold}
                     isDarkDisplay={isDarkDisplay}
                     isEmeraldExec={isEmeraldExec}
+                    isTvStageActive={isTvStageActive}
                   />
                   <span
                     className={`font-extrabold tracking-tight ml-0.5 ${
-                      isLargeText
+                      isTvStageActive
+                        ? isLargeText
+                          ? 'text-[26px]'
+                          : 'text-[22px]'
+                        : isLargeText
                         ? 'text-xl sm:text-2xl md:text-[28px]'
                         : 'text-lg sm:text-xl md:text-2xl'
                     } ${
@@ -2062,7 +2403,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
           {/* Director Live Presence Status Strip (Front-Office Executive Display) */}
           <div
-            className={`mt-4 pt-3.5 border-t flex flex-col xl:flex-row xl:items-center justify-between gap-3 ${
+            className={`mt-3.5 pt-3 border-t flex ${
+              isLandscapeTvStage
+                ? 'flex-row items-center'
+                : 'flex-col xl:flex-row xl:items-center'
+            } justify-between gap-3 ${
               isNavyGold
                 ? 'border-amber-400/20'
                 : isDarkDisplay
@@ -2307,7 +2652,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
           {/* Today's Highlight Strip + Compact Presentation Action Buttons */}
           <div
-            className={`mt-3.5 pt-3.5 border-t flex flex-col xl:flex-row xl:items-center justify-between gap-3.5 text-xs ${
+            className={`mt-3 pt-3 border-t flex ${
+              isLandscapeTvStage
+                ? 'flex-row items-center'
+                : 'flex-col xl:flex-row xl:items-center'
+            } justify-between gap-3.5 text-xs ${
               isNavyGold
                 ? 'border-amber-400/20 text-slate-200'
                 : isDarkDisplay
@@ -2319,7 +2668,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           >
             <div
               className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 ${
-                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+                isTvStageActive
+                  ? isLargeText
+                    ? 'text-lg'
+                    : 'text-sm'
+                  : isLargeText
+                  ? 'text-base sm:text-lg'
+                  : 'text-xs sm:text-sm'
               }`}
             >
               <span
@@ -2442,87 +2797,147 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsAutoScroll((prev) => !prev)}
-                className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                  isAutoScroll
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                    : isNavyGold
-                    ? 'bg-[#091526]/80 text-slate-100 border-amber-400/30 hover:border-amber-400/60'
-                    : isDarkDisplay
-                    ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                {isAutoScroll ? (
-                  <>
-                    <Pause className="h-3.5 w-3.5" />
-                    <span>หยุดเลื่อนจอ</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-3.5 w-3.5" />
-                    <span>เลื่อนจออัตโนมัติ (TV)</span>
-                  </>
-                )}
-              </button>
+            {!isTvCleanSignage && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleToggleTvAutoFit}
+                  title="คำนวณสัดส่วนความละเอียด ขอบจอ Overscan และขนาดตัวอักษรให้พอดีกับจอ TV อัตโนมัติ"
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isTvAutoFit
+                      ? isNavyGold
+                        ? 'bg-amber-400/20 text-amber-200 border-amber-400/70 shadow-xs'
+                        : isDarkDisplay
+                        ? 'bg-sky-500/20 text-sky-200 border-sky-400/70 shadow-xs'
+                        : isEmeraldExec
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                        : 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-slate-200 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <Tv className="h-3.5 w-3.5" />
+                  <span>
+                    {isTvAutoFit
+                      ? isPresentationMode && tvStageMetrics.scale !== 1
+                        ? `ปรับตามจอ TV อัตโนมัติ (${Math.round(tvStageMetrics.scale * 100)}%)`
+                        : 'ปรับตามจอ TV อัตโนมัติ'
+                      : 'สัดส่วนปกติ (1:1)'}
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setIsLargeText((prev) => !prev)}
-                className={`inline-flex items-center h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                  isLargeText
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                    : isNavyGold
-                    ? 'bg-[#091526]/80 text-slate-100 border-amber-400/30 hover:border-amber-400/60'
-                    : isDarkDisplay
-                    ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
-                }`}
-              >
-                {isLargeText ? 'ตัวอักษรใหญ่ (TV)' : 'ขยายตัวอักษรใหญ่'}
-              </button>
+                <button
+                  type="button"
+                  onClick={handleCopyTvLink}
+                  title="คัดลอกลิงก์สำหรับเปิดบน Smart TV หรือ Mini-PC ให้เข้าโหมดตารางนำเสนออัตโนมัติทันที"
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    copiedTvLink
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-amber-200 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  {copiedTvLink ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" />
+                      <span>คัดลอกลิงก์จอ TV แล้ว</span>
+                    </>
+                  ) : (
+                    <>
+                      <Link2 className="h-3.5 w-3.5" />
+                      <span>ลิงก์สำหรับจอ TV</span>
+                    </>
+                  )}
+                </button>
 
-              <button
-                type="button"
-                onClick={handleCycleTheme}
-                className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                  isNavyGold || isDarkDisplay
-                    ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold hover:bg-amber-300'
-                    : isEmeraldExec
-                    ? 'bg-emerald-700 text-white border-emerald-700 hover:bg-emerald-800'
-                    : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
-                }`}
-              >
-                <Palette className="h-3.5 w-3.5" />
-                <span>{themeButtonLabel}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsAutoScroll((prev) => !prev)}
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isAutoScroll
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-slate-100 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  {isAutoScroll ? (
+                    <>
+                      <Pause className="h-3.5 w-3.5" />
+                      <span>หยุดเลื่อนจอ</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-3.5 w-3.5" />
+                      <span>เลื่อนจออัตโนมัติ (TV)</span>
+                    </>
+                  )}
+                </button>
 
-              <button
-                type="button"
-                onClick={handleTogglePresentationFullscreen}
-                className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0"
-              >
-                {isPresentationMode ? (
-                  <>
-                    <Minimize2 className="h-3.5 w-3.5" />
-                    <span>ออกจากโหมดเต็มจอ</span>
-                  </>
-                ) : (
-                  <>
-                    <Maximize2 className="h-3.5 w-3.5" />
-                    <span>เปิดโหมดเต็มจอ (นำเสนอ)</span>
-                  </>
-                )}
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setIsLargeText((prev) => !prev)}
+                  className={`inline-flex items-center h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isLargeText
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-slate-100 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  {isLargeText ? 'ตัวอักษรใหญ่ (TV)' : 'ขยายตัวอักษรใหญ่'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCycleTheme}
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isNavyGold || isDarkDisplay
+                      ? 'bg-amber-400 text-slate-950 border-amber-400 font-bold hover:bg-amber-300'
+                      : isEmeraldExec
+                      ? 'bg-emerald-700 text-white border-emerald-700 hover:bg-emerald-800'
+                      : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
+                  }`}
+                >
+                  <Palette className="h-3.5 w-3.5" />
+                  <span>{themeButtonLabel}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTogglePresentationFullscreen}
+                  className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0"
+                >
+                  {isPresentationMode ? (
+                    <>
+                      <Minimize2 className="h-3.5 w-3.5" />
+                      <span>ออกจากโหมดเต็มจอ</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      <span>เปิดโหมดเต็มจอ (นำเสนอ)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Filter & View Mode Toolbar (100% Solid Opaque, Collapsible in Fullscreen Mode) */}
+      {/* Filter & View Mode Toolbar (100% Solid Opaque, Auto-Hidden in Clean TV Signage Mode when Idle) */}
+      {!isTvCleanSignage && (
       <div
         ref={toolbarRef}
         className={`rounded-2xl border shadow-xs transition-all ${
@@ -3024,6 +3439,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </>
         )}
       </div>
+      )}
 
         {/* Pinned Today's Schedule inside the Unified Solid Top Stack (when grouped_by_day has upcoming days below) */}
         {shouldPinTodayInTopStack &&
@@ -3037,7 +3453,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       !searchQuery.trim() &&
       selectedCategoryId === 'all' &&
       selectedPriority === 'all' ? (
-        <div className="space-y-6">
+        <div className={isPresentationMode ? 'flex-1 min-h-0 flex flex-col' : 'space-y-6'}>
           {renderDaySection(
             {
               date: layoutMode === 'single_day' ? focusDate : todayStr,
@@ -3346,16 +3762,30 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
         </div>
       ) : layoutMode === 'split_two_column' ? (
-        /* 2-Column Executive Split View: Left = Today's Missions (Pinned), Right = Upcoming Missions (Clipped GPU-Smooth Scrollable) */
+        /* 2-Column Executive Split View: Adapts automatically to Landscape TV (2 equal columns) or Portrait Kiosk TV (stacked) */
         <div
-          className={`grid grid-cols-1 lg:grid-cols-12 gap-6 items-start ${
-            isPresentationMode ? 'flex-1 min-h-0' : ''
-          }`}
+          className={`grid ${
+            isPortraitTvStage
+              ? 'grid-cols-1 overflow-y-auto'
+              : isLandscapeTvStage
+              ? 'grid-cols-12 items-stretch'
+              : 'grid-cols-1 lg:grid-cols-12 items-start'
+          } gap-6 ${isPresentationMode ? 'flex-1 min-h-0' : ''}`}
         >
-          {/* Left Column: Today's Schedule (Stationary / Pinned) */}
-          <div className="lg:col-span-6 space-y-4">
+          {/* Left Column: Today's Schedule */}
+          <div
+            className={`${
+              isPortraitTvStage
+                ? 'space-y-4'
+                : isLandscapeTvStage
+                ? 'col-span-6 h-full min-h-0 flex flex-col gap-4'
+                : `lg:col-span-6 ${
+                    isPresentationMode ? 'h-full min-h-0 flex flex-col gap-4' : 'space-y-4'
+                  }`
+            }`}
+          >
             <div
-              className={`px-4 py-2.5 rounded-xl border flex items-center justify-between ${
+              className={`shrink-0 px-4 py-2.5 rounded-xl border flex items-center justify-between ${
                 isDarkDisplay
                   ? 'bg-slate-900 border-emerald-500/60 text-emerald-300'
                   : 'bg-emerald-50 border-emerald-200 text-emerald-950'
@@ -3370,30 +3800,46 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
 
             {scheduleByDate.filter((g) => g.date === todayStr).length > 0 ? (
-              scheduleByDate
-                .filter((g) => g.date === todayStr)
-                .map((group) => renderDaySection(group))
+              <div
+                className={
+                  isPresentationMode && !isPortraitTvStage
+                    ? 'flex-1 min-h-0 overflow-y-auto overflow-x-hidden rounded-2xl space-y-4'
+                    : 'space-y-4'
+                }
+              >
+                {scheduleByDate
+                  .filter((g) => g.date === todayStr)
+                  .map((group) => renderDaySection(group))}
+              </div>
             ) : (
               <div
                 className={`rounded-2xl border p-8 text-center space-y-3 ${surfaceCardClasses}`}
               >
                 <div className="text-sm font-bold">ไม่มีภารกิจที่กำหนดไว้ในวันนี้</div>
-                <button
-                  type="button"
-                  onClick={() => onAddTaskForDate(todayStr)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
-                >
-                  <Plus className="h-4 w-4" />
-                  <span>เพิ่มงานวันนี้</span>
-                </button>
+                {!isTvCleanSignage && (
+                  <button
+                    type="button"
+                    onClick={() => onAddTaskForDate(todayStr)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>เพิ่มงานวันนี้</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
 
           {/* Right Column: Tomorrow & Upcoming Schedule (Header fixed, list GPU-scrolled below header) */}
           <div
-            className={`lg:col-span-6 flex flex-col gap-4 ${
-              isPresentationMode ? 'h-full min-h-0' : ''
+            className={`${
+              isPortraitTvStage
+                ? 'flex flex-col gap-4'
+                : isLandscapeTvStage
+                ? 'col-span-6 h-full min-h-0 flex flex-col gap-4'
+                : `lg:col-span-6 flex flex-col gap-4 ${
+                    isPresentationMode ? 'h-full min-h-0' : ''
+                  }`
             }`}
           >
             <div
@@ -3455,21 +3901,27 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 className={`rounded-2xl border p-8 text-center space-y-3 ${surfaceCardClasses}`}
               >
                 <div className="text-sm font-bold">ยังไม่มีภารกิจล่วงหน้าในรายการ</div>
-                <button
-                  type="button"
-                  onClick={() => onAddTaskForDate(addDaysYMD(todayStr, 1))}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
-                >
-                  <Plus className="h-4 w-4" />
-                  <span>เพิ่มงานวันพรุ่งนี้</span>
-                </button>
+                {!isTvCleanSignage && (
+                  <button
+                    type="button"
+                    onClick={() => onAddTaskForDate(addDaysYMD(todayStr, 1))}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition-colors"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>เพิ่มงานวันพรุ่งนี้</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
         </div>
       ) : layoutMode === 'single_day' || nonTodayGroupsInSchedule.length === 0 ? (
         /* Single-Day View or Today-Only View: Day Header stays fixed, only task rows below scroll */
-        <div className="space-y-6">
+        <div
+          className={
+            isPresentationMode ? 'flex-1 min-h-0 flex flex-col gap-6' : 'space-y-6'
+          }
+        >
           {scheduleByDate.map((group, idx) =>
             renderDaySection(group, {
               scrollRowsOnly: isClippedScrollActive && idx === 0,
@@ -3512,6 +3964,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };

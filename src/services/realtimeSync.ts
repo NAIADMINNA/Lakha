@@ -33,6 +33,7 @@ export interface BoardRemoteSettings {
   boardTheme: 'light' | 'navy_gold' | 'dark' | 'emerald_exec';
   isLargeText: boolean;
   isAutoScroll: boolean;
+  tvAutoFit?: boolean;
   updatedAt: string;
 }
 
@@ -420,6 +421,7 @@ export function sanitizeBoardSettings(raw: unknown): BoardRemoteSettings | null 
     boardTheme: boardTheme as BoardRemoteSettings['boardTheme'],
     isLargeText: Boolean(rec.isLargeText),
     isAutoScroll: Boolean(rec.isAutoScroll),
+    tvAutoFit: rec.tvAutoFit !== undefined ? Boolean(rec.tvAutoFit) : true,
     updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : '',
   };
 }

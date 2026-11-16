@@ -125,6 +125,17 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<ActiveSection>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
+      const tvParam = (
+        params.get('tv') ||
+        params.get('present') ||
+        params.get('mode') ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+      if (tvParam === '1' || tvParam === 'true' || tvParam === 'tv') {
+        return 'schedule';
+      }
       const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
       if (
         sec === 'calendar' ||
