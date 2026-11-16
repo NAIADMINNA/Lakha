@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import {
   extractThaiDate,
@@ -1485,7 +1486,74 @@ async function startServer() {
     }
   });
 
+  let serverRelaySeq = 0;
+  let lastServerRelayMs = 0;
+
+  function pushEncryptedServerEventToGlobalRelay(payload: Record<string, unknown>) {
+    try {
+      // Browser-originated updates already publish directly to MQTT WSS + Port-443 WSS;
+      // only relay server-originated events (e.g., LINE Group bot commands or server GAS sync)
+      if (payload.clientOriginId) return;
+      const now = Date.now();
+      if (now - lastServerRelayMs < 400) return;
+
+      const msgType = String(payload.type || '');
+      if (msgType !== 'workspace:updated' && msgType !== 'presence:updated') return;
+
+      const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+      const match = cleanGas.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})/);
+      const gasSeed =
+        match && match[1]
+          ? match[1]
+          : 'AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg';
+      const seed = `${gasSeed}|sheetcal-team-clean`;
+      const topicHash = `scv2_${crypto
+        .createHash('sha256')
+        .update(`sheetcal-live-topic-v2:${seed}`)
+        .digest('hex')
+        .slice(0, 24)}`;
+      const keyBytes = crypto
+        .createHash('sha256')
+        .update(`sheetcal-live-aes256-v2:${seed}`)
+        .digest();
+
+      serverRelaySeq += 1;
+      const envelope = {
+        eventId: `srv-${now}-${serverRelaySeq}`,
+        clientOriginId: 'server-node',
+        sentAt: now,
+        kind: msgType,
+        payload:
+          msgType === 'presence:updated'
+            ? { presence: payload.presence }
+            : {
+                workspace: payload.workspace,
+                deletedTaskIds: payload.deletedTaskIds,
+                deletedCategoryIds: payload.deletedCategoryIds,
+              },
+      };
+
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', keyBytes, iv);
+      const plainBuf = Buffer.from(JSON.stringify(envelope), 'utf8');
+      const encryptedBuf = Buffer.concat([iv, cipher.update(plainBuf), cipher.final(), cipher.getAuthTag()]);
+      const encoded = `g1.${encryptedBuf.toString('base64')}`;
+
+      if (encoded.length < 3800) {
+        lastServerRelayMs = now;
+        fetch(`https://ntfy.sh/${topicHash}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: encoded,
+        }).catch(() => {});
+      }
+    } catch {
+      // Ignore server global relay error
+    }
+  }
+
   function broadcastRealtimeEvent(payload: Record<string, unknown>) {
+    pushEncryptedServerEventToGlobalRelay(payload);
     if (wsClients.size === 0) return;
     const serialized = JSON.stringify(payload);
     for (const client of wsClients) {

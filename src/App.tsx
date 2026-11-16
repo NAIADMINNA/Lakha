@@ -90,7 +90,8 @@ import {
   broadcastLocalWorkspaceChange,
   emitRemotePresenceFromGas,
   getClientTabId,
-  isRealtimeWebSocketConnected,
+  publishCategoriesDelta,
+  publishTaskDelta,
   readLocalDirectorPresence,
   subscribeRealtimeEvents,
 } from './services/realtimeSync';
@@ -221,6 +222,8 @@ export default function App() {
   const [lastCollabSyncAt, setLastCollabSyncAt] = useState<string | null>(null);
   const lastSyncedTimestampRef = useRef<string>('');
   const lastLocalMutationMsRef = useRef<number>(0);
+  const lastRemoteRealtimeMsRef = useRef<number>(0);
+  const isPullInFlightRef = useRef<boolean>(false);
 
   const PERMANENTLY_PURGED_IDS = useMemo(
     () =>
@@ -2212,12 +2215,11 @@ export default function App() {
 
       if (resetNotifiedTaskIds.length > 0) {
         const resetSet = new Set(resetNotifiedTaskIds);
-        const nowIso = new Date().toISOString();
         setTasks((prev) => {
           const next = prev.map((t) =>
-            resetSet.has(t.id) ? { ...t, lineNotified: false, updatedAt: nowIso } : t
+            resetSet.has(t.id) ? { ...t, lineNotified: false } : t
           );
-          pushCollaborativeWorkspace(next, categoriesRef.current, teamMembersRef.current);
+          tasksRef.current = next;
           return next;
         });
       }
@@ -2278,8 +2280,11 @@ export default function App() {
         confirmLabel: 'ลบรายการงาน',
         isDestructive: true,
         onConfirm: async () => {
+          lastLocalMutationMsRef.current = Date.now();
           recordDeletedTaskIds([task.id]);
+          publishTaskDelta({ deletedTaskIds: [task.id], workspaceId });
           const nextTasks = tasks.filter((t) => t.id !== task.id);
+          tasksRef.current = nextTasks;
           setTasks(nextTasks);
           if (sheetMeta && accessToken) {
             await syncAllToConnectedSheet(
@@ -2337,9 +2342,12 @@ export default function App() {
       confirmLabel: `ลบงานที่เสร็จแล้วทั้งหมด (${completedTasks.length} งาน)`,
       isDestructive: true,
       onConfirm: async () => {
+        lastLocalMutationMsRef.current = Date.now();
         const completedIds = completedTasks.map((t) => t.id);
         recordDeletedTaskIds(completedIds);
+        publishTaskDelta({ deletedTaskIds: completedIds, workspaceId });
         const nextTasks = tasks.filter((t) => t.status !== TaskStatus.COMPLETED);
+        tasksRef.current = nextTasks;
         setTasks(nextTasks);
         if (sheetMeta && accessToken) {
           await syncAllToConnectedSheet(
@@ -2745,6 +2753,8 @@ export default function App() {
   // Unified Zero-Login Auto-Pull via Server Collaborative Workspace OR Google Apps Script Bridge (works on both Cloud Run & GitHub Pages without competing timers!)
   const pullLatestTeamCalendar = useCallback(
     async (showFeedback = false) => {
+      if (!showFeedback && isPullInFlightRef.current) return;
+      isPullInFlightRef.current = true;
       if (showFeedback) setIsSyncing(true);
       try {
         // 0. First try Collaborative Workspace endpoint if running on Full-Stack Server
@@ -2807,7 +2817,7 @@ export default function App() {
                           if (delSet.has(p.id)) return false;
                           if (cleanWsTasks.some((r) => r.id === p.id)) return true;
                           const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                          return Number.isFinite(pMs) && nowCheckMs - pMs < 12000;
+                          return Number.isFinite(pMs) && nowCheckMs - pMs < 25000;
                         }),
                         delSet
                       );
@@ -3128,7 +3138,7 @@ export default function App() {
                     if (gasDelSet.has(p.id)) return false;
                     if (nextRemoteTasks.some((r) => r.id === p.id)) return true;
                     const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                    return Number.isFinite(pMs) && nowGasCheckMs - pMs < 12000;
+                    return Number.isFinite(pMs) && nowGasCheckMs - pMs < 25000;
                   }),
                   gasDelSet
                 );
@@ -3158,6 +3168,7 @@ export default function App() {
           );
         }
       } finally {
+        isPullInFlightRef.current = false;
         if (showFeedback) setIsSyncing(false);
       }
     },
@@ -3178,9 +3189,73 @@ export default function App() {
   // Ensures TV Presentation screens update in <50ms (0ms on HDMI 2nd monitor) without re-emitting loops!
   useEffect(() => {
     const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
-      if (ev.type !== 'sync:init' && ev.type !== 'workspace:updated') return;
+      if (ev.type === 'connection:status' || ev.type === 'presence:updated' || ev.type === 'board:settings') {
+        if (ev.type !== 'connection:status') {
+          lastRemoteRealtimeMsRef.current = Date.now();
+        }
+        return;
+      }
       // Skip echoes originating from this exact browser tab
       if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+      lastRemoteRealtimeMsRef.current = Date.now();
+
+      if (ev.type === 'task:delta') {
+        const delIds = Array.isArray(ev.deletedTaskIds) ? ev.deletedTaskIds : [];
+        if (delIds.length > 0) {
+          recordDeletedTaskIds(delIds);
+        }
+        const delSet = new Set<string>([...delIds, ...Array.from(deletedTaskIdsRef.current)]);
+        const upserts = Array.isArray(ev.upsertedTasks)
+          ? extractGasMetadataFromTasks(ev.upsertedTasks).tasks.filter(
+              (t) => !isTaskPurgedOrDeleted(t, delSet)
+            )
+          : [];
+        if (ev.updatedAt) {
+          lastSyncedTimestampRef.current = ev.updatedAt;
+          setLastCollabSyncAt(ev.updatedAt);
+        }
+        let newlyDiscardedDelta: string[] = [];
+        setTasks((prev) => {
+          const basePrev = prev.filter((p) => !delSet.has(p.id));
+          const { tasks: mergedDelta, discardedIds } = deduplicateAndMergeTasks(
+            upserts,
+            basePrev,
+            delSet
+          );
+          newlyDiscardedDelta = discardedIds;
+          if (areTaskListsEqual(prev, mergedDelta)) return prev;
+          tasksRef.current = mergedDelta;
+          return mergedDelta;
+        });
+        if (newlyDiscardedDelta.length > 0) {
+          recordDeletedTaskIds(newlyDiscardedDelta);
+        }
+        return;
+      }
+
+      if (ev.type === 'categories:delta') {
+        if (Array.isArray(ev.deletedCategoryIds) && ev.deletedCategoryIds.length > 0) {
+          recordDeletedCategoryIds(ev.deletedCategoryIds);
+        }
+        const localCu = categoriesUpdatedAtRef.current;
+        const mergedCats =
+          ev.categoriesUpdatedAt >= localCu || localCu === 0
+            ? mergeCategoriesLists(ev.categories, categoriesRef.current)
+            : mergeCategoriesLists(categoriesRef.current, ev.categories);
+        if (ev.categoriesUpdatedAt > localCu) {
+          bumpCategoriesUpdatedAt(ev.categoriesUpdatedAt);
+        }
+        if (mergedCats.length > 0) {
+          setCategories((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(mergedCats)) return prev;
+            categoriesRef.current = mergedCats;
+            return mergedCats;
+          });
+        }
+        return;
+      }
+
+      if (ev.type !== 'sync:init' && ev.type !== 'workspace:updated') return;
 
       if (Array.isArray(ev.deletedTaskIds) && ev.deletedTaskIds.length > 0) {
         recordDeletedTaskIds(ev.deletedTaskIds);
@@ -3231,9 +3306,8 @@ export default function App() {
                   if (delSet.has(p.id)) return false;
                   if (cleanRemoteTasks.some((r) => r.id === p.id)) return true;
                   const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                  return Number.isFinite(pMs) && nowWsMs - pMs < 12000;
+                  return Number.isFinite(pMs) && nowWsMs - pMs < 25000;
                 });
-          // For explicit remote updates (workspace:updated), remote is primary; merge by updatedAt idempotently
           const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
             cleanRemoteTasks,
             secondaryList,
@@ -3298,7 +3372,6 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
 
-    // Always keep live sync active when viewing TV Presentation Board ('schedule'), even if autoPullEnabled was turned off earlier
     const isTvScheduleBoard = activeSection === 'schedule';
     if (!sheetAutoSyncConfig.autoPullEnabled && !isTvScheduleBoard) {
       return () => {
@@ -3308,12 +3381,14 @@ export default function App() {
     }
 
     const baseSec = sheetAutoSyncConfig.autoPullIntervalSec || 5;
-    const intervalMs = isTvScheduleBoard
-      ? 2500
-      : Math.max(2500, baseSec * 1000);
+    const intervalMs = isTvScheduleBoard ? 4000 : Math.max(4000, baseSec * 1000);
     const gasTimer = setInterval(() => {
-      // When WebSocket is connected, real-time updates arrive instantly; still run crisp background sync across separate Cloud Run / GitHub Pages instances
-      if (!isRealtimeWebSocketConnected() || Date.now() - lastLocalMutationMsRef.current > 1800) {
+      const nowMs = Date.now();
+      // Give GAS 6s to finish writing after any local mutation or incoming live WebSocket delta so slow sheet reads never revert fresh updates
+      if (
+        nowMs - lastLocalMutationMsRef.current > 6000 &&
+        nowMs - lastRemoteRealtimeMsRef.current > 6000
+      ) {
         pullLatestTeamCalendar(false);
       }
     }, intervalMs);
@@ -3421,6 +3496,7 @@ export default function App() {
       const nextTasks = currentList.map((t) => (t.id === existingId ? updatedTask : t));
       tasksRef.current = nextTasks;
       setTasks(nextTasks);
+      publishTaskDelta({ upsertedTasks: [updatedTask], workspaceId });
 
       if (sheetMeta && accessToken) {
         syncAllToConnectedSheet(
@@ -3479,6 +3555,7 @@ export default function App() {
       tasksRef.current = nextTasks;
       setTasks(nextTasks);
       setSelectedCalendarDate(newTask.date);
+      publishTaskDelta({ upsertedTasks: [newTask], workspaceId });
       if (sheetMeta && accessToken) {
         syncAllToConnectedSheet(
           nextTasks,
@@ -3514,19 +3591,25 @@ export default function App() {
   // Update Task Status (Pending / In Progress / Completed)
   const handleUpdateTaskStatus = (task: Task, nextStatus: TaskStatus) => {
     lastLocalMutationMsRef.current = Date.now();
+    let mutatedTask: Task | null = null;
     const nextTasks = tasksRef.current.map((t) => {
       if (t.id !== task.id) return t;
       const prevMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
       const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
-      return {
+      const nextObj: Task = {
         ...t,
         status: nextStatus,
         updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString(),
       };
+      mutatedTask = nextObj;
+      return nextObj;
     });
 
     tasksRef.current = nextTasks;
     setTasks(nextTasks);
+    if (mutatedTask) {
+      publishTaskDelta({ upsertedTasks: [mutatedTask], workspaceId });
+    }
     if (sheetMeta && accessToken) {
       syncAllToConnectedSheet(
         nextTasks,
@@ -3945,6 +4028,11 @@ export default function App() {
 
     categoriesRef.current = nextCategories;
     setCategories(nextCategories);
+    publishCategoriesDelta({
+      categories: nextCategories,
+      categoriesUpdatedAt: nowCu,
+      workspaceId,
+    });
     try {
       localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(nextCategories));
     } catch {
@@ -4019,6 +4107,12 @@ export default function App() {
         tasksRef.current = nextTasks;
         setCategories(nextCategories);
         setTasks(nextTasks);
+        publishCategoriesDelta({
+          categories: nextCategories,
+          categoriesUpdatedAt: nowCu,
+          deletedCategoryIds: [category.id],
+          workspaceId,
+        });
         try {
           localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(nextCategories));
         } catch {

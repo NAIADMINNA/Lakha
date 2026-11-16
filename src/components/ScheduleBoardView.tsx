@@ -53,8 +53,11 @@ import {
   onInternetTimeSync,
 } from '../services/internetTimeService';
 import {
+  BoardRemoteSettings,
+  broadcastBoardSettingsChange,
   broadcastLocalPresenceChange,
   getClientTabId,
+  readLocalBoardSettings,
   readLocalDirectorPresence,
   subscribeRealtimeEvents,
   writeLocalDirectorPresence,
@@ -368,30 +371,102 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
   }, []);
 
-  const [rangeMode, setRangeMode] = useState<BoardRangeMode>('upcoming');
-  const [layoutMode, setLayoutMode] = useState<BoardLayoutMode>('grouped_by_day');
-  const [focusDate, setFocusDate] = useState<string>(() => formatLocalDateYMD());
+  const initialBoardSettings = useMemo(() => readLocalBoardSettings(), []);
+  const [rangeMode, setRangeMode] = useState<BoardRangeMode>(
+    () => initialBoardSettings?.rangeMode || 'upcoming'
+  );
+  const [layoutMode, setLayoutMode] = useState<BoardLayoutMode>(
+    () => initialBoardSettings?.layoutMode || 'grouped_by_day'
+  );
+  const [focusDate, setFocusDate] = useState<string>(() => {
+    const savedFocus = initialBoardSettings?.focusDate;
+    if (savedFocus && /^\d{4}-\d{2}-\d{2}$/.test(savedFocus) && savedFocus >= todayStr) {
+      return savedFocus;
+    }
+    return formatLocalDateYMD();
+  });
   const prevTodayStrRef = useRef<string>(todayStr);
+  const isRemoteBoardApplyRef = useRef<boolean>(false);
+  const hasMountedBoardSyncRef = useRef<boolean>(false);
+  const lastBoardSettingsUpdatedAtRef = useRef<string>(initialBoardSettings?.updatedAt || '');
 
   // Automatically advance focusDate at midnight when a TV screen is left running 24/7
   useEffect(() => {
     if (prevTodayStrRef.current !== todayStr) {
       const oldToday = prevTodayStrRef.current;
       prevTodayStrRef.current = todayStr;
+      isRemoteBoardApplyRef.current = true;
       setFocusDate((prevFocus) => (prevFocus === oldToday ? todayStr : prevFocus));
     }
   }, [todayStr]);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
-  const [selectedPriority, setSelectedPriority] = useState<string>('all');
-  const [showCompleted, setShowCompleted] = useState<boolean>(true);
-  const [expandMultiDay, setExpandMultiDay] = useState<boolean>(false);
-  const [boardTheme, setBoardTheme] = useState<BoardThemeMode>('light');
-  const [isLargeText, setIsLargeText] = useState<boolean>(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>(
+    () => initialBoardSettings?.selectedCategoryId || 'all'
+  );
+  const [selectedPriority, setSelectedPriority] = useState<string>(
+    () => initialBoardSettings?.selectedPriority || 'all'
+  );
+  const [showCompleted, setShowCompleted] = useState<boolean>(() =>
+    initialBoardSettings ? initialBoardSettings.showCompleted : true
+  );
+  const [expandMultiDay, setExpandMultiDay] = useState<boolean>(() =>
+    Boolean(initialBoardSettings?.expandMultiDay)
+  );
+  const [boardTheme, setBoardTheme] = useState<BoardThemeMode>(
+    () => initialBoardSettings?.boardTheme || 'light'
+  );
+  const [isLargeText, setIsLargeText] = useState<boolean>(() =>
+    Boolean(initialBoardSettings?.isLargeText)
+  );
   const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
   const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
     useState<boolean>(false);
-  const [isAutoScroll, setIsAutoScroll] = useState<boolean>(false);
+  const [isAutoScroll, setIsAutoScroll] = useState<boolean>(() =>
+    Boolean(initialBoardSettings?.isAutoScroll)
+  );
+
+  // Broadcast board display controls to TV screens whenever Admin clicks any toolbar control
+  useEffect(() => {
+    if (!hasMountedBoardSyncRef.current) {
+      hasMountedBoardSyncRef.current = true;
+      return;
+    }
+    if (isRemoteBoardApplyRef.current) {
+      isRemoteBoardApplyRef.current = false;
+      return;
+    }
+    const prevMs = lastBoardSettingsUpdatedAtRef.current
+      ? new Date(lastBoardSettingsUpdatedAtRef.current).getTime()
+      : 0;
+    const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+    const nextIso = new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString();
+    lastBoardSettingsUpdatedAtRef.current = nextIso;
+    const nextSettings: BoardRemoteSettings = {
+      rangeMode,
+      layoutMode,
+      focusDate,
+      selectedCategoryId,
+      selectedPriority,
+      showCompleted,
+      expandMultiDay,
+      boardTheme,
+      isLargeText,
+      isAutoScroll,
+      updatedAt: nextIso,
+    };
+    broadcastBoardSettingsChange(nextSettings);
+  }, [
+    boardTheme,
+    expandMultiDay,
+    focusDate,
+    isAutoScroll,
+    isLargeText,
+    layoutMode,
+    rangeMode,
+    selectedCategoryId,
+    selectedPriority,
+    showCompleted,
+  ]);
 
   const isToolbarCollapsed = isPresentationMode && isToolbarCollapsedInFullscreen;
 
@@ -434,6 +509,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     const nextState = !isPresentationMode;
     setIsPresentationMode(nextState);
     if (nextState) {
+      isRemoteBoardApplyRef.current = true;
       setIsLargeText(true);
       try {
         if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
@@ -866,7 +942,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     });
   }, []);
 
-  // Instant Real-Time Presence Subscription (WebSocket + HDMI BroadcastChannel + Storage + GAS #SCMETA#)
+  // Instant Real-Time Presence & Board Settings Subscription (WebSocket + Global Cloud Bus + HDMI BroadcastChannel)
   useEffect(() => {
     const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
       if (ev.type === 'sync:init' && ev.presence) {
@@ -874,6 +950,31 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       } else if (ev.type === 'presence:updated' && ev.presence) {
         if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
         applyIncomingPresence(ev.presence);
+      } else if (ev.type === 'board:settings' && ev.settings) {
+        if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+        const incMs = ev.settings.updatedAt ? new Date(ev.settings.updatedAt).getTime() : 0;
+        const curMs = lastBoardSettingsUpdatedAtRef.current
+          ? new Date(lastBoardSettingsUpdatedAtRef.current).getTime()
+          : 0;
+        if (Number.isFinite(incMs) && Number.isFinite(curMs) && curMs > 0 && incMs < curMs) {
+          return;
+        }
+        if (ev.settings.updatedAt) {
+          lastBoardSettingsUpdatedAtRef.current = ev.settings.updatedAt;
+        }
+        isRemoteBoardApplyRef.current = true;
+        setRangeMode(ev.settings.rangeMode);
+        setLayoutMode(ev.settings.layoutMode);
+        if (ev.settings.focusDate) {
+          setFocusDate(ev.settings.focusDate);
+        }
+        setSelectedCategoryId(ev.settings.selectedCategoryId);
+        setSelectedPriority(ev.settings.selectedPriority);
+        setShowCompleted(ev.settings.showCompleted);
+        setExpandMultiDay(ev.settings.expandMultiDay);
+        setBoardTheme(ev.settings.boardTheme);
+        setIsLargeText(ev.settings.isLargeText);
+        setIsAutoScroll(ev.settings.isAutoScroll);
       }
     });
     return () => unsubscribeRealtime();

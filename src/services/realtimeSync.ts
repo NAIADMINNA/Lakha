@@ -1,8 +1,11 @@
 import { Category, DirectorPresenceMode, DirectorPresenceState, Task, TeamMember } from '../types';
 
 export const DIRECTOR_PRESENCE_STORAGE_KEY = 'sheetcal_director_presence_v1';
-const BROADCAST_CHANNEL_NAME = 'sheetcal_realtime_tv_v1';
-const LOCAL_SIGNAL_STORAGE_KEY = 'sheetcal_realtime_signal_v1';
+export const BOARD_SETTINGS_STORAGE_KEY = 'sheetcal_board_remote_settings_v1';
+const BROADCAST_CHANNEL_NAME = 'sheetcal_realtime_tv_v2';
+const LOCAL_SIGNAL_STORAGE_KEY = 'sheetcal_realtime_signal_v2';
+const DEFAULT_GAS_SCRIPT_SEED =
+  'AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg';
 
 const VALID_PRESENCE_MODES: DirectorPresenceMode[] = [
   'auto',
@@ -13,9 +16,24 @@ const VALID_PRESENCE_MODES: DirectorPresenceMode[] = [
 ];
 
 const CLIENT_TAB_ID = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+let eventSeq = 0;
 
 export function getClientTabId(): string {
   return CLIENT_TAB_ID;
+}
+
+export interface BoardRemoteSettings {
+  rangeMode: 'upcoming' | 'today' | 'week7' | 'all';
+  layoutMode: 'grouped_by_day' | 'split_two_column' | 'single_day' | 'master_table';
+  focusDate: string;
+  selectedCategoryId: string;
+  selectedPriority: string;
+  showCompleted: boolean;
+  expandMultiDay: boolean;
+  boardTheme: 'light' | 'navy_gold' | 'dark' | 'emerald_exec';
+  isLargeText: boolean;
+  isAutoScroll: boolean;
+  updatedAt: string;
 }
 
 export interface RealtimeWorkspacePayload {
@@ -31,7 +49,7 @@ export interface RealtimeWorkspacePayload {
 export type RealtimeSyncEvent =
   | {
       type: 'sync:init';
-      source: 'ws' | 'broadcast' | 'storage';
+      source: 'ws' | 'broadcast' | 'storage' | 'cloud';
       clientOriginId?: string;
       workspace?: RealtimeWorkspacePayload | null;
       presence?: DirectorPresenceState | null;
@@ -40,17 +58,39 @@ export type RealtimeSyncEvent =
     }
   | {
       type: 'workspace:updated';
-      source: 'ws' | 'broadcast' | 'storage';
+      source: 'ws' | 'broadcast' | 'storage' | 'cloud';
       clientOriginId?: string;
       workspace: RealtimeWorkspacePayload;
       deletedTaskIds?: string[];
       deletedCategoryIds?: string[];
     }
   | {
+      type: 'task:delta';
+      source: 'ws' | 'broadcast' | 'storage' | 'cloud';
+      clientOriginId?: string;
+      upsertedTasks?: Task[];
+      deletedTaskIds?: string[];
+      updatedAt: string;
+    }
+  | {
+      type: 'categories:delta';
+      source: 'ws' | 'broadcast' | 'storage' | 'cloud';
+      clientOriginId?: string;
+      categories: Category[];
+      categoriesUpdatedAt: number;
+      deletedCategoryIds?: string[];
+    }
+  | {
       type: 'presence:updated';
-      source: 'ws' | 'broadcast' | 'storage' | 'gas';
+      source: 'ws' | 'broadcast' | 'storage' | 'gas' | 'cloud';
       clientOriginId?: string;
       presence: DirectorPresenceState;
+    }
+  | {
+      type: 'board:settings';
+      source: 'ws' | 'broadcast' | 'storage' | 'cloud';
+      clientOriginId?: string;
+      settings: BoardRemoteSettings;
     }
   | {
       type: 'connection:status';
@@ -59,15 +99,287 @@ export type RealtimeSyncEvent =
 
 type RealtimeListener = (event: RealtimeSyncEvent) => void;
 
+interface CloudRelayEnvelope {
+  eventId: string;
+  clientOriginId: string;
+  sentAt: number;
+  kind:
+    | 'task:delta'
+    | 'categories:delta'
+    | 'presence:updated'
+    | 'board:settings'
+    | 'workspace:updated';
+  payload: Record<string, unknown>;
+}
+
 const listeners = new Set<RealtimeListener>();
+const seenEventIds = new Set<string>();
+const seenEventOrder: string[] = [];
+
 let wsInstance: WebSocket | null = null;
-let wsConnected = false;
+let localWsConnected = false;
+let mqttConnected = false;
+let ntfyConnected = false;
 let reconnectTimer: number | null = null;
 let heartbeatTimer: number | null = null;
 let reconnectAttempt = 0;
 let activeWorkspaceId = 'sheetcal-team-clean';
 let initialized = false;
 let broadcastChannel: BroadcastChannel | null = null;
+
+// MQTT-over-WSS & Port-443 WSS Relay state
+let mqttSocket: WebSocket | null = null;
+let mqttPingTimer: number | null = null;
+let mqttReconnectTimer: number | null = null;
+let mqttReconnectAttempt = 0;
+const pendingMqttFrames: Array<{ subTopic: string; encrypted: string; retain: boolean }> = [];
+
+let ntfySocket: WebSocket | null = null;
+let ntfyReconnectTimer: number | null = null;
+let ntfyReconnectAttempt = 0;
+let ntfyPublishQueue: string[] = [];
+let ntfyPublishTimer: number | null = null;
+let lastNtfyPostMs = 0;
+
+let cachedSeedKey = '';
+let cachedTopicHash = '';
+let cachedRawKeyBytes: Uint8Array | null = null;
+let cachedCryptoKeyPromise: Promise<CryptoKey | null> | null = null;
+
+// Pure synchronous SHA-256 implementation (RFC 6234) for deterministic topic & AES-256 key derivation
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function sha256Bytes(asciiOrUtf8: string): Uint8Array {
+  const msg = new TextEncoder().encode(asciiOrUtf8);
+  const bitLen = msg.length * 8;
+  const padLen = ((msg.length + 9 + 63) & ~63);
+  const buf = new Uint8Array(padLen);
+  buf.set(msg);
+  buf[msg.length] = 0x80;
+  const view = new DataView(buf.buffer);
+  view.setUint32(padLen - 8, Math.floor(bitLen / 0x100000000), false);
+  view.setUint32(padLen - 4, bitLen >>> 0, false);
+
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
+  const w = new Uint32Array(64);
+
+  for (let offset = 0; offset < padLen; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      w[i] = view.getUint32(offset + i * 4, false);
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 =
+        ((w[i - 15] >>> 7) | (w[i - 15] << 25)) ^
+        ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^
+        (w[i - 15] >>> 3);
+      const s1 =
+        ((w[i - 2] >>> 17) | (w[i - 2] << 15)) ^
+        ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^
+        (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+
+    for (let i = 0; i < 64; i++) {
+      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+
+  const out = new Uint8Array(32);
+  const outView = new DataView(out.buffer);
+  outView.setUint32(0, h0, false);
+  outView.setUint32(4, h1, false);
+  outView.setUint32(8, h2, false);
+  outView.setUint32(12, h3, false);
+  outView.setUint32(16, h4, false);
+  outView.setUint32(20, h5, false);
+  outView.setUint32(24, h6, false);
+  outView.setUint32(28, h7, false);
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) {
+    s += bytes[i].toString(16).padStart(2, '0');
+  }
+  return s;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = window.atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+function resolveWorkspaceGasSeed(): string {
+  try {
+    const rawUrl =
+      window.localStorage.getItem('sheetcal_gas_webapp_url_v1') ||
+      window.localStorage.getItem('sheetcal_gas_url_v1') ||
+      '';
+    const match = rawUrl.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})/);
+    if (
+      match &&
+      match[1] &&
+      !match[1].includes('AKfycby0gvQ') &&
+      !match[1].includes('AKfycbxIf9k')
+    ) {
+      return match[1];
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return DEFAULT_GAS_SCRIPT_SEED;
+}
+
+function ensureCryptoMaterial(): { topicHash: string; keyBytes: Uint8Array } {
+  const seed = `${resolveWorkspaceGasSeed()}|${activeWorkspaceId}`;
+  if (seed !== cachedSeedKey || !cachedRawKeyBytes || !cachedTopicHash) {
+    cachedSeedKey = seed;
+    const topicDigest = sha256Bytes(`sheetcal-live-topic-v2:${seed}`);
+    cachedTopicHash = `scv2_${bytesToHex(topicDigest).slice(0, 24)}`;
+    cachedRawKeyBytes = sha256Bytes(`sheetcal-live-aes256-v2:${seed}`);
+    cachedCryptoKeyPromise = null;
+  }
+  return { topicHash: cachedTopicHash, keyBytes: cachedRawKeyBytes };
+}
+
+function getSubtleAesKey(): Promise<CryptoKey | null> {
+  const { keyBytes } = ensureCryptoMaterial();
+  if (cachedCryptoKeyPromise) return cachedCryptoKeyPromise;
+  if (typeof window === 'undefined' || !window.crypto || !window.crypto.subtle) {
+    cachedCryptoKeyPromise = Promise.resolve(null);
+    return cachedCryptoKeyPromise;
+  }
+  cachedCryptoKeyPromise = window.crypto.subtle
+    .importKey('raw', keyBytes as BufferSource, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+    .catch(() => null);
+  return cachedCryptoKeyPromise;
+}
+
+async function encryptEnvelope(envelope: CloudRelayEnvelope): Promise<string | null> {
+  try {
+    const plainBytes = new TextEncoder().encode(JSON.stringify(envelope));
+    const aesKey = await getSubtleAesKey();
+    if (aesKey && window.crypto) {
+      const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      const cipherBuf = await window.crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv as BufferSource },
+        aesKey,
+        plainBytes as BufferSource
+      );
+      const cipherBytes = new Uint8Array(cipherBuf);
+      const combined = new Uint8Array(12 + cipherBytes.length);
+      combined.set(iv, 0);
+      combined.set(cipherBytes, 12);
+      return `g1.${bytesToBase64(combined)}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function decryptEnvelope(encoded: string): Promise<CloudRelayEnvelope | null> {
+  try {
+    const trimmed = String(encoded || '').trim();
+    if (!trimmed.startsWith('g1.')) return null;
+    const combined = base64ToBytes(trimmed.slice(3));
+    if (combined.length < 29) return null;
+    const aesKey = await getSubtleAesKey();
+    if (!aesKey) return null;
+    const iv = combined.slice(0, 12);
+    const cipherBytes = combined.slice(12);
+    const plainBuf = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv as BufferSource },
+      aesKey,
+      cipherBytes as BufferSource
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(plainBuf)) as CloudRelayEnvelope;
+    if (!parsed || typeof parsed !== 'object' || !parsed.eventId || !parsed.kind) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function markEventSeen(eventId: string): boolean {
+  if (!eventId) return false;
+  if (seenEventIds.has(eventId)) return false;
+  seenEventIds.add(eventId);
+  seenEventOrder.push(eventId);
+  if (seenEventOrder.length > 240) {
+    const oldest = seenEventOrder.shift();
+    if (oldest) seenEventIds.delete(oldest);
+  }
+  return true;
+}
+
+function nextEventId(): string {
+  eventSeq += 1;
+  return `${CLIENT_TAB_ID}-${Date.now()}-${eventSeq}`;
+}
 
 export function sanitizeDirectorPresence(raw: unknown): DirectorPresenceState | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -77,6 +389,37 @@ export function sanitizeDirectorPresence(raw: unknown): DirectorPresenceState | 
   return {
     mode,
     customNote: typeof rec.customNote === 'string' ? rec.customNote.slice(0, 160) : '',
+    updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : '',
+  };
+}
+
+export function sanitizeBoardSettings(raw: unknown): BoardRemoteSettings | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const validRanges = ['upcoming', 'today', 'week7', 'all'];
+  const validLayouts = ['grouped_by_day', 'split_two_column', 'single_day', 'master_table'];
+  const validThemes = ['light', 'navy_gold', 'dark', 'emerald_exec'];
+  const rangeMode = String(rec.rangeMode || 'upcoming');
+  const layoutMode = String(rec.layoutMode || 'grouped_by_day');
+  const boardTheme = String(rec.boardTheme || 'light');
+  if (
+    !validRanges.includes(rangeMode) ||
+    !validLayouts.includes(layoutMode) ||
+    !validThemes.includes(boardTheme)
+  ) {
+    return null;
+  }
+  return {
+    rangeMode: rangeMode as BoardRemoteSettings['rangeMode'],
+    layoutMode: layoutMode as BoardRemoteSettings['layoutMode'],
+    focusDate: typeof rec.focusDate === 'string' ? rec.focusDate : '',
+    selectedCategoryId: typeof rec.selectedCategoryId === 'string' ? rec.selectedCategoryId : 'all',
+    selectedPriority: typeof rec.selectedPriority === 'string' ? rec.selectedPriority : 'all',
+    showCompleted: rec.showCompleted !== false,
+    expandMultiDay: Boolean(rec.expandMultiDay),
+    boardTheme: boardTheme as BoardRemoteSettings['boardTheme'],
+    isLargeText: Boolean(rec.isLargeText),
+    isAutoScroll: Boolean(rec.isAutoScroll),
     updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : '',
   };
 }
@@ -97,6 +440,26 @@ export function readLocalDirectorPresence(): DirectorPresenceState {
 export function writeLocalDirectorPresence(nextState: DirectorPresenceState): void {
   try {
     window.localStorage.setItem(DIRECTOR_PRESENCE_STORAGE_KEY, JSON.stringify(nextState));
+  } catch {
+    // Ignore storage write error
+  }
+}
+
+export function readLocalBoardSettings(): BoardRemoteSettings | null {
+  try {
+    const raw = window.localStorage.getItem(BOARD_SETTINGS_STORAGE_KEY);
+    if (raw) {
+      return sanitizeBoardSettings(JSON.parse(raw));
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return null;
+}
+
+export function writeLocalBoardSettings(nextSettings: BoardRemoteSettings): void {
+  try {
+    window.localStorage.setItem(BOARD_SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
   } catch {
     // Ignore storage write error
   }
@@ -127,19 +490,419 @@ export function emitRemotePresenceFromGas(rawPresence: unknown): void {
   });
 }
 
-function setWsConnected(next: boolean): void {
-  if (wsConnected === next) return;
-  wsConnected = next;
-  notifyListeners({ type: 'connection:status', connected: next });
+function refreshCombinedConnectionStatus(): void {
+  const anyConnected = localWsConnected || mqttConnected || ntfyConnected;
+  notifyListeners({ type: 'connection:status', connected: anyConnected });
 }
 
 export function isRealtimeWebSocketConnected(): boolean {
-  return wsConnected;
+  return localWsConnected || mqttConnected || ntfyConnected;
 }
 
+// --- Minimal Binary MQTT v3.1.1 over WSS Framing (0 external dependencies, <130ms global delivery) ---
+function mqttEncodeVarLen(len: number): Uint8Array {
+  const bytes: number[] = [];
+  let x = len;
+  do {
+    let encodedByte = x % 128;
+    x = Math.floor(x / 128);
+    if (x > 0) encodedByte |= 128;
+    bytes.push(encodedByte);
+  } while (x > 0);
+  return new Uint8Array(bytes);
+}
+
+function mqttEncodeUtf8(str: string): Uint8Array {
+  const strBytes = new TextEncoder().encode(str);
+  const out = new Uint8Array(2 + strBytes.length);
+  out[0] = (strBytes.length >> 8) & 0xff;
+  out[1] = strBytes.length & 0xff;
+  out.set(strBytes, 2);
+  return out;
+}
+
+function mqttBuildConnectPacket(clientId: string): BufferSource {
+  const vh = new Uint8Array([0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x2d]);
+  const cid = mqttEncodeUtf8(clientId);
+  const bodyLen = vh.length + cid.length;
+  const varLen = mqttEncodeVarLen(bodyLen);
+  const pkt = new Uint8Array(1 + varLen.length + bodyLen);
+  pkt[0] = 0x10;
+  pkt.set(varLen, 1);
+  pkt.set(vh, 1 + varLen.length);
+  pkt.set(cid, 1 + varLen.length + vh.length);
+  return pkt as unknown as BufferSource;
+}
+
+function mqttBuildSubscribePacket(packetId: number, topicFilter: string): BufferSource {
+  const tf = mqttEncodeUtf8(topicFilter);
+  const bodyLen = 2 + tf.length + 1;
+  const varLen = mqttEncodeVarLen(bodyLen);
+  const pkt = new Uint8Array(1 + varLen.length + bodyLen);
+  pkt[0] = 0x82;
+  pkt.set(varLen, 1);
+  let pos = 1 + varLen.length;
+  pkt[pos++] = (packetId >> 8) & 0xff;
+  pkt[pos++] = packetId & 0xff;
+  pkt.set(tf, pos);
+  pkt[pos + tf.length] = 0x00;
+  return pkt as unknown as BufferSource;
+}
+
+function mqttBuildPublishPacket(topic: string, message: string, retain = false): BufferSource {
+  const tBytes = mqttEncodeUtf8(topic);
+  const mBytes = new TextEncoder().encode(message);
+  const bodyLen = tBytes.length + mBytes.length;
+  const varLen = mqttEncodeVarLen(bodyLen);
+  const pkt = new Uint8Array(1 + varLen.length + bodyLen);
+  pkt[0] = retain ? 0x31 : 0x30;
+  pkt.set(varLen, 1);
+  pkt.set(tBytes, 1 + varLen.length);
+  pkt.set(mBytes, 1 + varLen.length + tBytes.length);
+  return pkt as unknown as BufferSource;
+}
+
+async function handleIncomingEncryptedString(rawEncrypted: string): Promise<void> {
+  const env = await decryptEnvelope(rawEncrypted);
+  if (!env) return;
+  if (env.clientOriginId === CLIENT_TAB_ID) return;
+  if (!markEventSeen(env.eventId)) return;
+
+  const p = env.payload || {};
+  if (env.kind === 'presence:updated' && p.presence) {
+    const clean = sanitizeDirectorPresence(p.presence);
+    if (!clean) return;
+    const cur = readLocalDirectorPresence();
+    const curMs = cur.updatedAt ? new Date(cur.updatedAt).getTime() : 0;
+    const incMs = clean.updatedAt ? new Date(clean.updatedAt).getTime() : 0;
+    if (curMs > 0 && incMs > 0 && incMs < curMs) return;
+    writeLocalDirectorPresence(clean);
+    notifyListeners({
+      type: 'presence:updated',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      presence: clean,
+    });
+  } else if (env.kind === 'board:settings' && p.settings) {
+    const clean = sanitizeBoardSettings(p.settings);
+    if (!clean) return;
+    const cur = readLocalBoardSettings();
+    const curMs = cur?.updatedAt ? new Date(cur.updatedAt).getTime() : 0;
+    const incMs = clean.updatedAt ? new Date(clean.updatedAt).getTime() : 0;
+    if (curMs > 0 && incMs > 0 && incMs < curMs) return;
+    writeLocalBoardSettings(clean);
+    notifyListeners({
+      type: 'board:settings',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      settings: clean,
+    });
+  } else if (env.kind === 'task:delta') {
+    notifyListeners({
+      type: 'task:delta',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      upsertedTasks: Array.isArray(p.upsertedTasks) ? (p.upsertedTasks as Task[]) : undefined,
+      deletedTaskIds: Array.isArray(p.deletedTaskIds) ? (p.deletedTaskIds as string[]) : undefined,
+      updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : new Date().toISOString(),
+    });
+  } else if (env.kind === 'categories:delta' && Array.isArray(p.categories)) {
+    notifyListeners({
+      type: 'categories:delta',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      categories: p.categories as Category[],
+      categoriesUpdatedAt:
+        typeof p.categoriesUpdatedAt === 'number' ? p.categoriesUpdatedAt : Date.now(),
+      deletedCategoryIds: Array.isArray(p.deletedCategoryIds)
+        ? (p.deletedCategoryIds as string[])
+        : undefined,
+    });
+  } else if (env.kind === 'workspace:updated' && p.workspace) {
+    notifyListeners({
+      type: 'workspace:updated',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      workspace: p.workspace as RealtimeWorkspacePayload,
+      deletedTaskIds: Array.isArray(p.deletedTaskIds) ? (p.deletedTaskIds as string[]) : undefined,
+      deletedCategoryIds: Array.isArray(p.deletedCategoryIds)
+        ? (p.deletedCategoryIds as string[])
+        : undefined,
+    });
+  }
+}
+
+function flushMqttQueue(): void {
+  if (!mqttSocket || mqttSocket.readyState !== WebSocket.OPEN || !mqttConnected) return;
+  const { topicHash } = ensureCryptoMaterial();
+  while (pendingMqttFrames.length > 0) {
+    const item = pendingMqttFrames.shift();
+    if (!item) break;
+    try {
+      mqttSocket.send(
+        mqttBuildPublishPacket(
+          `sheetcal/v2/${topicHash}/${item.subTopic}`,
+          item.encrypted,
+          item.retain
+        )
+      );
+    } catch {
+      break;
+    }
+  }
+}
+
+function scheduleMqttReconnect(): void {
+  if (mqttReconnectTimer !== null || typeof window === 'undefined') return;
+  const delay = Math.min(10000, 1200 * Math.pow(1.5, mqttReconnectAttempt));
+  mqttReconnectAttempt += 1;
+  mqttReconnectTimer = window.setTimeout(() => {
+    mqttReconnectTimer = null;
+    connectMqttRelay();
+  }, delay);
+}
+
+function connectMqttRelay(): void {
+  if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+  if (
+    mqttSocket &&
+    (mqttSocket.readyState === WebSocket.OPEN || mqttSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  const { topicHash } = ensureCryptoMaterial();
+  try {
+    const sock = new WebSocket('wss://broker.emqx.io:8084/mqtt', ['mqtt']);
+    sock.binaryType = 'arraybuffer';
+    mqttSocket = sock;
+
+    sock.onopen = () => {
+      try {
+        const shortCid = `sc_${CLIENT_TAB_ID.slice(-12)}_${Math.random().toString(36).slice(2, 6)}`;
+        sock.send(mqttBuildConnectPacket(shortCid));
+      } catch {
+        // Ignore
+      }
+    };
+
+    sock.onmessage = (ev) => {
+      if (!(ev.data instanceof ArrayBuffer)) return;
+      const bytes = new Uint8Array(ev.data);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const headerByte = bytes[offset];
+        const pktType = headerByte >> 4;
+        let mult = 1;
+        let remLen = 0;
+        let idx = offset + 1;
+        let encodedByte = 0;
+        do {
+          if (idx >= bytes.length) return;
+          encodedByte = bytes[idx++];
+          remLen += (encodedByte & 127) * mult;
+          mult *= 128;
+        } while ((encodedByte & 128) !== 0);
+
+        const pktEnd = idx + remLen;
+        if (pktEnd > bytes.length) return;
+
+        if (pktType === 2) {
+          // CONNACK -> Subscribe to encrypted workspace subtopics
+          mqttReconnectAttempt = 0;
+          mqttConnected = true;
+          refreshCombinedConnectionStatus();
+          try {
+            sock.send(mqttBuildSubscribePacket(1, `sheetcal/v2/${topicHash}/+`));
+          } catch {
+            // Ignore
+          }
+          flushMqttQueue();
+          if (mqttPingTimer !== null) window.clearInterval(mqttPingTimer);
+          mqttPingTimer = window.setInterval(() => {
+            if (sock.readyState === WebSocket.OPEN) {
+              try {
+                sock.send(new Uint8Array([0xc0, 0x00]) as unknown as BufferSource);
+              } catch {
+                // Ignore
+              }
+            }
+          }, 25000);
+        } else if (pktType === 3) {
+          // PUBLISH packet
+          const qos = (headerByte >> 1) & 0x03;
+          if (idx + 2 <= pktEnd) {
+            const topicLen = (bytes[idx] << 8) | bytes[idx + 1];
+            let payloadStart = idx + 2 + topicLen;
+            if (qos > 0) payloadStart += 2;
+            if (payloadStart <= pktEnd) {
+              const msgStr = new TextDecoder().decode(bytes.slice(payloadStart, pktEnd));
+              void handleIncomingEncryptedString(msgStr);
+            }
+          }
+        }
+
+        offset = pktEnd;
+      }
+    };
+
+    sock.onclose = () => {
+      if (mqttSocket === sock) mqttSocket = null;
+      mqttConnected = false;
+      if (mqttPingTimer !== null) {
+        window.clearInterval(mqttPingTimer);
+        mqttPingTimer = null;
+      }
+      refreshCombinedConnectionStatus();
+      scheduleMqttReconnect();
+    };
+
+    sock.onerror = () => {
+      try {
+        sock.close();
+      } catch {
+        // Ignore
+      }
+    };
+  } catch {
+    mqttConnected = false;
+    scheduleMqttReconnect();
+  }
+}
+
+// --- Standard Port-443 WSS Relay (pierces strict Ministry/corporate port-443-only firewalls) ---
+function scheduleNtfyReconnect(): void {
+  if (ntfyReconnectTimer !== null || typeof window === 'undefined') return;
+  const delay = Math.min(15000, 2000 * Math.pow(1.6, ntfyReconnectAttempt));
+  ntfyReconnectAttempt += 1;
+  ntfyReconnectTimer = window.setTimeout(() => {
+    ntfyReconnectTimer = null;
+    connectPort443Relay();
+  }, delay);
+}
+
+function connectPort443Relay(): void {
+  if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+  if (
+    ntfySocket &&
+    (ntfySocket.readyState === WebSocket.OPEN || ntfySocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  const { topicHash } = ensureCryptoMaterial();
+  try {
+    const sock = new WebSocket(`wss://ntfy.sh/${topicHash}/ws`);
+    ntfySocket = sock;
+
+    sock.onopen = () => {
+      ntfyReconnectAttempt = 0;
+      ntfyConnected = true;
+      refreshCombinedConnectionStatus();
+    };
+
+    sock.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.data || '{}')) as {
+          event?: string;
+          message?: string;
+        };
+        if (parsed.event === 'message' && typeof parsed.message === 'string') {
+          void handleIncomingEncryptedString(parsed.message);
+        }
+      } catch {
+        // Ignore malformed frame
+      }
+    };
+
+    sock.onclose = () => {
+      if (ntfySocket === sock) ntfySocket = null;
+      ntfyConnected = false;
+      refreshCombinedConnectionStatus();
+      scheduleNtfyReconnect();
+    };
+
+    sock.onerror = () => {
+      try {
+        sock.close();
+      } catch {
+        // Ignore
+      }
+    };
+  } catch {
+    ntfyConnected = false;
+    scheduleNtfyReconnect();
+  }
+}
+
+function drainPort443PublishQueue(): void {
+  if (ntfyPublishQueue.length === 0) return;
+  const now = Date.now();
+  const waitMs = Math.max(0, 360 - (now - lastNtfyPostMs));
+  if (waitMs > 0) {
+    if (ntfyPublishTimer === null) {
+      ntfyPublishTimer = window.setTimeout(() => {
+        ntfyPublishTimer = null;
+        drainPort443PublishQueue();
+      }, waitMs);
+    }
+    return;
+  }
+
+  const nextMsg = ntfyPublishQueue.shift();
+  if (!nextMsg) return;
+  lastNtfyPostMs = Date.now();
+  const { topicHash } = ensureCryptoMaterial();
+  fetch(`https://ntfy.sh/${topicHash}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: nextMsg,
+  }).catch(() => {});
+
+  if (ntfyPublishQueue.length > 0 && ntfyPublishTimer === null) {
+    ntfyPublishTimer = window.setTimeout(() => {
+      ntfyPublishTimer = null;
+      drainPort443PublishQueue();
+    }, 380);
+  }
+}
+
+async function publishCloudEnvelope(
+  kind: CloudRelayEnvelope['kind'],
+  payload: Record<string, unknown>,
+  subTopic: 'events' | 'presence' | 'board' = 'events',
+  retain = false
+): Promise<void> {
+  ensureInitialized();
+  const envelope: CloudRelayEnvelope = {
+    eventId: nextEventId(),
+    clientOriginId: CLIENT_TAB_ID,
+    sentAt: Date.now(),
+    kind,
+    payload,
+  };
+  markEventSeen(envelope.eventId);
+  const encrypted = await encryptEnvelope(envelope);
+  if (!encrypted) return;
+
+  // 1. Publish over <130ms MQTT-over-WSS
+  pendingMqttFrames.push({ subTopic, encrypted, retain });
+  if (pendingMqttFrames.length > 25) pendingMqttFrames.shift();
+  flushMqttQueue();
+
+  // 2. Also publish compact deltas (< 3,500 chars) over Port-443 HTTPS/WSS for strict corporate firewalls
+  if (encrypted.length < 3500) {
+    if (ntfyPublishQueue.length >= 6) {
+      ntfyPublishQueue = ntfyPublishQueue.slice(-5);
+    }
+    ntfyPublishQueue.push(encrypted);
+    drainPort443PublishQueue();
+  }
+}
+
+// --- Same-Origin Full-Stack Server WebSocket (/api/collab/ws) ---
 function scheduleReconnect(): void {
   if (reconnectTimer !== null || typeof window === 'undefined') return;
-  // Avoid aggressive reconnect spam on pure static hosts (e.g. github.io) while still retrying gently
   const isStaticGithubHost = /\.github\.io$/i.test(window.location.hostname || '');
   if (isStaticGithubHost && reconnectAttempt >= 1) {
     return;
@@ -161,9 +924,10 @@ function connectWebSocket(): void {
     return;
   }
 
-  // Pure static hosts like github.io have no /api/collab/ws WebSocket server
+  // Pure static hosts like github.io have no local /api/collab/ws server (they use MQTT WSS + Port-443 WSS)
   if (/\.github\.io$/i.test(window.location.hostname || '')) {
-    setWsConnected(false);
+    localWsConnected = false;
+    refreshCombinedConnectionStatus();
     return;
   }
 
@@ -178,7 +942,8 @@ function connectWebSocket(): void {
 
     socket.onopen = () => {
       reconnectAttempt = 0;
-      setWsConnected(true);
+      localWsConnected = true;
+      refreshCombinedConnectionStatus();
       if (heartbeatTimer !== null) {
         window.clearInterval(heartbeatTimer);
       }
@@ -260,7 +1025,8 @@ function connectWebSocket(): void {
       if (wsInstance === socket) {
         wsInstance = null;
       }
-      setWsConnected(false);
+      localWsConnected = false;
+      refreshCombinedConnectionStatus();
       if (heartbeatTimer !== null) {
         window.clearInterval(heartbeatTimer);
         heartbeatTimer = null;
@@ -276,7 +1042,8 @@ function connectWebSocket(): void {
       }
     };
   } catch {
-    setWsConnected(false);
+    localWsConnected = false;
+    refreshCombinedConnectionStatus();
     scheduleReconnect();
   }
 }
@@ -288,7 +1055,7 @@ function ensureInitialized(workspaceId?: string): void {
   if (initialized || typeof window === 'undefined') return;
   initialized = true;
 
-  // 1. Setup Same-Browser / Dual-Monitor HDMI BroadcastChannel (0ms latency across tabs/windows)
+  // 1. Same-Browser / Dual-Monitor HDMI BroadcastChannel (0ms latency across tabs/windows)
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
@@ -311,6 +1078,31 @@ function ensureInitialized(workspaceId?: string): void {
               ? (data.deletedCategoryIds as string[])
               : undefined,
           });
+        } else if (data.type === 'task:delta') {
+          notifyListeners({
+            type: 'task:delta',
+            source: 'broadcast',
+            clientOriginId: originId,
+            upsertedTasks: Array.isArray(data.upsertedTasks)
+              ? (data.upsertedTasks as Task[])
+              : undefined,
+            deletedTaskIds: Array.isArray(data.deletedTaskIds)
+              ? (data.deletedTaskIds as string[])
+              : undefined,
+            updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
+          });
+        } else if (data.type === 'categories:delta' && Array.isArray(data.categories)) {
+          notifyListeners({
+            type: 'categories:delta',
+            source: 'broadcast',
+            clientOriginId: originId,
+            categories: data.categories as Category[],
+            categoriesUpdatedAt:
+              typeof data.categoriesUpdatedAt === 'number' ? data.categoriesUpdatedAt : Date.now(),
+            deletedCategoryIds: Array.isArray(data.deletedCategoryIds)
+              ? (data.deletedCategoryIds as string[])
+              : undefined,
+          });
         } else if (data.type === 'presence:updated' && data.presence) {
           const presence = sanitizeDirectorPresence(data.presence);
           if (presence) {
@@ -322,6 +1114,17 @@ function ensureInitialized(workspaceId?: string): void {
               presence,
             });
           }
+        } else if (data.type === 'board:settings' && data.settings) {
+          const settings = sanitizeBoardSettings(data.settings);
+          if (settings) {
+            writeLocalBoardSettings(settings);
+            notifyListeners({
+              type: 'board:settings',
+              source: 'broadcast',
+              clientOriginId: originId,
+              settings,
+            });
+          }
         }
       };
     } catch {
@@ -329,7 +1132,7 @@ function ensureInitialized(workspaceId?: string): void {
     }
   }
 
-  // 2. Setup Cross-Window localStorage 'storage' event fallback (works even if BroadcastChannel is restricted)
+  // 2. Cross-Window localStorage 'storage' event fallback
   window.addEventListener('storage', (ev: StorageEvent) => {
     try {
       if (ev.key === DIRECTOR_PRESENCE_STORAGE_KEY && ev.newValue) {
@@ -339,6 +1142,15 @@ function ensureInitialized(workspaceId?: string): void {
             type: 'presence:updated',
             source: 'storage',
             presence,
+          });
+        }
+      } else if (ev.key === BOARD_SETTINGS_STORAGE_KEY && ev.newValue) {
+        const settings = sanitizeBoardSettings(JSON.parse(ev.newValue));
+        if (settings) {
+          notifyListeners({
+            type: 'board:settings',
+            source: 'storage',
+            settings,
           });
         }
       } else if (ev.key === LOCAL_SIGNAL_STORAGE_KEY && ev.newValue) {
@@ -364,9 +1176,9 @@ function ensureInitialized(workspaceId?: string): void {
     }
   });
 
-  // 3. Reconnect / Request fresh sync immediately when TV/window regains network or visibility
+  // 3. Reconnect immediately when TV/window regains network or visibility
   const handleWakeUp = () => {
-    if (!wsConnected) {
+    if (!localWsConnected) {
       reconnectAttempt = 0;
       connectWebSocket();
     } else if (wsInstance && wsInstance.readyState === WebSocket.OPEN) {
@@ -382,6 +1194,14 @@ function ensureInitialized(workspaceId?: string): void {
         // Ignore
       }
     }
+    if (!mqttConnected) {
+      mqttReconnectAttempt = 0;
+      connectMqttRelay();
+    }
+    if (!ntfyConnected) {
+      ntfyReconnectAttempt = 0;
+      connectPort443Relay();
+    }
   };
 
   window.addEventListener('online', handleWakeUp);
@@ -393,6 +1213,8 @@ function ensureInitialized(workspaceId?: string): void {
   });
 
   connectWebSocket();
+  connectMqttRelay();
+  connectPort443Relay();
 }
 
 export function subscribeRealtimeEvents(
@@ -401,11 +1223,76 @@ export function subscribeRealtimeEvents(
 ): () => void {
   ensureInitialized(workspaceId);
   listeners.add(listener);
-  // Immediately inform subscriber of current WebSocket connection status
-  listener({ type: 'connection:status', connected: wsConnected });
+  listener({ type: 'connection:status', connected: isRealtimeWebSocketConnected() });
   return () => {
     listeners.delete(listener);
   };
+}
+
+export function publishTaskDelta(params: {
+  upsertedTasks?: Task[];
+  deletedTaskIds?: string[];
+  workspaceId?: string;
+}): void {
+  ensureInitialized(params.workspaceId);
+  const nowIso = new Date().toISOString();
+  const localMsg = {
+    type: 'task:delta',
+    clientOriginId: CLIENT_TAB_ID,
+    upsertedTasks: params.upsertedTasks,
+    deletedTaskIds: params.deletedTaskIds,
+    updatedAt: nowIso,
+  };
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage(localMsg);
+    } catch {
+      // Ignore
+    }
+  }
+  void publishCloudEnvelope(
+    'task:delta',
+    {
+      upsertedTasks: params.upsertedTasks,
+      deletedTaskIds: params.deletedTaskIds,
+      updatedAt: nowIso,
+    },
+    'events',
+    false
+  );
+}
+
+export function publishCategoriesDelta(params: {
+  categories: Category[];
+  categoriesUpdatedAt: number;
+  deletedCategoryIds?: string[];
+  workspaceId?: string;
+}): void {
+  ensureInitialized(params.workspaceId);
+  const localMsg = {
+    type: 'categories:delta',
+    clientOriginId: CLIENT_TAB_ID,
+    categories: params.categories,
+    categoriesUpdatedAt: params.categoriesUpdatedAt,
+    deletedCategoryIds: params.deletedCategoryIds,
+  };
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage(localMsg);
+    } catch {
+      // Ignore
+    }
+  }
+  void publishCloudEnvelope(
+    'categories:delta',
+    {
+      categories: params.categories,
+      categoriesUpdatedAt: params.categoriesUpdatedAt,
+      deletedCategoryIds: params.deletedCategoryIds,
+    },
+    'events',
+    false
+  );
 }
 
 export function broadcastLocalWorkspaceChange(params: {
@@ -449,6 +1336,18 @@ export function broadcastLocalWorkspaceChange(params: {
   } catch {
     // Ignore quota errors
   }
+
+  // Also broadcast full workspace snapshot over MQTT WSS (<130ms) for instant cross-machine sync
+  void publishCloudEnvelope(
+    'workspace:updated',
+    {
+      workspace: payload.workspace,
+      deletedTaskIds: params.deletedTaskIds,
+      deletedCategoryIds: params.deletedCategoryIds,
+    },
+    'events',
+    false
+  );
 }
 
 export function broadcastLocalPresenceChange(presence: DirectorPresenceState): void {
@@ -467,4 +1366,28 @@ export function broadcastLocalPresenceChange(presence: DirectorPresenceState): v
       // Ignore
     }
   }
+
+  // Retain latest presence on MQTT topic + push via Port-443 WSS so every TV receives it in ~100ms
+  void publishCloudEnvelope('presence:updated', { presence }, 'presence', true);
+}
+
+export function broadcastBoardSettingsChange(settings: BoardRemoteSettings): void {
+  ensureInitialized();
+  writeLocalBoardSettings(settings);
+  const payload = {
+    type: 'board:settings',
+    clientOriginId: CLIENT_TAB_ID,
+    settings,
+  };
+
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage(payload);
+    } catch {
+      // Ignore
+    }
+  }
+
+  // Retain latest board display settings on MQTT topic + push via Port-443 WSS so TVs mirror filter/theme/date instantly
+  void publishCloudEnvelope('board:settings', { settings }, 'board', true);
 }
