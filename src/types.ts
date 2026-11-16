@@ -133,6 +133,19 @@ export interface LineSettings {
   cardLineSpacing?: 'tight' | 'normal' | 'relaxed';
 }
 
+export type DirectorPresenceMode =
+  | 'auto'
+  | 'in_office'
+  | 'in_meeting'
+  | 'offsite'
+  | 'unavailable';
+
+export interface DirectorPresenceState {
+  mode: DirectorPresenceMode;
+  customNote: string;
+  updatedAt: string;
+}
+
 export interface ConfirmationDialogRequest {
   isOpen: boolean;
   title: string;

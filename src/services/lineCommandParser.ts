@@ -3137,6 +3137,8 @@ function doPost(e) {
           delete metaObj.c;
           delete metaObj.cu;
           delete metaObj.dc;
+          delete metaObj.dt;
+          delete metaObj.dp;
           delete metaObj.m;
           var cleanSrc = Object.keys(metaObj).length > 0 ? (parts[0] + '#SCMETA#' + JSON.stringify(metaObj)) : parts[0];
           var copySt = {};

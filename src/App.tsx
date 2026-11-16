@@ -29,6 +29,7 @@ import { User } from 'firebase/auth';
 import {
   Category,
   ConfirmationDialogRequest,
+  DirectorPresenceState,
   LineMessageLog,
   LineSettings,
   Task,
@@ -85,6 +86,14 @@ import { SheetsDatabaseView, SheetAutoSyncConfig } from './components/SheetsData
 import { TeamCollaborationView } from './components/TeamCollaborationView';
 import { ScheduleBoardView } from './components/ScheduleBoardView';
 import { ROBOT_MASCOT_DATA_URI } from './assets/robotMascotDataUri';
+import {
+  broadcastLocalWorkspaceChange,
+  emitRemotePresenceFromGas,
+  getClientTabId,
+  isRealtimeWebSocketConnected,
+  readLocalDirectorPresence,
+  subscribeRealtimeEvents,
+} from './services/realtimeSync';
 
 type ActiveSection =
   | 'dashboard'
@@ -934,9 +943,11 @@ export default function App() {
           : 0;
         const existingDone = existingDup.status === TaskStatus.COMPLETED;
         const candidateDone = candidate.status === TaskStatus.COMPLETED;
+        // Always prioritize newer updatedAt timestamps first so toggling Completed -> Pending/In Progress updates immediately
         const preferCandidate =
-          (candidateDone && !existingDone) ||
-          (candidateDone === existingDone && candidateMs >= existingMs);
+          candidateMs !== existingMs
+            ? candidateMs > existingMs
+            : (candidateDone && !existingDone) || candidateMs >= existingMs;
 
         const winner = preferCandidate ? candidate : existingDup;
         const loser = preferCandidate ? existingDup : candidate;
@@ -1003,13 +1014,28 @@ export default function App() {
         }
         let nextUpdatedAt = t.updatedAt;
         if (idx === 0) {
+          const localPresence = readLocalDirectorPresence();
+          const dpMs = localPresence.updatedAt
+            ? new Date(localPresence.updatedAt).getTime()
+            : 0;
+          if (localPresence.updatedAt && dpMs > 0) {
+            metaObj.dp = localPresence;
+          }
+          const recentDelTaskArr = Array.from(deletedTaskIdsRef.current).slice(-80);
+          if (recentDelTaskArr.length > 0) {
+            metaObj.dt = recentDelTaskArr;
+          }
           if (Array.isArray(categoriesList) && categoriesList.length > 0) {
             metaObj.c = categoriesList;
             metaObj.cu = effectiveCu;
-            const curMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
-            if (effectiveCu > curMs) {
-              nextUpdatedAt = new Date(effectiveCu).toISOString();
-            }
+          }
+          const curMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+          const maxMetaMs = Math.max(
+            Array.isArray(categoriesList) && categoriesList.length > 0 ? effectiveCu : 0,
+            dpMs
+          );
+          if (maxMetaMs > curMs) {
+            nextUpdatedAt = new Date(maxMetaMs).toISOString();
           }
           if (delCatArr.length > 0) {
             metaObj.dc = delCatArr;
@@ -1040,11 +1066,16 @@ export default function App() {
       categories?: Category[];
       categoriesUpdatedAt?: number;
       deletedCategoryIds?: string[];
+      deletedTaskIds?: string[];
+      directorPresence?: DirectorPresenceState;
       teamMembers?: TeamMember[];
     } => {
       let extractedCategories: Category[] | undefined;
       let bestCategoriesCu = -1;
       let extractedDeletedCatIds: string[] | undefined;
+      let extractedDeletedTaskIds: string[] | undefined;
+      let extractedDirectorPresence: DirectorPresenceState | undefined;
+      let bestDpMs = -1;
       let extractedMembers: TeamMember[] | undefined;
       const cleaned: Task[] = [];
 
@@ -1064,6 +1095,8 @@ export default function App() {
                 c?: Category[];
                 cu?: number;
                 dc?: string[];
+                dt?: string[];
+                dp?: DirectorPresenceState;
                 m?: TeamMember[];
               };
               if (
@@ -1091,6 +1124,21 @@ export default function App() {
                       .map((x) => String(x || '').trim())
                       .filter(Boolean);
                   }
+                }
+              }
+              if (Array.isArray(parsedMeta.dt) && parsedMeta.dt.length > 0) {
+                extractedDeletedTaskIds = Array.from(
+                  new Set([
+                    ...(extractedDeletedTaskIds || []),
+                    ...parsedMeta.dt.map((x) => String(x || '').trim()).filter(Boolean),
+                  ])
+                );
+              }
+              if (parsedMeta.dp && typeof parsedMeta.dp === 'object' && parsedMeta.dp.updatedAt) {
+                const dpMs = new Date(parsedMeta.dp.updatedAt).getTime();
+                if (Number.isFinite(dpMs) && dpMs > bestDpMs) {
+                  bestDpMs = dpMs;
+                  extractedDirectorPresence = parsedMeta.dp;
                 }
               }
               if (
@@ -1143,6 +1191,8 @@ export default function App() {
         categories: extractedCategories,
         categoriesUpdatedAt: bestCategoriesCu > 0 ? bestCategoriesCu : undefined,
         deletedCategoryIds: extractedDeletedCatIds,
+        deletedTaskIds: extractedDeletedTaskIds,
+        directorPresence: extractedDirectorPresence,
         teamMembers: extractedMembers,
       };
     },
@@ -1184,6 +1234,17 @@ export default function App() {
       const allDeletedCatIds = Array.from(deletedCategoryIdsRef.current);
       const activeCu = categoriesUpdatedAtRef.current || Date.now();
 
+      // Immediately push in 0ms to any HDMI 2nd monitor / presentation window on the same computer
+      broadcastLocalWorkspaceChange({
+        workspaceId,
+        tasks: cleanNextTasks,
+        categories: nextCategories,
+        categoriesUpdatedAt: activeCu,
+        teamMembers: nextMembers,
+        deletedTaskIds: allDeletedIds,
+        deletedCategoryIds: allDeletedCatIds,
+      });
+
       let workspacePostSucceeded = false;
       let authoritativeTasks: Task[] = cleanNextTasks;
       try {
@@ -1193,6 +1254,7 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              clientOriginId: getClientTabId(),
               updatedBy: user?.email || 'สมาชิกทีม',
               spreadsheetId: sheetMeta?.spreadsheetId,
               spreadsheetUrl: sheetMeta?.spreadsheetUrl,
@@ -2699,6 +2761,16 @@ export default function App() {
                 const decodedWs = extractGasMetadataFromTasks(
                   wsData.workspace.tasks as Task[]
                 );
+                if (
+                  Array.isArray(decodedWs.deletedTaskIds) &&
+                  decodedWs.deletedTaskIds.length > 0
+                ) {
+                  recordDeletedTaskIds(decodedWs.deletedTaskIds);
+                  decodedWs.deletedTaskIds.forEach((id) => delSet.add(id));
+                }
+                if (decodedWs.directorPresence) {
+                  emitRemotePresenceFromGas(decodedWs.directorPresence);
+                }
                 cleanWsTasks = decodedWs.tasks.filter(
                   (t) => !isTaskPurgedOrDeleted(t, delSet)
                 );
@@ -2890,6 +2962,15 @@ export default function App() {
             const decodedGas = Array.isArray(data.tasks)
               ? extractGasMetadataFromTasks(data.tasks as Task[])
               : { tasks: [] as Task[] };
+            if (
+              Array.isArray(decodedGas.deletedTaskIds) &&
+              decodedGas.deletedTaskIds.length > 0
+            ) {
+              recordDeletedTaskIds(decodedGas.deletedTaskIds);
+            }
+            if (decodedGas.directorPresence) {
+              emitRemotePresenceFromGas(decodedGas.directorPresence);
+            }
 
             const remoteGasCats =
               Array.isArray(data.categories) && data.categories.length > 0
@@ -3053,12 +3134,137 @@ export default function App() {
     ]
   );
 
+  // Real-time Server-Authoritative WebSocket + Multi-Monitor BroadcastChannel Subscription
+  // Ensures TV Presentation screens update in <50ms (0ms on HDMI 2nd monitor) without re-emitting loops!
+  useEffect(() => {
+    const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
+      if (ev.type !== 'sync:init' && ev.type !== 'workspace:updated') return;
+      // Skip echoes originating from this exact browser tab
+      if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+
+      if (Array.isArray(ev.deletedTaskIds) && ev.deletedTaskIds.length > 0) {
+        recordDeletedTaskIds(ev.deletedTaskIds);
+      }
+
+      const incomingWs = ev.workspace;
+      if (!incomingWs) return;
+
+      if (incomingWs.updatedAt) {
+        lastSyncedTimestampRef.current = incomingWs.updatedAt;
+        setLastCollabSyncAt(incomingWs.updatedAt);
+      }
+
+      const remoteCu =
+        typeof incomingWs.categoriesUpdatedAt === 'number' ? incomingWs.categoriesUpdatedAt : 0;
+      if (
+        remoteCu >= categoriesUpdatedAtRef.current &&
+        Array.isArray(ev.deletedCategoryIds) &&
+        ev.deletedCategoryIds.length > 0
+      ) {
+        recordDeletedCategoryIds(ev.deletedCategoryIds);
+      }
+
+      if (Array.isArray(incomingWs.tasks)) {
+        const delSet = new Set<string>([
+          ...(Array.isArray(ev.deletedTaskIds) ? ev.deletedTaskIds : []),
+          ...Array.from(deletedTaskIdsRef.current),
+        ]);
+        const decoded = extractGasMetadataFromTasks(incomingWs.tasks as Task[]);
+        if (Array.isArray(decoded.deletedTaskIds) && decoded.deletedTaskIds.length > 0) {
+          recordDeletedTaskIds(decoded.deletedTaskIds);
+          decoded.deletedTaskIds.forEach((id) => delSet.add(id));
+        }
+        if (decoded.directorPresence) {
+          emitRemotePresenceFromGas(decoded.directorPresence);
+        }
+        const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
+        let newlyDiscarded: string[] = [];
+        setTasks((prev) => {
+          // For explicit remote updates (workspace:updated), remote is primary; merge by updatedAt idempotently
+          const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
+            cleanRemoteTasks,
+            prev.filter((p) => !delSet.has(p.id) && cleanRemoteTasks.some((r) => r.id === p.id)),
+            delSet
+          );
+          newlyDiscarded = discardedIds;
+          if (areTaskListsEqual(prev, mergedList)) return prev;
+          tasksRef.current = mergedList;
+          return mergedList;
+        });
+        if (newlyDiscarded.length > 0) {
+          recordDeletedTaskIds(newlyDiscarded);
+        }
+      }
+
+      if (Array.isArray(incomingWs.categories) && incomingWs.categories.length > 0) {
+        const localCu = categoriesUpdatedAtRef.current;
+        const mergedCats =
+          remoteCu >= localCu || localCu === 0
+            ? mergeCategoriesLists(incomingWs.categories, categoriesRef.current)
+            : mergeCategoriesLists(categoriesRef.current, incomingWs.categories);
+        if (remoteCu > localCu) {
+          bumpCategoriesUpdatedAt(remoteCu);
+        }
+        if (mergedCats.length > 0) {
+          setCategories((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(mergedCats)) return prev;
+            categoriesRef.current = mergedCats;
+            return mergedCats;
+          });
+        }
+      }
+
+      if (Array.isArray(incomingWs.teamMembers) && incomingWs.teamMembers.length > 0) {
+        const nextMembers = incomingWs.teamMembers;
+        setTeamMembers((prev) =>
+          JSON.stringify(prev) === JSON.stringify(nextMembers) ? prev : nextMembers
+        );
+      }
+    }, workspaceId);
+
+    return () => unsubscribeRealtime();
+  }, [
+    areTaskListsEqual,
+    bumpCategoriesUpdatedAt,
+    deduplicateAndMergeTasks,
+    extractGasMetadataFromTasks,
+    isTaskPurgedOrDeleted,
+    mergeCategoriesLists,
+    recordDeletedCategoryIds,
+    recordDeletedTaskIds,
+    workspaceId,
+  ]);
+
   useEffect(() => {
     pullLatestTeamCalendar(false);
-    if (!sheetAutoSyncConfig.autoPullEnabled) return;
-    const intervalMs = Math.max(3000, (sheetAutoSyncConfig.autoPullIntervalSec || 5) * 1000);
-    const gasTimer = setInterval(() => pullLatestTeamCalendar(false), intervalMs);
-    return () => clearInterval(gasTimer);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        pullLatestTeamCalendar(false);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    if (!sheetAutoSyncConfig.autoPullEnabled) {
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+      };
+    }
+
+    const baseSec = sheetAutoSyncConfig.autoPullIntervalSec || 5;
+    const intervalMs = Math.max(3000, baseSec * 1000);
+    const gasTimer = setInterval(() => {
+      // When WebSocket is connected, real-time updates arrive instantly; still run lightweight background sync for safety
+      if (!isRealtimeWebSocketConnected() || Date.now() - lastLocalMutationMsRef.current > 3500) {
+        pullLatestTeamCalendar(false);
+      }
+    }, intervalMs);
+    return () => {
+      clearInterval(gasTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
   }, [
     pullLatestTeamCalendar,
     sheetAutoSyncConfig.autoPullEnabled,
@@ -3164,8 +3370,12 @@ export default function App() {
           isDestructive: false,
           onConfirm: async () => {
             lastLocalMutationMsRef.current = Date.now();
+            const freshUpdatedTask: Task = {
+              ...updatedTask,
+              updatedAt: new Date().toISOString(),
+            };
             const latestList = tasksRef.current.map((t) =>
-              t.id === existingId ? updatedTask : t
+              t.id === existingId ? freshUpdatedTask : t
             );
             tasksRef.current = latestList;
             setTasks(latestList);
@@ -3173,8 +3383,8 @@ export default function App() {
               latestList,
               categoriesRef.current,
               lineLogs,
-              `แก้ไขงาน "${updatedTask.title}" และอัปเดตลง Google Sheets เรียบร้อยแล้ว`,
-              updatedTask.date,
+              `แก้ไขงาน "${freshUpdatedTask.title}" และอัปเดตลง Google Sheets เรียบร้อยแล้ว`,
+              freshUpdatedTask.date,
               undefined,
               teamMembersRef.current
             );
@@ -5220,6 +5430,13 @@ export default function App() {
             onToggleStatus={handleToggleTaskStatus}
             onUpdateStatus={handleUpdateTaskStatus}
             onOpenCalendarDate={handleOpenDateInCalendar}
+            onPresenceStaticSync={() => {
+              pushCollaborativeWorkspace(
+                tasksRef.current,
+                categoriesRef.current,
+                teamMembersRef.current
+              );
+            }}
           />
         )}
 

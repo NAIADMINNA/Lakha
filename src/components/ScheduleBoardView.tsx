@@ -27,7 +27,14 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { Category, Task, TaskPriority, TaskStatus } from '../types';
+import {
+  Category,
+  DirectorPresenceMode,
+  DirectorPresenceState,
+  Task,
+  TaskPriority,
+  TaskStatus,
+} from '../types';
 import {
   formatLocalDateYMD,
   formatLocalTimeHM,
@@ -45,6 +52,13 @@ import {
   getInternetNowMs,
   onInternetTimeSync,
 } from '../services/internetTimeService';
+import {
+  broadcastLocalPresenceChange,
+  getClientTabId,
+  readLocalDirectorPresence,
+  subscribeRealtimeEvents,
+  writeLocalDirectorPresence,
+} from '../services/realtimeSync';
 
 interface ScheduleBoardViewProps {
   tasks: Task[];
@@ -54,20 +68,12 @@ interface ScheduleBoardViewProps {
   onToggleStatus: (task: Task) => void;
   onUpdateStatus?: (task: Task, nextStatus: TaskStatus) => void;
   onOpenCalendarDate: (dateStr: string) => void;
+  onPresenceStaticSync?: () => void;
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
 type BoardLayoutMode = 'grouped_by_day' | 'split_two_column' | 'single_day' | 'master_table';
 type BoardThemeMode = 'light' | 'dark' | 'navy_gold' | 'emerald_exec';
-type DirectorPresenceMode = 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
-
-interface DirectorPresenceState {
-  mode: DirectorPresenceMode;
-  customNote: string;
-  updatedAt: string;
-}
-
-const DIRECTOR_PRESENCE_STORAGE_KEY = 'sheetcal_director_presence_v1';
 
 function isExternalOffsiteTask(task: Task): boolean {
   const text = `${task.title || ''} ${task.description || ''}`;
@@ -298,6 +304,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onToggleStatus,
   onUpdateStatus,
   onOpenCalendarDate,
+  onPresenceStaticSync,
 }) => {
   // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
   const [nowDate, setNowDate] = useState<Date>(() => getInternetNow());
@@ -330,6 +337,16 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [rangeMode, setRangeMode] = useState<BoardRangeMode>('upcoming');
   const [layoutMode, setLayoutMode] = useState<BoardLayoutMode>('grouped_by_day');
   const [focusDate, setFocusDate] = useState<string>(() => formatLocalDateYMD());
+  const prevTodayStrRef = useRef<string>(todayStr);
+
+  // Automatically advance focusDate at midnight when a TV screen is left running 24/7
+  useEffect(() => {
+    if (prevTodayStrRef.current !== todayStr) {
+      const oldToday = prevTodayStrRef.current;
+      prevTodayStrRef.current = todayStr;
+      setFocusDate((prevFocus) => (prevFocus === oldToday ? todayStr : prevFocus));
+    }
+  }, [todayStr]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [selectedPriority, setSelectedPriority] = useState<string>('all');
@@ -472,14 +489,26 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             const endT = prevTask.time > item.time ? prevTask.time : item.time;
             nextTimeRange = `${startT} - ${endT}`;
           }
+          const prevMs = prevTask.updatedAt ? new Date(prevTask.updatedAt).getTime() : 0;
+          const itemMs = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+          const newerStatus =
+            itemMs > prevMs
+              ? item.status
+              : prevMs > itemMs
+              ? prevTask.status
+              : prevTask.status === TaskStatus.IN_PROGRESS || item.status === TaskStatus.IN_PROGRESS
+              ? TaskStatus.IN_PROGRESS
+              : prevTask.status;
           filteredBase[existingIdx] = {
             task: {
               ...prevTask,
+              status: newerStatus,
+              updatedAt: itemMs > prevMs ? item.updatedAt : prevTask.updatedAt,
               endDate: mergedEnd > prevTask.date ? mergedEnd : prevTask.endDate,
               description:
-                prevTask.description || item.description
-                  ? prevTask.description || item.description
-                  : '',
+                itemMs > prevMs && item.description
+                  ? item.description
+                  : prevTask.description || item.description || '',
             },
             timeRangeLabel: nextTimeRange,
           };
@@ -767,77 +796,73 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
   }, [tasks, todayStr, nowHM]);
 
-  const [directorPresence, setDirectorPresence] = useState<DirectorPresenceState>(() => {
-    try {
-      const raw = window.localStorage.getItem(DIRECTOR_PRESENCE_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const validModes: DirectorPresenceMode[] = [
-          'auto',
-          'in_office',
-          'in_meeting',
-          'offsite',
-          'unavailable',
-        ];
-        if (parsed && validModes.includes(parsed.mode)) {
-          return {
-            mode: parsed.mode,
-            customNote: typeof parsed.customNote === 'string' ? parsed.customNote : '',
-            updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
-          };
-        }
-      }
-    } catch {
-      // ignore storage errors
-    }
-    return { mode: 'auto', customNote: '', updatedAt: '' };
-  });
+  const [directorPresence, setDirectorPresence] = useState<DirectorPresenceState>(() =>
+    readLocalDirectorPresence()
+  );
 
   const [isEditingPresenceNote, setIsEditingPresenceNote] = useState<boolean>(false);
   const [presenceNoteDraft, setPresenceNoteDraft] = useState<string>('');
   const lastPresenceWriteMsRef = useRef<number>(0);
 
-  const persistPresenceLocally = useCallback((nextState: DirectorPresenceState) => {
-    try {
-      window.localStorage.setItem(DIRECTOR_PRESENCE_STORAGE_KEY, JSON.stringify(nextState));
-    } catch {
-      // ignore storage errors
-    }
+  const applyIncomingPresence = useCallback((remote: DirectorPresenceState | null | undefined) => {
+    if (!remote || typeof remote.mode !== 'string') return;
+    setDirectorPresence((prev) => {
+      if (
+        remote.updatedAt &&
+        remote.updatedAt === prev.updatedAt &&
+        remote.mode === prev.mode &&
+        (remote.customNote || '') === prev.customNote
+      ) {
+        return prev;
+      }
+      if (prev.updatedAt && remote.updatedAt) {
+        const prevMs = new Date(prev.updatedAt).getTime();
+        const remMs = new Date(remote.updatedAt).getTime();
+        if (Number.isFinite(prevMs) && Number.isFinite(remMs) && remMs < prevMs) {
+          return prev;
+        }
+      }
+      const merged: DirectorPresenceState = {
+        mode: remote.mode,
+        customNote: typeof remote.customNote === 'string' ? remote.customNote : '',
+        updatedAt: typeof remote.updatedAt === 'string' ? remote.updatedAt : '',
+      };
+      writeLocalDirectorPresence(merged);
+      return merged;
+    });
   }, []);
+
+  // Instant Real-Time Presence Subscription (WebSocket + HDMI BroadcastChannel + Storage + GAS #SCMETA#)
+  useEffect(() => {
+    const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
+      if (ev.type === 'sync:init' && ev.presence) {
+        applyIncomingPresence(ev.presence);
+      } else if (ev.type === 'presence:updated' && ev.presence) {
+        if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+        applyIncomingPresence(ev.presence);
+      }
+    });
+    return () => unsubscribeRealtime();
+  }, [applyIncomingPresence]);
 
   useEffect(() => {
     let cancelled = false;
 
     const pullDirectorPresence = async () => {
-      if (Date.now() - lastPresenceWriteMsRef.current < 2500) return;
+      if (Date.now() - lastPresenceWriteMsRef.current < 1500) return;
       try {
         const res = await fetch('/api/collab/director-presence', {
           method: 'GET',
           headers: { Accept: 'application/json' },
         });
-        if (!res.ok || cancelled) return;
+        const ct = res.headers.get('content-type') || '';
+        if (!res.ok || !ct.includes('application/json') || cancelled) return;
         const data = await res.json();
         const remote = data?.presence;
         if (!remote || typeof remote.mode !== 'string') return;
-        setDirectorPresence((prev) => {
-          if (
-            remote.updatedAt &&
-            remote.updatedAt === prev.updatedAt &&
-            remote.mode === prev.mode &&
-            (remote.customNote || '') === prev.customNote
-          ) {
-            return prev;
-          }
-          const merged: DirectorPresenceState = {
-            mode: remote.mode as DirectorPresenceMode,
-            customNote: typeof remote.customNote === 'string' ? remote.customNote : '',
-            updatedAt: typeof remote.updatedAt === 'string' ? remote.updatedAt : '',
-          };
-          persistPresenceLocally(merged);
-          return merged;
-        });
+        applyIncomingPresence(remote as DirectorPresenceState);
       } catch {
-        // silent fallback to local state when offline
+        // silent fallback to local/GAS state when offline or static host
       }
     };
 
@@ -849,27 +874,33 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', pullDirectorPresence);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', pullDirectorPresence);
     };
-  }, [persistPresenceLocally]);
+  }, [applyIncomingPresence]);
 
   const updateDirectorPresence = useCallback(
     async (nextMode: DirectorPresenceMode, nextCustomNote?: string) => {
       lastPresenceWriteMsRef.current = Date.now();
       const resolvedNote =
-        nextCustomNote !== undefined ? nextCustomNote.trim().slice(0, 160) : directorPresence.customNote;
+        nextCustomNote !== undefined
+          ? nextCustomNote.trim().slice(0, 160)
+          : directorPresence.customNote;
       const optimistic: DirectorPresenceState = {
         mode: nextMode,
         customNote: resolvedNote,
         updatedAt: new Date().toISOString(),
       };
       setDirectorPresence(optimistic);
-      persistPresenceLocally(optimistic);
+      // Broadcast immediately in 0ms across HDMI / multi-tab windows on the same device
+      broadcastLocalPresenceChange(optimistic);
 
+      let serverSaved = false;
       try {
         const res = await fetch('/api/collab/director-presence', {
           method: 'POST',
@@ -877,29 +908,38 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           body: JSON.stringify({
             mode: nextMode,
             customNote: resolvedNote,
+            clientOriginId: getClientTabId(),
           }),
         });
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          serverSaved = true;
           const data = await res.json();
           if (data?.presence) {
             const confirmed: DirectorPresenceState = {
               mode: data.presence.mode as DirectorPresenceMode,
               customNote:
-                typeof data.presence.customNote === 'string' ? data.presence.customNote : resolvedNote,
+                typeof data.presence.customNote === 'string'
+                  ? data.presence.customNote
+                  : resolvedNote,
               updatedAt:
                 typeof data.presence.updatedAt === 'string'
                   ? data.presence.updatedAt
                   : optimistic.updatedAt,
             };
             setDirectorPresence(confirmed);
-            persistPresenceLocally(confirmed);
+            writeLocalDirectorPresence(confirmed);
           }
         }
       } catch {
-        // keep optimistic local state
+        serverSaved = false;
+      }
+
+      if (!serverSaved) {
+        onPresenceStaticSync?.();
       }
     },
-    [directorPresence.customNote, persistPresenceLocally]
+    [directorPresence.customNote, onPresenceStaticSync]
   );
 
   const handleCycleTaskStatus = useCallback(
@@ -1131,7 +1171,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     const afternoonItems = shouldSplitPeriods
       ? group.items.filter((entry) => (entry.task.time || '00:00') >= '12:00')
       : [];
-    const isNowMorning = nowHM < '12:00';
 
     const renderTaskRow = (
       entry: DayGroupEntry['items'][number],
@@ -1410,86 +1449,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       );
     };
 
-    const renderLiveTimeMarker = () => {
-      const markerStatusText = todayTasksSummary.inProgressTask
-        ? `กำลังดำเนินการ: ${todayTasksSummary.inProgressTask.time} น. — ${todayTasksSummary.inProgressTask.title}`
-        : todayTasksSummary.nextUpcoming
-        ? `ภารกิจถัดไป เวลา ${todayTasksSummary.nextUpcoming.time} น.${
-            todayTasksSummary.nextCountdownLabel
-              ? ` (${todayTasksSummary.nextCountdownLabel})`
-              : ''
-          }`
-        : group.items.length > 0
-        ? 'ผ่านกำหนดการตามเวลาของวันนี้แล้ว'
-        : 'ไม่มีนัดหมายในขณะนี้ — ว่างปฏิบัติราชการ';
-
-      return (
-        <div
-          key={`live-time-marker-${group.date}`}
-          className={`px-6 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-5 ${
-            isNavyGold
-              ? 'bg-amber-400/10 text-amber-200'
-              : isDarkDisplay
-              ? 'bg-sky-500/10 text-sky-200'
-              : isEmeraldExec
-              ? 'bg-emerald-50/85 text-emerald-900'
-              : 'bg-indigo-50/75 text-indigo-950'
-          }`}
-        >
-          <div className="w-36 sm:w-44 shrink-0 flex items-center gap-2">
-            <Clock
-              className={`h-4 w-4 shrink-0 ${
-                isNavyGold
-                  ? 'text-amber-300'
-                  : isDarkDisplay
-                  ? 'text-sky-300'
-                  : isEmeraldExec
-                  ? 'text-emerald-700'
-                  : 'text-indigo-600'
-              }`}
-            />
-            <span
-              className={`font-sans tabular-nums font-extrabold whitespace-nowrap ${
-                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
-              }`}
-            >
-              ขณะนี้ {nowHM} น.
-            </span>
-          </div>
-
-          <div className="flex-1 min-w-0 flex items-center gap-3">
-            <div
-              aria-hidden="true"
-              className={`h-px flex-1 min-w-[24px] ${
-                isNavyGold
-                  ? 'bg-amber-400/45'
-                  : isDarkDisplay
-                  ? 'bg-sky-400/40'
-                  : isEmeraldExec
-                  ? 'bg-emerald-400/70'
-                  : 'bg-indigo-300/80'
-              }`}
-            />
-            <span
-              className={`font-semibold truncate ${
-                isLargeText ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
-              } ${
-                isNavyGold
-                  ? 'text-amber-100'
-                  : isDarkDisplay
-                  ? 'text-sky-100'
-                  : isEmeraldExec
-                  ? 'text-emerald-800'
-                  : 'text-indigo-800'
-              }`}
-            >
-              {markerStatusText}
-            </span>
-          </div>
-        </div>
-      );
-    };
-
     const renderPeriodSubHeader = (
       period: 'morning' | 'afternoon',
       periodItems: DayGroupEntry['items']
@@ -1581,57 +1540,29 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       period: 'morning' | 'afternoon',
       periodItems: DayGroupEntry['items']
     ) => {
-      const showLiveMarkerHere =
-        isTodayGroup &&
-        ((period === 'morning' && isNowMorning) ||
-          (period === 'afternoon' && !isNowMorning));
-
       if (periodItems.length === 0) {
         return (
-          <>
-            {showLiveMarkerHere && renderLiveTimeMarker()}
-            <div
-              key={`empty-period-${group.date}-${period}`}
-              className={`px-6 py-3.5 flex items-center gap-5 ${
-                isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
-              } ${isDarkDisplay ? 'text-slate-400' : 'text-slate-500'}`}
-            >
-              <div className="w-36 sm:w-44 shrink-0 font-sans tabular-nums font-semibold opacity-75">
-                {period === 'morning' ? '08:30 – 12:00 น.' : '13:00 – 16:30 น.'}
-              </div>
-              <div className="font-medium">
-                {period === 'morning'
-                  ? 'ไม่มีนัดหมายในช่วงเช้า — ว่างปฏิบัติราชการ'
-                  : 'ไม่มีนัดหมายในช่วงบ่าย — ว่างปฏิบัติราชการ'}
-              </div>
+          <div
+            key={`empty-period-${group.date}-${period}`}
+            className={`px-6 py-3.5 flex items-center gap-5 ${
+              isLargeText ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
+            } ${isDarkDisplay ? 'text-slate-400' : 'text-slate-500'}`}
+          >
+            <div className="w-36 sm:w-44 shrink-0 font-sans tabular-nums font-semibold opacity-75">
+              {period === 'morning' ? '08:30 – 12:00 น.' : '13:00 – 16:30 น.'}
             </div>
-          </>
+            <div className="font-medium">
+              {period === 'morning'
+                ? 'ไม่มีนัดหมายในช่วงเช้า — ว่างปฏิบัติราชการ'
+                : 'ไม่มีนัดหมายในช่วงบ่าย — ว่างปฏิบัติราชการ'}
+            </div>
+          </div>
         );
       }
 
-      if (!showLiveMarkerHere) {
-        return periodItems.map((entry, idx) =>
-          renderTaskRow(entry, `${period}-${idx}`)
-        );
-      }
-
-      const nodes: React.ReactNode[] = [];
-      let markerInserted = false;
-
-      periodItems.forEach((entry, idx) => {
-        const itemTime = entry.task.time || '00:00';
-        if (!markerInserted && itemTime > nowHM) {
-          nodes.push(renderLiveTimeMarker());
-          markerInserted = true;
-        }
-        nodes.push(renderTaskRow(entry, `${period}-${idx}`));
-      });
-
-      if (!markerInserted) {
-        nodes.push(renderLiveTimeMarker());
-      }
-
-      return nodes;
+      return periodItems.map((entry, idx) =>
+        renderTaskRow(entry, `${period}-${idx}`)
+      );
     };
 
     return (

@@ -1,4 +1,6 @@
 import express from 'express';
+import { createServer as createHttpServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
@@ -1465,13 +1467,141 @@ async function purgeAllLineRichMenus(
 
 async function startServer() {
   const app = express();
+  const httpServer = createHttpServer(app);
+  const wss = new WebSocketServer({ noServer: true });
+  const wsClients = new Set<WebSocket>();
   const PORT = 3000;
+
+  httpServer.on('upgrade', (request, socket, head) => {
+    try {
+      const reqUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+      if (reqUrl.pathname === '/api/collab/ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      }
+    } catch {
+      socket.destroy();
+    }
+  });
+
+  function broadcastRealtimeEvent(payload: Record<string, unknown>) {
+    if (wsClients.size === 0) return;
+    const serialized = JSON.stringify(payload);
+    for (const client of wsClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(serialized);
+        } catch {
+          // Ignore transient socket write error
+        }
+      }
+    }
+  }
+
+  function updateAllSharedWorkspaces(
+    primaryId: string,
+    nextState: CollaborativeWorkspaceState
+  ) {
+    sharedWorkspaces.set(primaryId, nextState);
+    sharedWorkspaces.set('sheetcal-team-clean', nextState);
+    sharedWorkspaces.set('team-default', nextState);
+    for (const existingKey of Array.from(sharedWorkspaces.keys())) {
+      if (existingKey !== primaryId) {
+        sharedWorkspaces.set(existingKey, {
+          ...nextState,
+          workspaceId: existingKey,
+        });
+      }
+    }
+  }
+
+  wss.on('connection', (socket, req) => {
+    wsClients.add(socket);
+    let requestedWsId = 'sheetcal-team-clean';
+    try {
+      const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      const qWs = (parsedUrl.searchParams.get('workspace') || '').trim();
+      if (qWs) requestedWsId = qWs;
+    } catch {
+      // Default workspace
+    }
+
+    const sendInitState = (wsId: string) => {
+      const state =
+        sharedWorkspaces.get(wsId) ||
+        sharedWorkspaces.get('sheetcal-team-clean') ||
+        sharedWorkspaces.get('team-default') ||
+        Array.from(sharedWorkspaces.values())[0] ||
+        null;
+      if (socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(
+            JSON.stringify({
+              type: 'sync:init',
+              workspace: state,
+              presence: runtimeDirectorPresence,
+              deletedTaskIds: Array.from(persistedDeletedTaskIds),
+              deletedCategoryIds: Array.from(persistedDeletedCategoryIds),
+            })
+          );
+        } catch {
+          // Ignore
+        }
+      }
+    };
+
+    sendInitState(requestedWsId);
+
+    socket.on('message', (rawMsg) => {
+      try {
+        const msg = JSON.parse(String(rawMsg || '{}')) as Record<string, unknown>;
+        if (msg.type === 'ping' && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+        } else if (msg.type === 'request:sync') {
+          const targetId =
+            typeof msg.workspaceId === 'string' && msg.workspaceId.trim()
+              ? msg.workspaceId.trim()
+              : requestedWsId;
+          sendInitState(targetId);
+        }
+      } catch {
+        // Ignore invalid client frame
+      }
+    });
+
+    socket.on('close', () => {
+      wsClients.delete(socket);
+    });
+    socket.on('error', () => {
+      wsClients.delete(socket);
+    });
+  });
+
+  // Server-side WebSocket keepalive ping every 25s so Smart TVs & Cloud Run proxies never drop idle presentation screens
+  setInterval(() => {
+    for (const client of wsClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.ping();
+        } catch {
+          wsClients.delete(client);
+        }
+      } else if (client.readyState !== WebSocket.CONNECTING) {
+        wsClients.delete(client);
+      }
+    }
+  }, 25000);
 
   app.use(express.json({ limit: '5mb' }));
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      wsClients: wsClients.size,
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // Enable CORS on /api/collab/* so external portals (including Google Apps Script Web App) can sync directly
@@ -1563,11 +1693,22 @@ async function startServer() {
           if (cleanDelCats) {
             metaObj.dc = cleanDelCats;
           }
+          const recentDelTasks = Array.from(deletedTaskIds).slice(-80);
+          if (recentDelTasks.length > 0) {
+            metaObj.dt = recentDelTasks;
+          }
+          if (runtimeDirectorPresence.updatedAt) {
+            metaObj.dp = runtimeDirectorPresence;
+          }
           if (cleanMembers) metaObj.m = cleanMembers;
-          // Ensure row 0 updatedAt is at least effectiveCu so Google Apps Script sync_tasks (even v2.7) always saves updated #SCMETA#
+          // Ensure row 0 updatedAt is at least max(effectiveCu, dp.updatedAt) so Google Apps Script sync_tasks (even v2.7) always saves updated #SCMETA#
           const curTaskMs = t.updatedAt ? new Date(String(t.updatedAt)).getTime() : 0;
-          if (cleanCats && effectiveCu > curTaskMs) {
-            nextUpdatedAt = new Date(effectiveCu).toISOString();
+          const dpMs = runtimeDirectorPresence.updatedAt
+            ? new Date(runtimeDirectorPresence.updatedAt).getTime()
+            : 0;
+          const maxMetaMs = Math.max(cleanCats ? effectiveCu : 0, dpMs);
+          if (maxMetaMs > curTaskMs) {
+            nextUpdatedAt = new Date(maxMetaMs).toISOString();
           }
         }
         const encodedSource =
@@ -1587,11 +1728,26 @@ async function startServer() {
     categories?: unknown[];
     categoriesUpdatedAt?: number;
     deletedCategoryIds?: string[];
+    deletedTaskIds?: string[];
+    directorPresence?: {
+      mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
+      customNote: string;
+      updatedAt: string;
+    };
     teamMembers?: unknown[];
   } {
     let extractedCategories: unknown[] | undefined;
     let bestCategoriesCu = -1;
     let extractedDeletedCatIds: string[] | undefined;
+    let extractedDeletedTaskIds: string[] | undefined;
+    let extractedDirectorPresence:
+      | {
+          mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
+          customNote: string;
+          updatedAt: string;
+        }
+      | undefined;
+    let bestDpMs = -1;
     let extractedMembers: unknown[] | undefined;
     const cleaned: Record<string, unknown>[] = [];
 
@@ -1611,6 +1767,12 @@ async function startServer() {
               c?: unknown[];
               cu?: number;
               dc?: string[];
+              dt?: string[];
+              dp?: {
+                mode?: string;
+                customNote?: string;
+                updatedAt?: string;
+              };
               m?: unknown[];
             };
             if (typeof parsedMeta.d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsedMeta.d)) {
@@ -1630,6 +1792,31 @@ async function startServer() {
                 if (Array.isArray(parsedMeta.dc)) {
                   extractedDeletedCatIds = parsedMeta.dc.map((x) => String(x || '').trim()).filter(Boolean);
                 }
+              }
+            }
+            if (Array.isArray(parsedMeta.dt) && parsedMeta.dt.length > 0) {
+              extractedDeletedTaskIds = Array.from(
+                new Set([
+                  ...(extractedDeletedTaskIds || []),
+                  ...parsedMeta.dt.map((x) => String(x || '').trim()).filter(Boolean),
+                ])
+              );
+            }
+            if (parsedMeta.dp && typeof parsedMeta.dp === 'object') {
+              const dpMode = String(parsedMeta.dp.mode || '');
+              const validModes = ['auto', 'in_office', 'in_meeting', 'offsite', 'unavailable'];
+              const dpUpdated = String(parsedMeta.dp.updatedAt || '');
+              const dpMs = dpUpdated ? new Date(dpUpdated).getTime() : 0;
+              if (validModes.includes(dpMode) && dpMs > bestDpMs) {
+                bestDpMs = dpMs;
+                extractedDirectorPresence = {
+                  mode: dpMode as 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable',
+                  customNote:
+                    typeof parsedMeta.dp.customNote === 'string'
+                      ? parsedMeta.dp.customNote.slice(0, 160)
+                      : '',
+                  updatedAt: dpUpdated,
+                };
               }
             }
             if (Array.isArray(parsedMeta.m) && parsedMeta.m.length > 0 && !extractedMembers) {
@@ -1679,6 +1866,8 @@ async function startServer() {
       categories: extractedCategories,
       categoriesUpdatedAt: bestCategoriesCu > 0 ? bestCategoriesCu : undefined,
       deletedCategoryIds: extractedDeletedCatIds,
+      deletedTaskIds: extractedDeletedTaskIds,
+      directorPresence: extractedDirectorPresence,
       teamMembers: extractedMembers,
     };
   }
@@ -1763,9 +1952,11 @@ async function startServer() {
       const existingDone = existingDup.status === 'completed';
       const candidateDone = candidate.status === 'completed';
 
+      // Always respect newer updatedAt timestamps first so toggling Completed -> Pending/In Progress updates immediately
       const preferCandidate =
-        (candidateDone && !existingDone) ||
-        (candidateDone === existingDone && candidateTime >= existingTime);
+        candidateTime !== existingTime
+          ? candidateTime > existingTime
+          : (candidateDone && !existingDone) || candidateTime >= existingTime;
 
       const winner = preferCandidate ? candidate : existingDup;
       const loser = preferCandidate ? existingDup : candidate;
@@ -1948,7 +2139,7 @@ async function startServer() {
   });
 
   app.post('/api/collab/director-presence', (req, res) => {
-    const { mode, customNote } = req.body || {};
+    const { mode, customNote, clientOriginId } = req.body || {};
     const validModes = ['auto', 'in_office', 'in_meeting', 'offsite', 'unavailable'];
     if (typeof mode === 'string' && validModes.includes(mode)) {
       runtimeDirectorPresence.mode = mode as typeof runtimeDirectorPresence.mode;
@@ -1958,6 +2149,20 @@ async function startServer() {
     }
     runtimeDirectorPresence.updatedAt = new Date().toISOString();
     savePersistedWorkspaceCache();
+
+    // Immediately push presence update over WebSocket to all TV / Presentation screens
+    broadcastRealtimeEvent({
+      type: 'presence:updated',
+      clientOriginId: typeof clientOriginId === 'string' ? clientOriginId : undefined,
+      presence: runtimeDirectorPresence,
+    });
+
+    // Also persist updated presence into Google Apps Script #SCMETA# asynchronously for static-hosted TVs
+    const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+    if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+      syncWorkspaceToGasSafely(cleanGas, 'sheetcal-team-clean').catch(() => {});
+    }
+
     res.json({
       ok: true,
       presence: runtimeDirectorPresence,
@@ -2001,6 +2206,25 @@ async function startServer() {
           }
           if (Array.isArray(gasData.tasks)) {
             const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
+            if (Array.isArray(decodedGas.deletedTaskIds)) {
+              for (const dtid of decodedGas.deletedTaskIds) {
+                if (dtid) deletedTaskIds.add(dtid);
+              }
+            }
+            if (decodedGas.directorPresence && decodedGas.directorPresence.updatedAt) {
+              const curDpMs = runtimeDirectorPresence.updatedAt
+                ? new Date(runtimeDirectorPresence.updatedAt).getTime()
+                : 0;
+              const remDpMs = new Date(decodedGas.directorPresence.updatedAt).getTime();
+              if (remDpMs > curDpMs) {
+                runtimeDirectorPresence = decodedGas.directorPresence;
+                savePersistedWorkspaceCache();
+                broadcastRealtimeEvent({
+                  type: 'presence:updated',
+                  presence: runtimeDirectorPresence,
+                });
+              }
+            }
             const currentTasks = Array.isArray(state?.tasks) ? state.tasks : [];
             const gasTaskIds = new Set<string>();
             for (const gt of decodedGas.tasks) {
@@ -2068,10 +2292,14 @@ async function startServer() {
                 categoriesUpdatedAt: Math.max(localCu, remoteCu),
                 teamMembers: nextMembers,
               };
-              sharedWorkspaces.set(workspaceId, state);
-              sharedWorkspaces.set('sheetcal-team-clean', state);
-              sharedWorkspaces.set('team-default', state);
+              updateAllSharedWorkspaces(workspaceId, state);
               savePersistedWorkspaceCache();
+              broadcastRealtimeEvent({
+                type: 'workspace:updated',
+                workspace: state,
+                deletedTaskIds: Array.from(deletedTaskIds),
+                deletedCategoryIds: Array.from(deletedCategoryIds),
+              });
             }
 
             if (hasLocalTaskMissingInGas || hasDeletedTaskStillInGas || hasCategoryDiffWithGas) {
@@ -2120,6 +2348,7 @@ async function startServer() {
     const workspaceId = String(req.params.workspaceId || 'sheetcal-team-clean').trim();
     const {
       action,
+      clientOriginId,
       task,
       taskId,
       deletedTaskId,
@@ -2265,10 +2494,17 @@ async function startServer() {
       categoriesUpdatedAt: nextCategoriesUpdatedAt,
       teamMembers: nextTeamMembers,
     };
-    sharedWorkspaces.set(workspaceId, nextState);
-    sharedWorkspaces.set('sheetcal-team-clean', nextState);
-    sharedWorkspaces.set('team-default', nextState);
+    updateAllSharedWorkspaces(workspaceId, nextState);
     savePersistedWorkspaceCache();
+
+    // Immediately broadcast workspace update over WebSocket to all connected TV / Presentation / Team screens
+    broadcastRealtimeEvent({
+      type: 'workspace:updated',
+      clientOriginId: typeof clientOriginId === 'string' ? clientOriginId : undefined,
+      workspace: nextState,
+      deletedTaskIds: Array.from(deletedTaskIds),
+      deletedCategoryIds: Array.from(deletedCategoryIds),
+    });
 
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
@@ -2360,9 +2596,14 @@ async function startServer() {
           categoriesUpdatedAt: effectiveCu,
           teamMembers: effectiveMembers,
         };
-        sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
-        sharedWorkspaces.set('team-default', updatedWs);
+        updateAllSharedWorkspaces('sheetcal-team-clean', updatedWs);
         savePersistedWorkspaceCache();
+        broadcastRealtimeEvent({
+          type: 'workspace:updated',
+          workspace: updatedWs,
+          deletedTaskIds: Array.from(deletedTaskIds),
+          deletedCategoryIds: Array.from(deletedCategoryIds),
+        });
 
         const syncRes = await syncWorkspaceToGasSafely(targetGasUrl, 'sheetcal-team-clean');
         res.json({
@@ -2961,9 +3202,14 @@ async function startServer() {
             categories: existingWs?.categories || [],
             teamMembers: existingWs?.teamMembers || [],
           };
-          sharedWorkspaces.set('sheetcal-team-clean', nextWsState);
-          sharedWorkspaces.set('team-default', nextWsState);
+          updateAllSharedWorkspaces('sheetcal-team-clean', nextWsState);
           savePersistedWorkspaceCache();
+          broadcastRealtimeEvent({
+            type: 'workspace:updated',
+            workspace: nextWsState,
+            deletedTaskIds: Array.from(deletedTaskIds),
+            deletedCategoryIds: Array.from(deletedCategoryIds),
+          });
 
           const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
           if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
@@ -4553,7 +4799,111 @@ async function startServer() {
     }
   }, 20000);
 
-  app.listen(PORT, '0.0.0.0', () => {
+  // Real-time External Change Watcher: When at least 1 TV / WebSocket client is connected,
+  // check Google Apps Script every 3.5s so edits from LINE Group or GitHub Pages also push instantly to TV screens!
+  setInterval(async () => {
+    try {
+      if (wsClients.size === 0) return;
+      const nowMs = Date.now();
+      if (nowMs - lastWorkspacePostMs < 3500 || nowMs - lastGasPullMs < 3500) return;
+      const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+      if (!cleanGas.startsWith('https://script.google.com/macros/s/')) return;
+      lastGasPullMs = nowMs;
+
+      const gasRes = await fetch(`${cleanGas}?action=get_tasks&format=json`, {
+        method: 'GET',
+        redirect: 'follow',
+      });
+      if (!gasRes.ok) return;
+      const gasData = (await gasRes.json().catch(() => ({}))) as {
+        tasks?: unknown[];
+        categories?: unknown[];
+        teamMembers?: unknown[];
+        detectedGroupId?: string;
+      };
+      if (!Array.isArray(gasData.tasks)) return;
+
+      const decodedGas = extractGasMetadataFromTasks(gasData.tasks);
+      if (Array.isArray(decodedGas.deletedTaskIds)) {
+        for (const dtid of decodedGas.deletedTaskIds) {
+          if (dtid) deletedTaskIds.add(dtid);
+        }
+      }
+      if (decodedGas.directorPresence && decodedGas.directorPresence.updatedAt) {
+        const curDpMs = runtimeDirectorPresence.updatedAt
+          ? new Date(runtimeDirectorPresence.updatedAt).getTime()
+          : 0;
+        const remDpMs = new Date(decodedGas.directorPresence.updatedAt).getTime();
+        if (remDpMs > curDpMs) {
+          runtimeDirectorPresence = decodedGas.directorPresence;
+          savePersistedWorkspaceCache();
+          broadcastRealtimeEvent({
+            type: 'presence:updated',
+            presence: runtimeDirectorPresence,
+          });
+        }
+      }
+
+      const state =
+        sharedWorkspaces.get('sheetcal-team-clean') ||
+        sharedWorkspaces.get('team-default') ||
+        Array.from(sharedWorkspaces.values())[0];
+      const currentTasks = Array.isArray(state?.tasks) ? state.tasks : [];
+      const validLocalTasks = currentTasks.filter((lt) => {
+        if (!lt || typeof lt !== 'object') return false;
+        const lid = String((lt as Record<string, unknown>).id || '').trim();
+        return Boolean(lid && !deletedTaskIds.has(lid));
+      });
+      const merged = mergeTasksById(validLocalTasks, decodedGas.tasks);
+      const currentCats = Array.isArray(state?.categories) ? state.categories : [];
+      const localCu = state?.categoriesUpdatedAt || 0;
+      const remoteCu = decodedGas.categoriesUpdatedAt || 0;
+      if (remoteCu > localCu && Array.isArray(decodedGas.deletedCategoryIds)) {
+        for (const dcid of decodedGas.deletedCategoryIds) {
+          if (dcid) deletedCategoryIds.add(dcid);
+        }
+      }
+      const remoteCats =
+        Array.isArray(gasData.categories) && gasData.categories.length > 0
+          ? gasData.categories
+          : decodedGas.categories || [];
+      const mergedCats =
+        remoteCu > localCu
+          ? mergeCategoriesById(remoteCats, currentCats)
+          : mergeCategoriesById(currentCats, remoteCats);
+      const nextCats = mergedCats.length > 0 ? mergedCats : currentCats;
+
+      if (
+        !state ||
+        JSON.stringify(merged) !== JSON.stringify(currentTasks) ||
+        JSON.stringify(nextCats) !== JSON.stringify(currentCats)
+      ) {
+        const nextState: CollaborativeWorkspaceState = {
+          workspaceId: state?.workspaceId || 'sheetcal-team-clean',
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'Google Apps Script Live Sync',
+          spreadsheetId: state?.spreadsheetId,
+          spreadsheetUrl: state?.spreadsheetUrl,
+          tasks: merged,
+          categories: nextCats,
+          categoriesUpdatedAt: Math.max(localCu, remoteCu),
+          teamMembers: state?.teamMembers || decodedGas.teamMembers || [],
+        };
+        updateAllSharedWorkspaces('sheetcal-team-clean', nextState);
+        savePersistedWorkspaceCache();
+        broadcastRealtimeEvent({
+          type: 'workspace:updated',
+          workspace: nextState,
+          deletedTaskIds: Array.from(deletedTaskIds),
+          deletedCategoryIds: Array.from(deletedCategoryIds),
+        });
+      }
+    } catch {
+      // Ignore transient watcher error
+    }
+  }, 3500);
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }

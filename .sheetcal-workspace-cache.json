@@ -18,7 +18,14 @@
     "includeOpenAppButton": true,
     "cardFontSize": "md",
     "cardTitleWeight": "bold",
-    "cardLineSpacing": "relaxed"
+    "cardLineSpacing": "relaxed",
+    "allowAddTaskFromLine": true,
+    "allowAddTaskFromLineUpdatedAt": ""
+  },
+  "runtimeDirectorPresence": {
+    "mode": "auto",
+    "customNote": "",
+    "updatedAt": "2026-11-15T23:55:13.159Z"
   },
   "deletedTaskIds": [
     "task-1793454460187",
@@ -35,10 +42,11 @@
     "task-1793630653911",
     "task-1793666764668"
   ],
+  "deletedCategoryIds": [],
   "workspaces": {
     "sheetcal-team-clean": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-06T02:02:14.236Z",
+      "updatedAt": "2026-11-15T23:41:17.496Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -55,7 +63,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-05T05:36:20.121Z"
+          "updatedAt": "2026-11-15T23:38:12.241Z"
         },
         {
           "id": "task-1793856779434",
@@ -79,11 +87,11 @@
           "time": "09:00",
           "categoryId": "cat-urgent",
           "priority": "high",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-06T01:59:03.608Z"
+          "updatedAt": "2026-11-06T06:42:25.365Z"
         },
         {
           "id": "task-1793857869240",
@@ -93,11 +101,39 @@
           "time": "13:30",
           "categoryId": "cat-work",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-06T06:37:44.534Z"
+        },
+        {
+          "id": "task-1793947340438",
+          "title": "เดินทางไปราชการ จ.ร้อยเอ็ด",
+          "description": "เข้าอบรมโครงการอบรมเพื่อเพิ่มฯ จ.ร้อยเอ็ด",
+          "date": "2026-11-06",
+          "time": "14:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-06T12:12:59.826Z"
+        },
+        {
+          "id": "task-1793947582422",
+          "title": "อบรม",
+          "description": "",
+          "date": "2026-11-06",
+          "time": "15:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
           "remindMinutesBefore": 1,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-05T05:51:09.240Z"
+          "updatedAt": "2026-11-13T05:44:11.221Z"
         },
         {
           "id": "task-1793753826610",
@@ -107,17 +143,157 @@
           "time": "08:30",
           "categoryId": "cat-1793753857364",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 60,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:57:49.617Z",
+          "updatedAt": "2026-11-12T09:50:08.689Z",
           "endDate": "2026-11-12"
         },
         {
+          "id": "task-1794394699800",
+          "title": "ไปตึก SUN",
+          "description": "สถานที่: ถนน วิภาวดีรังสิต\nเพื่อดูและตรวจสอบกรณีการย้ายสถานที่ของหน่วยงานกองทุน",
+          "date": "2026-11-12",
+          "time": "10:00",
+          "categoryId": "cat-1793753857364",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-12T06:27:53.586Z"
+        },
+        {
+          "id": "task-1794394781152",
+          "title": "ประชุมยกร่าง ประกาศกระทรวงแรงงาน ประกาศกระทรวงมหาดไทย",
+          "description": "สถานที่: ห้องประชุมเทียน อัชกุล ชั้น 10 กรมการจัดหางาน\nรายละเอียดตามมติที่ประชุม คบต",
+          "date": "2026-11-13",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "completed",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-13T05:40:40.109Z"
+        },
+        {
+          "id": "task-1794125434463",
+          "title": "ผอ.สปร ขอเข้าพบ",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nผอ ขอเข้าพบเพื่อแสดงความยินดี",
+          "date": "2026-11-13",
+          "time": "10:30",
+          "categoryId": "cat-client",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-13T05:40:43.872Z"
+        },
+        {
+          "id": "task-1794548954641",
+          "title": "บรีฟ ประชุมคณะอนุฯ NGOs",
+          "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
+          "date": "2026-11-13",
+          "time": "16:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-14T08:28:54.281Z"
+        },
+        {
+          "id": "task-1794753073064-7axr",
+          "title": "ผอ.ไปบรีฟ อธิบดี เรื่อง UNHCR",
+          "description": "สถานที่: ชั้น 9 ห้องอธิบดี\nผอ.ไปบรีฟ อธิบดี UNHCR",
+          "date": "2026-11-16",
+          "time": "09:00",
+          "categoryId": "cat-1794758710264",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T23:37:51.334Z"
+        },
+        {
+          "id": "task-1794370586553",
+          "title": "ประชุมยกร่าง ประกาศกระทรวงแรงงาน ประกาศกระทรวงมหาดไทย",
+          "description": "สถานที่: ห้องประชุมเทียน อัชกุล ชั้น 10 กรมการจัดหางาน\nรายละเอียดตามมติที่ประชุม คบต",
+          "date": "2026-11-16",
+          "time": "13:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T23:36:53.809Z"
+        },
+        {
+          "id": "task-1794366721379",
+          "title": "ประชุมคณะอนุฯ NGOs",
+          "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
+          "date": "2026-11-17",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T08:49:53.434Z"
+        },
+        {
+          "id": "task-1794539935868",
+          "title": "บริษัท จันวาณิชย์ จำกัด  ขอเข้าพบแสดงความยินดี",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nบริษัท จันวาณิชย์ จำกัด  ขอเข้าพบแสดงความยินดีในโอกาสรับตำแหน่ง",
+          "date": "2026-11-17",
+          "time": "13:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-13T03:18:55.868Z"
+        },
+        {
+          "id": "task-1793953738046",
+          "title": "คุณวรรณา  บริษัท ซีแวลู จำกัด (มหาชน) เข้าพบแสดงความยินดี",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nคุณวรรณา เสริมสุวรณสุข ผู้บริหารระดับสูง  บริษัท ซีแวลู จำกัด (มหาชน) เข้าพบแสดงความยินดี รับตำแหน่งผู้อำนวยการสำนักบริหารแรงงานต่างด้าว",
+          "date": "2026-11-17",
+          "time": "14:00",
+          "categoryId": "cat-client",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-12T06:31:47.620Z"
+        },
+        {
+          "id": "task-1794367050105",
+          "title": "สมาคมผูัประกอบการนำคนต่างด้าวมาทำงานฯ (สนต.) ขอเข้าพบ",
+          "description": "คณะสนต.จำนวน 15 คน ขอเข้าพบเพื่อรับทราบนโยบายการบริหารจัดการแรงงานต่างด้าว",
+          "date": "2026-11-18",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-11T03:17:30.105Z"
+        },
+        {
           "id": "task-1793753960813",
-          "title": "ประชุมอนุฯ กลั่นกรอง ณ.ห้องเทียนอัชกุล ชั้น 10",
-          "description": "ประชุมอนุฯ กลั่นกรอง งานกองทุน",
+          "title": "ประชุมอนุฯ กลั่นกรอง",
+          "description": "สถานที่: ห้องเทียนอัชกุล ชั้น 10 กรมการจัดหางาน\nประชุมอนุฯ กลั่นกรอง งานกองทุน",
           "date": "2026-11-23",
           "time": "09:30",
           "categoryId": "cat-work",
@@ -126,12 +302,12 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:59:20.813Z"
+          "updatedAt": "2026-11-12T04:18:43.107Z"
         },
         {
           "id": "task-1793754010524",
-          "title": "เดินทางไปลาว",
-          "description": "เดินทางไปลาว 3 วัน",
+          "title": "เดินทางไปประเทศลาว",
+          "description": "สถานที่: สาธารณรัฐประชาธิปไตยประชาชนลาว (สปป. ลาว)\nเดินทางไป สาธารณรัฐประชาธิปไตยประชาชนลาว (สปป. ลาว) เพื่อศึกษาดูงาน",
           "date": "2026-11-24",
           "time": "08:30",
           "categoryId": "cat-1793753857364",
@@ -140,13 +316,13 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:00:10.524Z",
+          "updatedAt": "2026-11-15T08:32:09.697Z",
           "endDate": "2026-11-26"
         },
         {
           "id": "task-1793754078147",
-          "title": "ประชุมคณะกรรมการ กองทุน ณ.ห้องเทียนอัชกุล ชั้น 10",
-          "description": "ประชุมคณะกรรมการ กองทุน ณ.ห้องเทียนอัชกุล ชั้น 10",
+          "title": "ประชุมคณะกรรมการ กองทุน",
+          "description": "สถานที่: ห้องเทียนอัชกุล ชั้น 10 กรมการจัดหางาน\nประชุมคณะกรรมการ กองทุน",
           "date": "2026-12-01",
           "time": "09:30",
           "categoryId": "cat-work",
@@ -155,12 +331,12 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:01:18.147Z"
+          "updatedAt": "2026-11-12T04:20:56.098Z"
         },
         {
           "id": "task-1793848902405",
           "title": "เดินทางไปประเทศญี่ปุ่น 8-10 ธันวาคม 69",
-          "description": "เข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569 ณ.กรุงโตเกียว ประเทศญี่ปุ่น",
+          "description": "สถานที่: กรุงโตเกียว ประเทศญี่ปุ่น\nเข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569",
           "date": "2026-12-08",
           "time": "08:00",
           "categoryId": "cat-1793753857364",
@@ -169,7 +345,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-05T03:21:42.405Z",
+          "updatedAt": "2026-11-12T04:21:15.372Z",
           "endDate": "2026-12-10"
         }
       ],
@@ -197,8 +373,15 @@
           "name": "ดูงาน",
           "color": "#f906d8",
           "description": ""
+        },
+        {
+          "id": "cat-1794758710264",
+          "name": "บรีฟข้อมูล",
+          "color": "#D97706",
+          "description": ""
         }
       ],
+      "categoriesUpdatedAt": 1794785892241,
       "teamMembers": [
         {
           "id": "member-owner",
@@ -214,7 +397,7 @@
     },
     "team-default": {
       "workspaceId": "sheetcal-team-clean",
-      "updatedAt": "2026-11-06T02:02:14.236Z",
+      "updatedAt": "2026-11-15T23:41:17.496Z",
       "updatedBy": "adjeabna@gmail.com",
       "spreadsheetId": "1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc",
       "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc/edit",
@@ -231,7 +414,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-05T05:36:20.121Z"
+          "updatedAt": "2026-11-15T23:38:12.241Z"
         },
         {
           "id": "task-1793856779434",
@@ -255,11 +438,11 @@
           "time": "09:00",
           "categoryId": "cat-urgent",
           "priority": "high",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 30,
           "lineNotified": true,
           "source": "web",
-          "updatedAt": "2026-11-06T01:59:03.608Z"
+          "updatedAt": "2026-11-06T06:42:25.365Z"
         },
         {
           "id": "task-1793857869240",
@@ -269,11 +452,39 @@
           "time": "13:30",
           "categoryId": "cat-work",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-06T06:37:44.534Z"
+        },
+        {
+          "id": "task-1793947340438",
+          "title": "เดินทางไปราชการ จ.ร้อยเอ็ด",
+          "description": "เข้าอบรมโครงการอบรมเพื่อเพิ่มฯ จ.ร้อยเอ็ด",
+          "date": "2026-11-06",
+          "time": "14:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-06T12:12:59.826Z"
+        },
+        {
+          "id": "task-1793947582422",
+          "title": "อบรม",
+          "description": "",
+          "date": "2026-11-06",
+          "time": "15:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
           "remindMinutesBefore": 1,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-05T05:51:09.240Z"
+          "updatedAt": "2026-11-13T05:44:11.221Z"
         },
         {
           "id": "task-1793753826610",
@@ -283,17 +494,157 @@
           "time": "08:30",
           "categoryId": "cat-1793753857364",
           "priority": "medium",
-          "status": "pending",
+          "status": "completed",
           "remindMinutesBefore": 60,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:57:49.617Z",
+          "updatedAt": "2026-11-12T09:50:08.689Z",
           "endDate": "2026-11-12"
         },
         {
+          "id": "task-1794394699800",
+          "title": "ไปตึก SUN",
+          "description": "สถานที่: ถนน วิภาวดีรังสิต\nเพื่อดูและตรวจสอบกรณีการย้ายสถานที่ของหน่วยงานกองทุน",
+          "date": "2026-11-12",
+          "time": "10:00",
+          "categoryId": "cat-1793753857364",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-12T06:27:53.586Z"
+        },
+        {
+          "id": "task-1794394781152",
+          "title": "ประชุมยกร่าง ประกาศกระทรวงแรงงาน ประกาศกระทรวงมหาดไทย",
+          "description": "สถานที่: ห้องประชุมเทียน อัชกุล ชั้น 10 กรมการจัดหางาน\nรายละเอียดตามมติที่ประชุม คบต",
+          "date": "2026-11-13",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "completed",
+          "remindMinutesBefore": 30,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-13T05:40:40.109Z"
+        },
+        {
+          "id": "task-1794125434463",
+          "title": "ผอ.สปร ขอเข้าพบ",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nผอ ขอเข้าพบเพื่อแสดงความยินดี",
+          "date": "2026-11-13",
+          "time": "10:30",
+          "categoryId": "cat-client",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-13T05:40:43.872Z"
+        },
+        {
+          "id": "task-1794548954641",
+          "title": "บรีฟ ประชุมคณะอนุฯ NGOs",
+          "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
+          "date": "2026-11-13",
+          "time": "16:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "completed",
+          "remindMinutesBefore": 1,
+          "lineNotified": true,
+          "source": "web",
+          "updatedAt": "2026-11-14T08:28:54.281Z"
+        },
+        {
+          "id": "task-1794753073064-7axr",
+          "title": "ผอ.ไปบรีฟ อธิบดี เรื่อง UNHCR",
+          "description": "สถานที่: ชั้น 9 ห้องอธิบดี\nผอ.ไปบรีฟ อธิบดี UNHCR",
+          "date": "2026-11-16",
+          "time": "09:00",
+          "categoryId": "cat-1794758710264",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T23:37:51.334Z"
+        },
+        {
+          "id": "task-1794370586553",
+          "title": "ประชุมยกร่าง ประกาศกระทรวงแรงงาน ประกาศกระทรวงมหาดไทย",
+          "description": "สถานที่: ห้องประชุมเทียน อัชกุล ชั้น 10 กรมการจัดหางาน\nรายละเอียดตามมติที่ประชุม คบต",
+          "date": "2026-11-16",
+          "time": "13:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T23:36:53.809Z"
+        },
+        {
+          "id": "task-1794366721379",
+          "title": "ประชุมคณะอนุฯ NGOs",
+          "description": "คณะอนุกรรมการพิจารณาฯ ครั้งที่ 5/2569",
+          "date": "2026-11-17",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "high",
+          "status": "pending",
+          "remindMinutesBefore": 30,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-15T08:49:53.434Z"
+        },
+        {
+          "id": "task-1794539935868",
+          "title": "บริษัท จันวาณิชย์ จำกัด  ขอเข้าพบแสดงความยินดี",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nบริษัท จันวาณิชย์ จำกัด  ขอเข้าพบแสดงความยินดีในโอกาสรับตำแหน่ง",
+          "date": "2026-11-17",
+          "time": "13:00",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-13T03:18:55.868Z"
+        },
+        {
+          "id": "task-1793953738046",
+          "title": "คุณวรรณา  บริษัท ซีแวลู จำกัด (มหาชน) เข้าพบแสดงความยินดี",
+          "description": "สถานที่: ห้องผู้อำนวยการสำนักบริหารแรงงานต่างด้าว\nคุณวรรณา เสริมสุวรณสุข ผู้บริหารระดับสูง  บริษัท ซีแวลู จำกัด (มหาชน) เข้าพบแสดงความยินดี รับตำแหน่งผู้อำนวยการสำนักบริหารแรงงานต่างด้าว",
+          "date": "2026-11-17",
+          "time": "14:00",
+          "categoryId": "cat-client",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 15,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-12T06:31:47.620Z"
+        },
+        {
+          "id": "task-1794367050105",
+          "title": "สมาคมผูัประกอบการนำคนต่างด้าวมาทำงานฯ (สนต.) ขอเข้าพบ",
+          "description": "คณะสนต.จำนวน 15 คน ขอเข้าพบเพื่อรับทราบนโยบายการบริหารจัดการแรงงานต่างด้าว",
+          "date": "2026-11-18",
+          "time": "09:30",
+          "categoryId": "cat-work",
+          "priority": "medium",
+          "status": "pending",
+          "remindMinutesBefore": 1,
+          "lineNotified": false,
+          "source": "web",
+          "updatedAt": "2026-11-11T03:17:30.105Z"
+        },
+        {
           "id": "task-1793753960813",
-          "title": "ประชุมอนุฯ กลั่นกรอง ณ.ห้องเทียนอัชกุล ชั้น 10",
-          "description": "ประชุมอนุฯ กลั่นกรอง งานกองทุน",
+          "title": "ประชุมอนุฯ กลั่นกรอง",
+          "description": "สถานที่: ห้องเทียนอัชกุล ชั้น 10 กรมการจัดหางาน\nประชุมอนุฯ กลั่นกรอง งานกองทุน",
           "date": "2026-11-23",
           "time": "09:30",
           "categoryId": "cat-work",
@@ -302,12 +653,12 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T00:59:20.813Z"
+          "updatedAt": "2026-11-12T04:18:43.107Z"
         },
         {
           "id": "task-1793754010524",
-          "title": "เดินทางไปลาว",
-          "description": "เดินทางไปลาว 3 วัน",
+          "title": "เดินทางไปประเทศลาว",
+          "description": "สถานที่: สาธารณรัฐประชาธิปไตยประชาชนลาว (สปป. ลาว)\nเดินทางไป สาธารณรัฐประชาธิปไตยประชาชนลาว (สปป. ลาว) เพื่อศึกษาดูงาน",
           "date": "2026-11-24",
           "time": "08:30",
           "categoryId": "cat-1793753857364",
@@ -316,13 +667,13 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:00:10.524Z",
+          "updatedAt": "2026-11-15T08:32:09.697Z",
           "endDate": "2026-11-26"
         },
         {
           "id": "task-1793754078147",
-          "title": "ประชุมคณะกรรมการ กองทุน ณ.ห้องเทียนอัชกุล ชั้น 10",
-          "description": "ประชุมคณะกรรมการ กองทุน ณ.ห้องเทียนอัชกุล ชั้น 10",
+          "title": "ประชุมคณะกรรมการ กองทุน",
+          "description": "สถานที่: ห้องเทียนอัชกุล ชั้น 10 กรมการจัดหางาน\nประชุมคณะกรรมการ กองทุน",
           "date": "2026-12-01",
           "time": "09:30",
           "categoryId": "cat-work",
@@ -331,12 +682,12 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-04T01:01:18.147Z"
+          "updatedAt": "2026-11-12T04:20:56.098Z"
         },
         {
           "id": "task-1793848902405",
           "title": "เดินทางไปประเทศญี่ปุ่น 8-10 ธันวาคม 69",
-          "description": "เข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569 ณ.กรุงโตเกียว ประเทศญี่ปุ่น",
+          "description": "สถานที่: กรุงโตเกียว ประเทศญี่ปุ่น\nเข้าร่วมการประชุมการตรวจคนเข้าเมืองแห่งกรุงโตเกียว ครั้งที่ 6 ( The Sixth Immigration Forum) และกิจกรรมภายใต้การประชุม ระหว่างวันที่ 8 - 10 ธันวาคม 2569",
           "date": "2026-12-08",
           "time": "08:00",
           "categoryId": "cat-1793753857364",
@@ -345,7 +696,7 @@
           "remindMinutesBefore": 30,
           "lineNotified": false,
           "source": "web",
-          "updatedAt": "2026-11-05T03:21:42.405Z",
+          "updatedAt": "2026-11-12T04:21:15.372Z",
           "endDate": "2026-12-10"
         }
       ],
@@ -373,8 +724,15 @@
           "name": "ดูงาน",
           "color": "#f906d8",
           "description": ""
+        },
+        {
+          "id": "cat-1794758710264",
+          "name": "บรีฟข้อมูล",
+          "color": "#D97706",
+          "description": ""
         }
       ],
+      "categoriesUpdatedAt": 1794785892241,
       "teamMembers": [
         {
           "id": "member-owner",
