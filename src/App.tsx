@@ -89,6 +89,7 @@ import { ROBOT_MASCOT_DATA_URI } from './assets/robotMascotDataUri';
 import {
   BoardRemoteSettings,
   broadcastLocalWorkspaceChange,
+  emitRemoteBoardSettingsFromGas,
   emitRemotePresenceFromGas,
   getClientTabId,
   publishCategoriesDelta,
@@ -1039,6 +1040,14 @@ export default function App() {
           if (localPresence.updatedAt && dpMs > 0) {
             metaObj.dp = localPresence;
           }
+          const localBoardCfg = readLocalBoardSettings();
+          const rawBsMs = localBoardCfg?.updatedAt
+            ? new Date(localBoardCfg.updatedAt).getTime()
+            : 0;
+          const bsMs = Number.isFinite(rawBsMs) ? rawBsMs : 0;
+          if (localBoardCfg && localBoardCfg.updatedAt && bsMs > 0) {
+            metaObj.bs = localBoardCfg;
+          }
           const recentDelTaskArr = Array.from(deletedTaskIdsRef.current).slice(-120);
           if (recentDelTaskArr.length > 0) {
             metaObj.dt = recentDelTaskArr;
@@ -1053,7 +1062,8 @@ export default function App() {
             Date.now(),
             curMs + 1,
             Array.isArray(categoriesList) && categoriesList.length > 0 ? effectiveCu : 0,
-            dpMs
+            dpMs,
+            bsMs
           );
           nextUpdatedAt = new Date(maxMetaMs).toISOString();
           if (delCatArr.length > 0) {
@@ -1087,6 +1097,7 @@ export default function App() {
       deletedCategoryIds?: string[];
       deletedTaskIds?: string[];
       directorPresence?: DirectorPresenceState;
+      boardSettings?: BoardRemoteSettings;
       teamMembers?: TeamMember[];
     } => {
       let extractedCategories: Category[] | undefined;
@@ -1095,6 +1106,8 @@ export default function App() {
       let extractedDeletedTaskIds: string[] | undefined;
       let extractedDirectorPresence: DirectorPresenceState | undefined;
       let bestDpMs = -1;
+      let extractedBoardSettings: BoardRemoteSettings | undefined;
+      let bestBsMs = -1;
       let extractedMembers: TeamMember[] | undefined;
       const cleaned: Task[] = [];
 
@@ -1116,6 +1129,7 @@ export default function App() {
                 dc?: string[];
                 dt?: string[];
                 dp?: DirectorPresenceState;
+                bs?: BoardRemoteSettings;
                 m?: TeamMember[];
               };
               if (
@@ -1158,6 +1172,13 @@ export default function App() {
                 if (Number.isFinite(dpMs) && dpMs > bestDpMs) {
                   bestDpMs = dpMs;
                   extractedDirectorPresence = parsedMeta.dp;
+                }
+              }
+              if (parsedMeta.bs && typeof parsedMeta.bs === 'object' && parsedMeta.bs.updatedAt) {
+                const bsMs = new Date(parsedMeta.bs.updatedAt).getTime();
+                if (Number.isFinite(bsMs) && bsMs > bestBsMs) {
+                  bestBsMs = bsMs;
+                  extractedBoardSettings = parsedMeta.bs;
                 }
               }
               if (
@@ -1212,6 +1233,7 @@ export default function App() {
         deletedCategoryIds: extractedDeletedCatIds,
         deletedTaskIds: extractedDeletedTaskIds,
         directorPresence: extractedDirectorPresence,
+        boardSettings: extractedBoardSettings,
         teamMembers: extractedMembers,
       };
     },
@@ -2818,6 +2840,9 @@ export default function App() {
                   if (decodedWs.directorPresence) {
                     emitRemotePresenceFromGas(decodedWs.directorPresence);
                   }
+                  if (decodedWs.boardSettings) {
+                    emitRemoteBoardSettingsFromGas(decodedWs.boardSettings);
+                  }
                   cleanWsTasks = decodedWs.tasks.filter(
                     (t) => !isTaskPurgedOrDeleted(t, delSet)
                   );
@@ -3031,6 +3056,9 @@ export default function App() {
             }
             if (decodedGas.directorPresence) {
               emitRemotePresenceFromGas(decodedGas.directorPresence);
+            }
+            if (decodedGas.boardSettings) {
+              emitRemoteBoardSettingsFromGas(decodedGas.boardSettings);
             }
 
             const remoteGasCats =
@@ -3352,6 +3380,9 @@ export default function App() {
         }
         if (decoded.directorPresence) {
           emitRemotePresenceFromGas(decoded.directorPresence);
+        }
+        if (decoded.boardSettings) {
+          emitRemoteBoardSettingsFromGas(decoded.boardSettings);
         }
         const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
         let newlyDiscarded: string[] = [];

@@ -1429,6 +1429,97 @@ export function resolveTeamCalendarAppUrl(options?: {
   }
 }
 
+export function resolvePublicTvShareUrl(options?: {
+  customPublicUrl?: string;
+  workspaceId?: string;
+  spreadsheetId?: string;
+}): string {
+  const isLoginGatedOrInvalidForTv = (u: string) =>
+    !u ||
+    !/^https?:\/\//i.test(u) ||
+    /^https:\/\/ais-(dev|pre)-/i.test(u) ||
+    u.includes('docs.google.com/spreadsheets') ||
+    u.includes('calendar.google.com') ||
+    u.includes('script.google.com/macros/s/') ||
+    u.includes('AKfycby0gvQ') ||
+    u.includes('AKfycbxIf9k');
+
+  let savedTvBase = '';
+  let savedLinePublicUrl = '';
+  let savedWorkspaceId = 'sheetcal-team-clean';
+  let savedSheetId = '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc';
+  const defaultPublicGas =
+    'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
+  let effectiveGas = defaultPublicGas;
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      savedTvBase = (localStorage.getItem('sheetcal_public_tv_base_url_v1') || '').trim();
+      const rawLineCfg = localStorage.getItem('sheetcal_line_settings_v2');
+      if (rawLineCfg) {
+        const parsedCfg = JSON.parse(rawLineCfg);
+        if (typeof parsedCfg?.publicCalendarUrl === 'string') {
+          savedLinePublicUrl = parsedCfg.publicCalendarUrl.trim();
+        }
+      }
+      const ws = (localStorage.getItem('sheetcal_workspace_id_v3_clean') || '').trim();
+      if (ws) savedWorkspaceId = ws;
+
+      const rawMeta = localStorage.getItem('sheetcal_sheet_meta_v1');
+      if (rawMeta) {
+        const parsedMeta = JSON.parse(rawMeta);
+        if (typeof parsedMeta?.spreadsheetId === 'string' && parsedMeta.spreadsheetId.trim()) {
+          savedSheetId = parsedMeta.spreadsheetId.trim();
+        }
+      }
+
+      const savedGas = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+      if (
+        savedGas.startsWith('https://script.google.com/macros/s/') &&
+        !savedGas.includes('AKfycby0gvQ') &&
+        !savedGas.includes('AKfycbxIf9k')
+      ) {
+        effectiveGas = savedGas;
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+
+  const explicitCustom = (options?.customPublicUrl || '').trim();
+  const currentBrowserUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+
+  let rawBase = 'https://naiadminna.github.io/Lakha/';
+  if (!isLoginGatedOrInvalidForTv(explicitCustom)) {
+    rawBase = explicitCustom;
+  } else if (!isLoginGatedOrInvalidForTv(savedTvBase)) {
+    rawBase = savedTvBase;
+  } else if (!isLoginGatedOrInvalidForTv(currentBrowserUrl)) {
+    rawBase = currentBrowserUrl;
+  } else if (!isLoginGatedOrInvalidForTv(savedLinePublicUrl)) {
+    rawBase = savedLinePublicUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(rawBase);
+    parsedUrl.searchParams.delete('view');
+    parsedUrl.searchParams.delete('date');
+    parsedUrl.searchParams.delete('openExternalBrowser');
+    parsedUrl.searchParams.delete('_v');
+    parsedUrl.searchParams.set('section', 'schedule');
+    parsedUrl.searchParams.set('tv', '1');
+    parsedUrl.searchParams.set('workspace', options?.workspaceId?.trim() || savedWorkspaceId);
+    parsedUrl.searchParams.set('sheet', options?.spreadsheetId?.trim() || savedSheetId);
+    parsedUrl.searchParams.set('gas', effectiveGas);
+    return parsedUrl.toString();
+  } catch {
+    return `https://naiadminna.github.io/Lakha/?section=schedule&tv=1&workspace=${encodeURIComponent(
+      savedWorkspaceId
+    )}&sheet=${encodeURIComponent(savedSheetId)}&gas=${encodeURIComponent(effectiveGas)}`;
+  }
+}
+
 export function isLineQuotaLimitError(rawError: unknown): boolean {
   const text = String(rawError || '').toLowerCase();
   return (

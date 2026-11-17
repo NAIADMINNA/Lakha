@@ -49,6 +49,7 @@ import {
   getTaskDurationDays,
   inferTaskEndDate,
   isTaskActiveOnDate,
+  resolvePublicTvShareUrl,
 } from '../services/lineCommandParser';
 import { ROBOT_MASCOT_DATA_URI } from '../assets/robotMascotDataUri';
 import {
@@ -64,6 +65,7 @@ import {
   broadcastBoardSettingsChange,
   broadcastLocalPresenceChange,
   getClientTabId,
+  isRealtimeWebSocketConnected,
   pushFullStateToTvScreens,
   readLocalBoardSettings,
   readLocalDirectorPresence,
@@ -534,7 +536,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [tvRemoteActionFeedback, setTvRemoteActionFeedback] = useState<
     'idle' | 'pushed' | 'reloaded' | 'pinging'
   >('idle');
+  const [isRealtimeBusConnected, setIsRealtimeBusConnected] = useState<boolean>(() =>
+    isRealtimeWebSocketConnected()
+  );
   const tvIdleTimerRef = useRef<number | null>(null);
+  const boardStaticSyncTimerRef = useRef<number | null>(null);
   const loadedScriptHashRef = useRef<string>('');
 
   const wakeTvControls = useCallback(() => {
@@ -668,6 +674,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       updatedAt: nextIso,
     };
     broadcastBoardSettingsChange(nextSettings);
+    if (!isTvLaunchEnv && onPresenceStaticSync) {
+      if (boardStaticSyncTimerRef.current !== null) {
+        window.clearTimeout(boardStaticSyncTimerRef.current);
+      }
+      boardStaticSyncTimerRef.current = window.setTimeout(() => {
+        boardStaticSyncTimerRef.current = null;
+        onPresenceStaticSync();
+      }, 1500);
+    }
   }, [
     boardTheme,
     expandMultiDay,
@@ -675,7 +690,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     isAutoScroll,
     isLargeText,
     isTvAutoFit,
+    isTvLaunchEnv,
     layoutMode,
+    onPresenceStaticSync,
     rangeMode,
     selectedCategoryId,
     selectedPriority,
@@ -740,26 +757,64 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     });
   };
 
-  const tvDirectShareUrl = useMemo(() => {
+  const isAiStudioLoginGatedOrigin = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return /^https:\/\/ais-(dev|pre)-/i.test(window.location.origin);
+  }, []);
+
+  const [customPublicTvBaseUrl, setCustomPublicTvBaseUrl] = useState<string>(() => {
     if (typeof window === 'undefined') return '';
     try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('section', 'schedule');
-      url.searchParams.set('tv', '1');
-      url.searchParams.delete('_v');
-      return url.toString();
+      return (window.localStorage.getItem('sheetcal_public_tv_base_url_v1') || '').trim();
     } catch {
       return '';
     }
-  }, []);
+  });
+  const [tvBaseUrlError, setTvBaseUrlError] = useState<string>('');
+
+  const handleSaveCustomPublicTvBaseUrl = (rawVal: string) => {
+    const trimmed = rawVal.trim();
+    setCustomPublicTvBaseUrl(rawVal);
+    if (!trimmed) {
+      setTvBaseUrlError('');
+      try {
+        window.localStorage.removeItem('sheetcal_public_tv_base_url_v1');
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+    if (/^https:\/\/ais-(dev|pre)-/i.test(trimmed)) {
+      setTvBaseUrlError(
+        'ลิงก์ ais-dev / ais-pre เป็นลิงก์ภายใน AI Studio ซึ่งบังคับล็อกอิน Google — ระบบจะใช้ลิงก์เว็บสาธารณะให้แทนอัตโนมัติครับ'
+      );
+      return;
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      setTvBaseUrlError('กรุณาวางลิงก์เว็บสาธารณะที่ขึ้นต้นด้วย https://');
+      return;
+    }
+    setTvBaseUrlError('');
+    try {
+      const cleanBase = trimmed.split('?')[0];
+      window.localStorage.setItem('sheetcal_public_tv_base_url_v1', cleanBase);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const tvDirectShareUrl = useMemo(() => {
+    return resolvePublicTvShareUrl({
+      customPublicUrl: customPublicTvBaseUrl,
+    });
+  }, [customPublicTvBaseUrl]);
 
   const handleCopyTvLink = async () => {
     try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('section', 'schedule');
-      url.searchParams.set('tv', '1');
-      url.searchParams.set('_v', String(Date.now()));
-      await navigator.clipboard.writeText(url.toString());
+      const publicTvUrl = resolvePublicTvShareUrl({
+        customPublicUrl: customPublicTvBaseUrl,
+      });
+      await navigator.clipboard.writeText(publicTvUrl);
       setCopiedTvLink(true);
       window.setTimeout(() => setCopiedTvLink(false), 2600);
     } catch {
@@ -1291,7 +1346,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   // Instant Real-Time Presence & Board Settings Subscription (WebSocket + Global Cloud Bus + HDMI BroadcastChannel)
   useEffect(() => {
     const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
-      if (ev.type === 'sync:init' && ev.presence) {
+      if (ev.type === 'connection:status') {
+        setIsRealtimeBusConnected(ev.connected);
+      } else if (ev.type === 'sync:init' && ev.presence) {
         applyIncomingPresence(ev.presence);
       } else if (ev.type === 'presence:updated' && ev.presence) {
         if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
@@ -1328,13 +1385,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
         if (isPresentationMode || isTvLaunchEnv) {
           const metrics = computeTvStageMetrics();
-          announceTvScreenPresence({
-            label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
-            viewportW: metrics.viewportW,
-            viewportH: metrics.viewportH,
-            scale: metrics.scale,
-            isPresentationMode: true,
-          });
+          announceTvScreenPresence(
+            {
+              label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
+              viewportW: metrics.viewportW,
+              viewportH: metrics.viewportH,
+              scale: metrics.scale,
+              isPresentationMode: true,
+              isDedicatedTvUrl: isTvLaunchEnv,
+            },
+            true
+          );
         }
       } else if (ev.type === 'tv:pong' && ev.screen) {
         if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
@@ -1369,36 +1430,40 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   // Announce TV screen presence while in Presentation Mode & auto-request initial sync on ?tv=1 boot
   useEffect(() => {
     if (!isPresentationMode && !isTvLaunchEnv) return;
-    const sendPresence = () => {
+    const sendPresence = (includeHttpFallback: boolean) => {
       const m = computeTvStageMetrics();
-      announceTvScreenPresence({
-        label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
-        viewportW: m.viewportW,
-        viewportH: m.viewportH,
-        scale: m.scale,
-        isPresentationMode: true,
-      });
+      announceTvScreenPresence(
+        {
+          label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
+          viewportW: m.viewportW,
+          viewportH: m.viewportH,
+          scale: m.scale,
+          isPresentationMode: true,
+          isDedicatedTvUrl: isTvLaunchEnv,
+        },
+        includeHttpFallback
+      );
     };
-    sendPresence();
+    sendPresence(true);
     const syncReqTimer = isTvLaunchEnv
       ? window.setTimeout(() => {
           sendTvRemoteCommand('force_sync_request');
-        }, 650)
+        }, 700)
       : null;
-    const heartbeatId = window.setInterval(sendPresence, 28000);
+    const heartbeatId = window.setInterval(() => sendPresence(false), 25000);
     return () => {
       if (syncReqTimer !== null) window.clearTimeout(syncReqTimer);
       window.clearInterval(heartbeatId);
     };
   }, [isPresentationMode, isTvLaunchEnv]);
 
-  // Prune stale TV heartbeats (>75s) on Admin view & ping connected TVs when opening the modal or mounting
+  // Prune stale TV heartbeats (>120s) on Admin view & ping connected TVs when opening the modal or mounting
   useEffect(() => {
     if (!isTvLaunchEnv) {
       requestConnectedTvPing();
     }
     const pruneId = window.setInterval(() => {
-      const cutoff = Date.now() - 75000;
+      const cutoff = Date.now() - 120000;
       setConnectedTvScreens((prev) => {
         let changed = false;
         const next: Record<string, TvScreenHeartbeat> = {};
@@ -3117,11 +3182,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                   type="button"
                   onClick={() => {
                     setIsTvRemoteModalOpen(true);
-                    requestConnectedTvPing();
+                    if (!isTvLaunchEnv) {
+                      requestConnectedTvPing();
+                    }
                   }}
                   title="เชื่อมต่อและควบคุมจอ TV แบบเรียลไทม์ (คนละเครื่องผ่าน Wi-Fi/อินเทอร์เน็ต หรือต่อสาย HDMI 2 จอ)"
                   className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                    activeTvScreenList.length > 0
+                    (isTvLaunchEnv && isRealtimeBusConnected) || activeTvScreenList.length > 0
                       ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs hover:bg-emerald-700'
                       : isNavyGold
                       ? 'bg-[#091526]/80 text-amber-200 border-amber-400/35 hover:border-amber-400/70'
@@ -3132,7 +3199,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 >
                   <Radio className="h-3.5 w-3.5" />
                   <span>
-                    {activeTvScreenList.length > 0
+                    {isTvLaunchEnv
+                      ? isRealtimeBusConnected
+                        ? 'รับสัญญาณ TV เรียลไทม์แล้ว'
+                        : 'กำลังเชื่อมสัญญาณ TV...'
+                      : activeTvScreenList.length > 0
                       ? `เชื่อมต่อจอ TV แล้ว (${activeTvScreenList.length})`
                       : 'เชื่อมต่อจอ TV เรียลไทม์'}
                   </span>
@@ -4284,7 +4355,58 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
 
             <div className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
-              {/* Active TV Status & Direct Remote Actions */}
+              {/* Dedicated TV Receiver Banner when opened on the Notebook/TV (?tv=1) */}
+              {isTvLaunchEnv && (
+                <div
+                  className={`rounded-xl border p-4 space-y-2.5 ${
+                    isRealtimeBusConnected
+                      ? 'bg-emerald-50 border-emerald-300'
+                      : 'bg-amber-50 border-amber-300'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                          isRealtimeBusConnected ? 'bg-emerald-600' : 'bg-amber-500'
+                        }`}
+                      />
+                      <span className="text-sm font-extrabold text-slate-900">
+                        {isRealtimeBusConnected
+                          ? 'เครื่องนี้คือ "หน้าจอรับสัญญาณ TV" — เชื่อมต่อช่องสัญญาณเรียลไทม์แล้ว'
+                          : 'เครื่องนี้คือ "หน้าจอรับสัญญาณ TV" — กำลังเชื่อมต่อช่องสัญญาณ...'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sendTvRemoteCommand('force_sync_request');
+                        setTvRemoteActionFeedback('pinging');
+                        window.setTimeout(() => {
+                          setTvRemoteActionFeedback((prev) =>
+                            prev === 'pinging' ? 'idle' : prev
+                          );
+                        }, 1800);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>
+                        {tvRemoteActionFeedback === 'pinging'
+                          ? 'กำลังดึงข้อมูลล่าสุด...'
+                          : 'ดึงข้อมูลล่าสุดจากแอดมิน'}
+                      </span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-700">
+                    ความละเอียดหน้าจอปัจจุบัน {tvStageMetrics.viewportW}×{tvStageMetrics.viewportH}{' '}
+                    (ปรับสัดส่วนอัตโนมัติ {Math.round(tvStageMetrics.scale * 100)}%) — สามารถปิดหน้าต่างนี้แล้วกด{' '}
+                    <strong>F11</strong> เพื่อฉายขึ้นทีวีได้เลย เมื่อเครื่องแอดมินแก้ไขงานหรือเปลี่ยนมุมมอง หน้าจอนี้จะอัปเดตตามอัตโนมัติ
+                  </p>
+                </div>
+              )}
+
+              {/* Active TV Status & Direct Remote Actions (for Admin Controller) */}
               <div
                 className={`rounded-xl border p-4 space-y-3 ${
                   activeTvScreenList.length > 0
@@ -4302,6 +4424,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     <span className="text-sm font-bold text-slate-900">
                       {activeTvScreenList.length > 0
                         ? `พบหน้าจอ TV เปิดรับสัญญาณเรียลไทม์อยู่ (${activeTvScreenList.length} จอ)`
+                        : isTvLaunchEnv
+                        ? 'หน้าจอ TV อื่นๆ ในระบบ (นอกเหนือจากเครื่องนี้)'
                         : 'รอการเปิดลิงก์สำหรับจอ TV บนเครื่องที่ต่อเข้าทีวี'}
                     </span>
                   </div>
@@ -4335,7 +4459,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                           {Math.round(scr.scale * 100)}% ·{' '}
                           {scr.transport === 'local_hdmi'
                             ? 'สาย HDMI ในเครื่อง (0 วินาที)'
-                            : 'คลาวด์ HTTPS (Port 443)'}
+                            : 'คลาวด์เรียลไทม์ (Port 443)'}
                         </span>
                       </div>
                     ))}
@@ -4394,6 +4518,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 <p className="text-xs text-slate-700 leading-relaxed">
                   เสียบสาย HDMI จากโน้ตบุ๊กเข้าทีวี (แนะนำกด <strong>Windows + P → เฉพาะหน้าจอที่สอง / Second screen only</strong> หรือ <strong>Extend</strong> เพื่อให้ภาพออกเต็มความละเอียดทีวีและไม่ติดขอบดำ) จากนั้นเปิดลิงก์ด้านล่างบนเบราว์เซอร์ของโน้ตบุ๊กและกด <strong>F11</strong> ระบบจะกันพักหน้าจออัตโนมัติและซิงก์กับคอมแอดมินผ่าน <strong>HTTPS (Port 443)</strong> ภายใน ~0.5–1.5 วินาที
                 </p>
+                {isAiStudioLoginGatedOrigin && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-[11px] text-emerald-950 leading-relaxed">
+                    <strong>ไม่ต้องล็อกอิน Google บนโน้ตบุ๊ก:</strong> ขณะนี้เครื่องแอดมินเปิดผ่านลิงก์ภายใน AI Studio (
+                    <code className="bg-white px-1 rounded font-mono">ais-dev / ais-pre</code>{' '}
+                    ซึ่งบังคับล็อกอิน Google) ระบบจึงสร้าง <strong>ลิงก์เว็บสาธารณะ</strong>{' '}
+                    ด้านล่างให้โดยอัตโนมัติ สามารถคัดลอกไปวางบน Chrome / Edge ของโน้ตบุ๊กที่ต่อทีวีได้ทันทีโดยไม่ต้องล็อกอินใดๆ ครับ
+                  </div>
+                )}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
                   <input
                     type="text"
@@ -4423,6 +4555,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       </>
                     )}
                   </button>
+                </div>
+                <div className="pt-1 space-y-1">
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    โดเมนเว็บสาธารณะที่ใช้เปิดบนจอ TV (เว้นว่างเพื่อใช้ค่าเริ่มต้น{' '}
+                    <code className="font-mono text-indigo-700">https://naiadminna.github.io/Lakha/</code>{' '}
+                    หรือวางลิงก์เว็บที่ Deploy เองแบบไม่ต้องล็อกอิน):
+                  </label>
+                  <input
+                    type="url"
+                    value={customPublicTvBaseUrl}
+                    onChange={(e) => handleSaveCustomPublicTvBaseUrl(e.target.value)}
+                    placeholder="https://naiadminna.github.io/Lakha/"
+                    className="w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-white/90 text-xs font-mono text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-indigo-400"
+                  />
+                  {tvBaseUrlError && (
+                    <p className="text-[11px] font-semibold text-amber-700">{tvBaseUrlError}</p>
+                  )}
                 </div>
               </div>
 
