@@ -87,11 +87,14 @@ import { TeamCollaborationView } from './components/TeamCollaborationView';
 import { ScheduleBoardView } from './components/ScheduleBoardView';
 import { ROBOT_MASCOT_DATA_URI } from './assets/robotMascotDataUri';
 import {
+  BoardRemoteSettings,
   broadcastLocalWorkspaceChange,
   emitRemotePresenceFromGas,
   getClientTabId,
   publishCategoriesDelta,
   publishTaskDelta,
+  pushFullStateToTvScreens,
+  readLocalBoardSettings,
   readLocalDirectorPresence,
   subscribeRealtimeEvents,
 } from './services/realtimeSync';
@@ -2481,6 +2484,7 @@ export default function App() {
         setTaskFilter('all');
         setCategoryFilter('all');
         setSearchQuery('');
+        publishTaskDelta({ upsertedTasks: [canonicalCreated], workspaceId });
 
         if (sheetMeta && accessToken && lineSettings.autoSyncOnLineCommand) {
           syncAllToConnectedSheet(
@@ -2522,9 +2526,13 @@ export default function App() {
             ? { ...t, status: TaskStatus.COMPLETED, updatedAt: new Date().toISOString() }
             : t
         );
+        const completedTarget = nextTasks.find((t) => t.id === targetId);
         tasksRef.current = nextTasks;
         setTasks(nextTasks);
         setLineLogs(nextLogs);
+        if (completedTarget) {
+          publishTaskDelta({ upsertedTasks: [completedTarget], workspaceId });
+        }
         if (sheetMeta && accessToken) {
           syncAllToConnectedSheet(
             nextTasks,
@@ -3200,7 +3208,13 @@ export default function App() {
   // Ensures TV Presentation screens update in <50ms (0ms on HDMI 2nd monitor) without re-emitting loops!
   useEffect(() => {
     const unsubscribeRealtime = subscribeRealtimeEvents((ev) => {
-      if (ev.type === 'connection:status' || ev.type === 'presence:updated' || ev.type === 'board:settings') {
+      if (
+        ev.type === 'connection:status' ||
+        ev.type === 'presence:updated' ||
+        ev.type === 'board:settings' ||
+        ev.type === 'tv:ping' ||
+        ev.type === 'tv:pong'
+      ) {
         if (ev.type !== 'connection:status') {
           lastRemoteRealtimeMsRef.current = Date.now();
         }
@@ -3208,6 +3222,42 @@ export default function App() {
       }
       // Skip echoes originating from this exact browser tab
       if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+
+      if (ev.type === 'tv:command') {
+        if (ev.action === 'force_sync_request') {
+          const urlParams = new URLSearchParams(window.location.search);
+          const isThisTabTv =
+            urlParams.get('tv') === '1' ||
+            urlParams.get('tv') === 'true' ||
+            urlParams.get('present') === '1';
+          if (!isThisTabTv && tasksRef.current.length > 0) {
+            const fallbackSettings: BoardRemoteSettings = readLocalBoardSettings() || {
+              rangeMode: 'upcoming',
+              layoutMode: 'grouped_by_day',
+              focusDate: formatLocalDateYMD(),
+              selectedCategoryId: 'all',
+              selectedPriority: 'all',
+              showCompleted: true,
+              expandMultiDay: false,
+              boardTheme: 'light',
+              isLargeText: true,
+              isAutoScroll: true,
+              tvAutoFit: true,
+              updatedAt: new Date().toISOString(),
+            };
+            pushFullStateToTvScreens({
+              tasks: tasksRef.current,
+              categories: categoriesRef.current,
+              categoriesUpdatedAt: categoriesUpdatedAtRef.current || Date.now(),
+              deletedTaskIds: Array.from(deletedTaskIdsRef.current),
+              presence: readLocalDirectorPresence(),
+              settings: fallbackSettings,
+            });
+          }
+        }
+        return;
+      }
+
       lastRemoteRealtimeMsRef.current = Date.now();
 
       if (ev.type === 'task:delta') {
@@ -5591,6 +5641,21 @@ export default function App() {
             onUpdateStatus={handleUpdateTaskStatus}
             onOpenCalendarDate={handleOpenDateInCalendar}
             onPresenceStaticSync={() => {
+              pushCollaborativeWorkspace(
+                tasksRef.current,
+                categoriesRef.current,
+                teamMembersRef.current
+              );
+            }}
+            onForcePushRealtimeToTv={(currentBoardSettings) => {
+              pushFullStateToTvScreens({
+                tasks: tasksRef.current,
+                categories: categoriesRef.current,
+                categoriesUpdatedAt: categoriesUpdatedAtRef.current || Date.now(),
+                deletedTaskIds: Array.from(deletedTaskIdsRef.current),
+                presence: readLocalDirectorPresence(),
+                settings: currentBoardSettings,
+              });
               pushCollaborativeWorkspace(
                 tasksRef.current,
                 categoriesRef.current,

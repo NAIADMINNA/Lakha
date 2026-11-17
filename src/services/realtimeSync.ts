@@ -2,8 +2,8 @@ import { Category, DirectorPresenceMode, DirectorPresenceState, Task, TeamMember
 
 export const DIRECTOR_PRESENCE_STORAGE_KEY = 'sheetcal_director_presence_v1';
 export const BOARD_SETTINGS_STORAGE_KEY = 'sheetcal_board_remote_settings_v1';
-const BROADCAST_CHANNEL_NAME = 'sheetcal_realtime_tv_v2';
-const LOCAL_SIGNAL_STORAGE_KEY = 'sheetcal_realtime_signal_v2';
+const BROADCAST_CHANNEL_NAME = 'sheetcal_realtime_tv_v3';
+const LOCAL_SIGNAL_STORAGE_KEY = 'sheetcal_realtime_signal_v3';
 const DEFAULT_GAS_SCRIPT_SEED =
   'AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg';
 
@@ -46,6 +46,19 @@ export interface RealtimeWorkspacePayload {
   categoriesUpdatedAt?: number;
   teamMembers?: TeamMember[];
 }
+
+export interface TvScreenHeartbeat {
+  tvClientId: string;
+  label: string;
+  viewportW: number;
+  viewportH: number;
+  scale: number;
+  isPresentationMode: boolean;
+  transport: 'local_hdmi' | 'cloud';
+  updatedAt: string;
+}
+
+export type TvRemoteCommandAction = 'reload' | 'enter_fullscreen' | 'force_sync_request';
 
 export type RealtimeSyncEvent =
   | {
@@ -94,6 +107,25 @@ export type RealtimeSyncEvent =
       settings: BoardRemoteSettings;
     }
   | {
+      type: 'tv:ping';
+      source: 'broadcast' | 'cloud';
+      clientOriginId?: string;
+      requestedAt: string;
+    }
+  | {
+      type: 'tv:pong';
+      source: 'broadcast' | 'cloud';
+      clientOriginId?: string;
+      screen: TvScreenHeartbeat;
+    }
+  | {
+      type: 'tv:command';
+      source: 'broadcast' | 'cloud';
+      clientOriginId?: string;
+      action: TvRemoteCommandAction;
+      issuedAt: string;
+    }
+  | {
       type: 'connection:status';
       connected: boolean;
     };
@@ -109,7 +141,10 @@ interface CloudRelayEnvelope {
     | 'categories:delta'
     | 'presence:updated'
     | 'board:settings'
-    | 'workspace:updated';
+    | 'workspace:updated'
+    | 'tv:ping'
+    | 'tv:pong'
+    | 'tv:command';
   payload: Record<string, unknown>;
 }
 
@@ -120,7 +155,9 @@ const seenEventOrder: string[] = [];
 let wsInstance: WebSocket | null = null;
 let localWsConnected = false;
 let mqttConnected = false;
-let ntfyConnected = false;
+let ntfyWsConnected = false;
+let ntfySseConnected = false;
+let ntfyHttpPollOk = false;
 let reconnectTimer: number | null = null;
 let heartbeatTimer: number | null = null;
 let reconnectAttempt = 0;
@@ -128,17 +165,27 @@ let activeWorkspaceId = 'sheetcal-team-clean';
 let initialized = false;
 let broadcastChannel: BroadcastChannel | null = null;
 
-// MQTT-over-WSS & Port-443 WSS Relay state
+// MQTT-over-WSS state
 let mqttSocket: WebSocket | null = null;
 let mqttPingTimer: number | null = null;
 let mqttReconnectTimer: number | null = null;
 let mqttReconnectAttempt = 0;
 const pendingMqttFrames: Array<{ subTopic: string; encrypted: string; retain: boolean }> = [];
 
+// Port-443 HTTPS SSE + Port-443 WSS + Port-443 HTTPS JSON Catch-Up Poller state
+let ntfyEventSource: EventSource | null = null;
+let ntfySseReconnectTimer: number | null = null;
+let ntfySseReconnectAttempt = 0;
+
 let ntfySocket: WebSocket | null = null;
 let ntfyReconnectTimer: number | null = null;
 let ntfyReconnectAttempt = 0;
-let ntfyPublishQueue: string[] = [];
+
+let ntfyHttpPollTimer: number | null = null;
+let ntfyHttpPollInFlight = false;
+let lastNtfyUnixSec = Math.max(0, Math.floor(Date.now() / 1000) - 90);
+
+let ntfyPublishQueue: Array<{ dedupeKey: string; encrypted: string }> = [];
 let ntfyPublishTimer: number | null = null;
 let lastNtfyPostMs = 0;
 
@@ -146,6 +193,7 @@ let cachedSeedKey = '';
 let cachedTopicHash = '';
 let cachedRawKeyBytes: Uint8Array | null = null;
 let cachedCryptoKeyPromise: Promise<CryptoKey | null> | null = null;
+let activeCloudTopicHash = '';
 
 // Pure synchronous SHA-256 implementation (RFC 6234) for deterministic topic & AES-256 key derivation
 const SHA256_K = new Uint32Array([
@@ -162,7 +210,7 @@ const SHA256_K = new Uint32Array([
 function sha256Bytes(asciiOrUtf8: string): Uint8Array {
   const msg = new TextEncoder().encode(asciiOrUtf8);
   const bitLen = msg.length * 8;
-  const padLen = ((msg.length + 9 + 63) & ~63);
+  const padLen = (msg.length + 9 + 63) & ~63;
   const buf = new Uint8Array(padLen);
   buf.set(msg);
   buf[msg.length] = 0x80;
@@ -292,16 +340,64 @@ function resolveWorkspaceGasSeed(): string {
   return DEFAULT_GAS_SCRIPT_SEED;
 }
 
+/**
+ * Derives a canonical workspace channel & AES-256-GCM key strictly from the shared GAS deployment ID.
+ * Never depends on localStorage workspaceId or React component mount order, guaranteeing Admin PC
+ * and zero-login TV PC always join the exact same encrypted real-time channel.
+ */
 function ensureCryptoMaterial(): { topicHash: string; keyBytes: Uint8Array } {
-  const seed = `${resolveWorkspaceGasSeed()}|${activeWorkspaceId}`;
+  const seed = `${resolveWorkspaceGasSeed()}|sheetcal-live-v3`;
   if (seed !== cachedSeedKey || !cachedRawKeyBytes || !cachedTopicHash) {
     cachedSeedKey = seed;
-    const topicDigest = sha256Bytes(`sheetcal-live-topic-v2:${seed}`);
-    cachedTopicHash = `scv2_${bytesToHex(topicDigest).slice(0, 24)}`;
-    cachedRawKeyBytes = sha256Bytes(`sheetcal-live-aes256-v2:${seed}`);
+    const topicDigest = sha256Bytes(`sheetcal-live-topic-v3:${seed}`);
+    cachedTopicHash = `scv3_${bytesToHex(topicDigest).slice(0, 24)}`;
+    cachedRawKeyBytes = sha256Bytes(`sheetcal-live-aes256-v3:${seed}`);
     cachedCryptoKeyPromise = null;
   }
   return { topicHash: cachedTopicHash, keyBytes: cachedRawKeyBytes };
+}
+
+function reconnectCloudTransportsIfSeedChanged(): void {
+  if (!initialized || typeof window === 'undefined') return;
+  const { topicHash } = ensureCryptoMaterial();
+  if (!activeCloudTopicHash) {
+    activeCloudTopicHash = topicHash;
+    return;
+  }
+  if (activeCloudTopicHash === topicHash) return;
+  activeCloudTopicHash = topicHash;
+  lastNtfyUnixSec = Math.max(0, Math.floor(Date.now() / 1000) - 90);
+
+  if (mqttSocket) {
+    try {
+      mqttSocket.close();
+    } catch {
+      // Ignore
+    }
+    mqttSocket = null;
+    mqttConnected = false;
+  }
+  if (ntfyEventSource) {
+    try {
+      ntfyEventSource.close();
+    } catch {
+      // Ignore
+    }
+    ntfyEventSource = null;
+    ntfySseConnected = false;
+  }
+  if (ntfySocket) {
+    try {
+      ntfySocket.close();
+    } catch {
+      // Ignore
+    }
+    ntfySocket = null;
+    ntfyWsConnected = false;
+  }
+  connectMqttRelay();
+  connectPort443SseRelay();
+  connectPort443WsRelay();
 }
 
 function getSubtleAesKey(): Promise<CryptoKey | null> {
@@ -370,7 +466,7 @@ function markEventSeen(eventId: string): boolean {
   if (seenEventIds.has(eventId)) return false;
   seenEventIds.add(eventId);
   seenEventOrder.push(eventId);
-  if (seenEventOrder.length > 240) {
+  if (seenEventOrder.length > 360) {
     const oldest = seenEventOrder.shift();
     if (oldest) seenEventIds.delete(oldest);
   }
@@ -423,6 +519,26 @@ export function sanitizeBoardSettings(raw: unknown): BoardRemoteSettings | null 
     isAutoScroll: Boolean(rec.isAutoScroll),
     tvAutoFit: rec.tvAutoFit !== undefined ? Boolean(rec.tvAutoFit) : true,
     updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : '',
+  };
+}
+
+function sanitizeTvHeartbeat(
+  raw: unknown,
+  transport: 'local_hdmi' | 'cloud'
+): TvScreenHeartbeat | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  const tvClientId = typeof rec.tvClientId === 'string' ? rec.tvClientId : '';
+  if (!tvClientId) return null;
+  return {
+    tvClientId,
+    label: typeof rec.label === 'string' ? rec.label.slice(0, 80) : 'จอทีวีนำเสนอ',
+    viewportW: typeof rec.viewportW === 'number' ? Math.round(rec.viewportW) : 1920,
+    viewportH: typeof rec.viewportH === 'number' ? Math.round(rec.viewportH) : 1080,
+    scale: typeof rec.scale === 'number' ? Number(rec.scale.toFixed(2)) : 1,
+    isPresentationMode: Boolean(rec.isPresentationMode),
+    transport,
+    updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : new Date().toISOString(),
   };
 }
 
@@ -493,12 +609,15 @@ export function emitRemotePresenceFromGas(rawPresence: unknown): void {
 }
 
 function refreshCombinedConnectionStatus(): void {
-  const anyConnected = localWsConnected || mqttConnected || ntfyConnected;
+  const anyConnected =
+    localWsConnected || mqttConnected || ntfySseConnected || ntfyWsConnected || ntfyHttpPollOk;
   notifyListeners({ type: 'connection:status', connected: anyConnected });
 }
 
 export function isRealtimeWebSocketConnected(): boolean {
-  return localWsConnected || mqttConnected || ntfyConnected;
+  return (
+    localWsConnected || mqttConnected || ntfySseConnected || ntfyWsConnected || ntfyHttpPollOk
+  );
 }
 
 // --- Minimal Binary MQTT v3.1.1 over WSS Framing (0 external dependencies, <130ms global delivery) ---
@@ -631,6 +750,39 @@ async function handleIncomingEncryptedString(rawEncrypted: string): Promise<void
         ? (p.deletedCategoryIds as string[])
         : undefined,
     });
+  } else if (env.kind === 'tv:ping') {
+    notifyListeners({
+      type: 'tv:ping',
+      source: 'cloud',
+      clientOriginId: env.clientOriginId,
+      requestedAt: typeof p.requestedAt === 'string' ? p.requestedAt : new Date().toISOString(),
+    });
+  } else if (env.kind === 'tv:pong' && p.screen) {
+    const cleanScreen = sanitizeTvHeartbeat(p.screen, 'cloud');
+    if (cleanScreen) {
+      notifyListeners({
+        type: 'tv:pong',
+        source: 'cloud',
+        clientOriginId: env.clientOriginId,
+        screen: cleanScreen,
+      });
+    }
+  } else if (env.kind === 'tv:command' && typeof p.action === 'string') {
+    const validActions: TvRemoteCommandAction[] = [
+      'reload',
+      'enter_fullscreen',
+      'force_sync_request',
+    ];
+    const act = p.action as TvRemoteCommandAction;
+    if (validActions.includes(act)) {
+      notifyListeners({
+        type: 'tv:command',
+        source: 'cloud',
+        clientOriginId: env.clientOriginId,
+        action: act,
+        issuedAt: typeof p.issuedAt === 'string' ? p.issuedAt : new Date().toISOString(),
+      });
+    }
   }
 }
 
@@ -643,7 +795,7 @@ function flushMqttQueue(): void {
     try {
       mqttSocket.send(
         mqttBuildPublishPacket(
-          `sheetcal/v2/${topicHash}/${item.subTopic}`,
+          `sheetcal/v3/${topicHash}/${item.subTopic}`,
           item.encrypted,
           item.retain
         )
@@ -656,7 +808,7 @@ function flushMqttQueue(): void {
 
 function scheduleMqttReconnect(): void {
   if (mqttReconnectTimer !== null || typeof window === 'undefined') return;
-  const delay = Math.min(10000, 1200 * Math.pow(1.5, mqttReconnectAttempt));
+  const delay = Math.min(12000, 1400 * Math.pow(1.5, mqttReconnectAttempt));
   mqttReconnectAttempt += 1;
   mqttReconnectTimer = window.setTimeout(() => {
     mqttReconnectTimer = null;
@@ -674,6 +826,7 @@ function connectMqttRelay(): void {
   }
 
   const { topicHash } = ensureCryptoMaterial();
+  activeCloudTopicHash = topicHash;
   try {
     const sock = new WebSocket('wss://broker.emqx.io:8084/mqtt', ['mqtt']);
     sock.binaryType = 'arraybuffer';
@@ -710,12 +863,11 @@ function connectMqttRelay(): void {
         if (pktEnd > bytes.length) return;
 
         if (pktType === 2) {
-          // CONNACK -> Subscribe to encrypted workspace subtopics
           mqttReconnectAttempt = 0;
           mqttConnected = true;
           refreshCombinedConnectionStatus();
           try {
-            sock.send(mqttBuildSubscribePacket(1, `sheetcal/v2/${topicHash}/+`));
+            sock.send(mqttBuildSubscribePacket(1, `sheetcal/v3/${topicHash}/+`));
           } catch {
             // Ignore
           }
@@ -731,7 +883,6 @@ function connectMqttRelay(): void {
             }
           }, 25000);
         } else if (pktType === 3) {
-          // PUBLISH packet
           const qos = (headerByte >> 1) & 0x03;
           if (idx + 2 <= pktEnd) {
             const topicLen = (bytes[idx] << 8) | bytes[idx + 1];
@@ -772,18 +923,153 @@ function connectMqttRelay(): void {
   }
 }
 
-// --- Standard Port-443 WSS Relay (pierces strict Ministry/corporate port-443-only firewalls) ---
-function scheduleNtfyReconnect(): void {
-  if (ntfyReconnectTimer !== null || typeof window === 'undefined') return;
-  const delay = Math.min(15000, 2000 * Math.pow(1.6, ntfyReconnectAttempt));
-  ntfyReconnectAttempt += 1;
-  ntfyReconnectTimer = window.setTimeout(() => {
-    ntfyReconnectTimer = null;
-    connectPort443Relay();
+// --- Port-443 Pure HTTPS Server-Sent Events (SSE) Relay ---
+// Uses standard Port-443 HTTPS GET without WebSocket Upgrade headers so corporate/ministry firewalls allow it!
+function schedulePort443SseReconnect(): void {
+  if (ntfySseReconnectTimer !== null || typeof window === 'undefined') return;
+  const delay = Math.min(12000, 1500 * Math.pow(1.5, ntfySseReconnectAttempt));
+  ntfySseReconnectAttempt += 1;
+  ntfySseReconnectTimer = window.setTimeout(() => {
+    ntfySseReconnectTimer = null;
+    connectPort443SseRelay();
   }, delay);
 }
 
-function connectPort443Relay(): void {
+function connectPort443SseRelay(): void {
+  if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+  if (ntfyEventSource && ntfyEventSource.readyState !== EventSource.CLOSED) {
+    return;
+  }
+
+  const { topicHash } = ensureCryptoMaterial();
+  activeCloudTopicHash = topicHash;
+  try {
+    const sinceArg = lastNtfyUnixSec > 0 ? String(Math.max(0, lastNtfyUnixSec - 5)) : '2m';
+    const es = new EventSource(`https://ntfy.sh/${topicHash}/sse?since=${encodeURIComponent(sinceArg)}`);
+    ntfyEventSource = es;
+
+    es.onopen = () => {
+      ntfySseReconnectAttempt = 0;
+      ntfySseConnected = true;
+      refreshCombinedConnectionStatus();
+    };
+
+    es.onmessage = (ev) => {
+      ntfySseConnected = true;
+      try {
+        const parsed = JSON.parse(String(ev.data || '{}')) as {
+          event?: string;
+          time?: number;
+          message?: string;
+        };
+        if (typeof parsed.time === 'number' && parsed.time > lastNtfyUnixSec) {
+          lastNtfyUnixSec = parsed.time;
+        }
+        if (
+          (!parsed.event || parsed.event === 'message') &&
+          typeof parsed.message === 'string' &&
+          parsed.message.startsWith('g1.')
+        ) {
+          void handleIncomingEncryptedString(parsed.message);
+        }
+      } catch {
+        // Ignore malformed SSE line
+      }
+    };
+
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) {
+        if (ntfyEventSource === es) ntfyEventSource = null;
+        ntfySseConnected = false;
+        refreshCombinedConnectionStatus();
+        schedulePort443SseReconnect();
+      }
+    };
+  } catch {
+    ntfySseConnected = false;
+    schedulePort443SseReconnect();
+  }
+}
+
+// --- Port-443 HTTPS JSON Fast Catch-Up Poller ---
+// Guarantees ~1.5s delivery even if an extreme SSL-inspecting proxy blocks WebSockets AND buffers SSE streams!
+async function pollPort443JsonOnce(): Promise<void> {
+  if (typeof window === 'undefined' || ntfyHttpPollInFlight) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  // When low-latency same-origin WS or MQTT WSS is already open, no HTTP catch-up polling is needed
+  if (localWsConnected || mqttConnected) return;
+
+  ntfyHttpPollInFlight = true;
+  const { topicHash } = ensureCryptoMaterial();
+  try {
+    const sinceParam = lastNtfyUnixSec > 0 ? String(Math.max(0, lastNtfyUnixSec - 2)) : '90s';
+    const res = await fetch(
+      `https://ntfy.sh/${topicHash}/json?poll=1&since=${encodeURIComponent(sinceParam)}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+      }
+    );
+    if (res.ok) {
+      if (!ntfyHttpPollOk) {
+        ntfyHttpPollOk = true;
+        refreshCombinedConnectionStatus();
+      }
+      const text = await res.text();
+      if (text) {
+        const lines = text.split('\n');
+        for (const rawLine of lines) {
+          const trimmed = rawLine.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as {
+              event?: string;
+              time?: number;
+              message?: string;
+            };
+            if (typeof parsed.time === 'number' && parsed.time > lastNtfyUnixSec) {
+              lastNtfyUnixSec = parsed.time;
+            }
+            if (
+              parsed.event === 'message' &&
+              typeof parsed.message === 'string' &&
+              parsed.message.startsWith('g1.')
+            ) {
+              void handleIncomingEncryptedString(parsed.message);
+            }
+          } catch {
+            // Ignore malformed NDJSON line
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore transient network error
+  } finally {
+    ntfyHttpPollInFlight = false;
+  }
+}
+
+function startPort443JsonCatchupLoop(): void {
+  if (ntfyHttpPollTimer !== null || typeof window === 'undefined') return;
+  void pollPort443JsonOnce();
+  ntfyHttpPollTimer = window.setInterval(() => {
+    void pollPort443JsonOnce();
+  }, 2300);
+}
+
+// --- Secondary Port-443 WSS Relay ---
+function scheduleNtfyWsReconnect(): void {
+  if (ntfyReconnectTimer !== null || typeof window === 'undefined') return;
+  const delay = Math.min(18000, 2500 * Math.pow(1.6, ntfyReconnectAttempt));
+  ntfyReconnectAttempt += 1;
+  ntfyReconnectTimer = window.setTimeout(() => {
+    ntfyReconnectTimer = null;
+    connectPort443WsRelay();
+  }, delay);
+}
+
+function connectPort443WsRelay(): void {
   if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
   if (
     ntfySocket &&
@@ -799,7 +1085,7 @@ function connectPort443Relay(): void {
 
     sock.onopen = () => {
       ntfyReconnectAttempt = 0;
-      ntfyConnected = true;
+      ntfyWsConnected = true;
       refreshCombinedConnectionStatus();
     };
 
@@ -807,8 +1093,12 @@ function connectPort443Relay(): void {
       try {
         const parsed = JSON.parse(String(ev.data || '{}')) as {
           event?: string;
+          time?: number;
           message?: string;
         };
+        if (typeof parsed.time === 'number' && parsed.time > lastNtfyUnixSec) {
+          lastNtfyUnixSec = parsed.time;
+        }
         if (parsed.event === 'message' && typeof parsed.message === 'string') {
           void handleIncomingEncryptedString(parsed.message);
         }
@@ -819,9 +1109,9 @@ function connectPort443Relay(): void {
 
     sock.onclose = () => {
       if (ntfySocket === sock) ntfySocket = null;
-      ntfyConnected = false;
+      ntfyWsConnected = false;
       refreshCombinedConnectionStatus();
-      scheduleNtfyReconnect();
+      scheduleNtfyWsReconnect();
     };
 
     sock.onerror = () => {
@@ -832,15 +1122,15 @@ function connectPort443Relay(): void {
       }
     };
   } catch {
-    ntfyConnected = false;
-    scheduleNtfyReconnect();
+    ntfyWsConnected = false;
+    scheduleNtfyWsReconnect();
   }
 }
 
 function drainPort443PublishQueue(): void {
   if (ntfyPublishQueue.length === 0) return;
   const now = Date.now();
-  const waitMs = Math.max(0, 360 - (now - lastNtfyPostMs));
+  const waitMs = Math.max(0, 340 - (now - lastNtfyPostMs));
   if (waitMs > 0) {
     if (ntfyPublishTimer === null) {
       ntfyPublishTimer = window.setTimeout(() => {
@@ -851,21 +1141,21 @@ function drainPort443PublishQueue(): void {
     return;
   }
 
-  const nextMsg = ntfyPublishQueue.shift();
-  if (!nextMsg) return;
+  const nextItem = ntfyPublishQueue.shift();
+  if (!nextItem) return;
   lastNtfyPostMs = Date.now();
   const { topicHash } = ensureCryptoMaterial();
   fetch(`https://ntfy.sh/${topicHash}`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: nextMsg,
+    body: nextItem.encrypted,
   }).catch(() => {});
 
   if (ntfyPublishQueue.length > 0 && ntfyPublishTimer === null) {
     ntfyPublishTimer = window.setTimeout(() => {
       ntfyPublishTimer = null;
       drainPort443PublishQueue();
-    }, 380);
+    }, 350);
   }
 }
 
@@ -873,9 +1163,11 @@ async function publishCloudEnvelope(
   kind: CloudRelayEnvelope['kind'],
   payload: Record<string, unknown>,
   subTopic: 'events' | 'presence' | 'board' = 'events',
-  retain = false
+  retain = false,
+  dedupeKey?: string
 ): Promise<void> {
   ensureInitialized();
+  reconnectCloudTransportsIfSeedChanged();
   const envelope: CloudRelayEnvelope = {
     eventId: nextEventId(),
     clientOriginId: CLIENT_TAB_ID,
@@ -889,15 +1181,21 @@ async function publishCloudEnvelope(
 
   // 1. Publish over <130ms MQTT-over-WSS
   pendingMqttFrames.push({ subTopic, encrypted, retain });
-  if (pendingMqttFrames.length > 25) pendingMqttFrames.shift();
+  if (pendingMqttFrames.length > 30) pendingMqttFrames.shift();
   flushMqttQueue();
 
-  // 2. Also publish compact deltas (< 3,500 chars) over Port-443 HTTPS/WSS for strict corporate firewalls
-  if (encrypted.length < 3500) {
-    if (ntfyPublishQueue.length >= 6) {
-      ntfyPublishQueue = ntfyPublishQueue.slice(-5);
+  // 2. Also publish compact deltas (< 3,700 chars) over Port-443 HTTPS POST (received via HTTPS SSE + JSON catch-up + WSS)
+  if (encrypted.length < 3700) {
+    const resolvedKey = dedupeKey || `${kind}:${envelope.eventId}`;
+    const existingIdx = ntfyPublishQueue.findIndex((item) => item.dedupeKey === resolvedKey);
+    if (existingIdx !== -1) {
+      ntfyPublishQueue[existingIdx] = { dedupeKey: resolvedKey, encrypted };
+    } else {
+      if (ntfyPublishQueue.length >= 14) {
+        ntfyPublishQueue = ntfyPublishQueue.slice(-13);
+      }
+      ntfyPublishQueue.push({ dedupeKey: resolvedKey, encrypted });
     }
-    ntfyPublishQueue.push(encrypted);
     drainPort443PublishQueue();
   }
 }
@@ -926,7 +1224,6 @@ function connectWebSocket(): void {
     return;
   }
 
-  // Pure static hosts like github.io have no local /api/collab/ws server (they use MQTT WSS + Port-443 WSS)
   if (/\.github\.io$/i.test(window.location.hostname || '')) {
     localWsConnected = false;
     refreshCombinedConnectionStatus();
@@ -1054,7 +1351,10 @@ function ensureInitialized(workspaceId?: string): void {
   if (workspaceId && workspaceId.trim()) {
     activeWorkspaceId = workspaceId.trim();
   }
-  if (initialized || typeof window === 'undefined') return;
+  if (initialized || typeof window === 'undefined') {
+    reconnectCloudTransportsIfSeedChanged();
+    return;
+  }
   initialized = true;
 
   // 1. Same-Browser / Dual-Monitor HDMI BroadcastChannel (0ms latency across tabs/windows)
@@ -1127,6 +1427,33 @@ function ensureInitialized(workspaceId?: string): void {
               settings,
             });
           }
+        } else if (data.type === 'tv:ping') {
+          notifyListeners({
+            type: 'tv:ping',
+            source: 'broadcast',
+            clientOriginId: originId,
+            requestedAt:
+              typeof data.requestedAt === 'string' ? data.requestedAt : new Date().toISOString(),
+          });
+        } else if (data.type === 'tv:pong' && data.screen) {
+          const cleanScreen = sanitizeTvHeartbeat(data.screen, 'local_hdmi');
+          if (cleanScreen) {
+            notifyListeners({
+              type: 'tv:pong',
+              source: 'broadcast',
+              clientOriginId: originId,
+              screen: cleanScreen,
+            });
+          }
+        } else if (data.type === 'tv:command' && typeof data.action === 'string') {
+          const act = data.action as TvRemoteCommandAction;
+          notifyListeners({
+            type: 'tv:command',
+            source: 'broadcast',
+            clientOriginId: originId,
+            action: act,
+            issuedAt: typeof data.issuedAt === 'string' ? data.issuedAt : new Date().toISOString(),
+          });
         }
       };
     } catch {
@@ -1137,6 +1464,13 @@ function ensureInitialized(workspaceId?: string): void {
   // 2. Cross-Window localStorage 'storage' event fallback
   window.addEventListener('storage', (ev: StorageEvent) => {
     try {
+      if (
+        ev.key === 'sheetcal_gas_webapp_url_v1' ||
+        ev.key === 'sheetcal_gas_url_v1'
+      ) {
+        reconnectCloudTransportsIfSeedChanged();
+        return;
+      }
       if (ev.key === DIRECTOR_PRESENCE_STORAGE_KEY && ev.newValue) {
         const presence = sanitizeDirectorPresence(JSON.parse(ev.newValue));
         if (presence) {
@@ -1180,6 +1514,7 @@ function ensureInitialized(workspaceId?: string): void {
 
   // 3. Reconnect immediately when TV/window regains network or visibility
   const handleWakeUp = () => {
+    reconnectCloudTransportsIfSeedChanged();
     if (!localWsConnected) {
       reconnectAttempt = 0;
       connectWebSocket();
@@ -1200,10 +1535,15 @@ function ensureInitialized(workspaceId?: string): void {
       mqttReconnectAttempt = 0;
       connectMqttRelay();
     }
-    if (!ntfyConnected) {
-      ntfyReconnectAttempt = 0;
-      connectPort443Relay();
+    if (!ntfySseConnected) {
+      ntfySseReconnectAttempt = 0;
+      connectPort443SseRelay();
     }
+    if (!ntfyWsConnected) {
+      ntfyReconnectAttempt = 0;
+      connectPort443WsRelay();
+    }
+    void pollPort443JsonOnce();
   };
 
   window.addEventListener('online', handleWakeUp);
@@ -1216,7 +1556,9 @@ function ensureInitialized(workspaceId?: string): void {
 
   connectWebSocket();
   connectMqttRelay();
-  connectPort443Relay();
+  connectPort443SseRelay();
+  connectPort443WsRelay();
+  startPort443JsonCatchupLoop();
 }
 
 export function subscribeRealtimeEvents(
@@ -1252,6 +1594,10 @@ export function publishTaskDelta(params: {
       // Ignore
     }
   }
+  const singleTaskKey =
+    params.upsertedTasks && params.upsertedTasks.length === 1 && !params.deletedTaskIds?.length
+      ? `task:upsert:${params.upsertedTasks[0].id}`
+      : undefined;
   void publishCloudEnvelope(
     'task:delta',
     {
@@ -1260,7 +1606,8 @@ export function publishTaskDelta(params: {
       updatedAt: nowIso,
     },
     'events',
-    false
+    false,
+    singleTaskKey
   );
 }
 
@@ -1293,7 +1640,8 @@ export function publishCategoriesDelta(params: {
       deletedCategoryIds: params.deletedCategoryIds,
     },
     'events',
-    false
+    false,
+    'categories:delta:latest'
   );
 }
 
@@ -1339,7 +1687,6 @@ export function broadcastLocalWorkspaceChange(params: {
     // Ignore quota errors
   }
 
-  // Also broadcast full workspace snapshot over MQTT WSS (<130ms) for instant cross-machine sync
   void publishCloudEnvelope(
     'workspace:updated',
     {
@@ -1348,7 +1695,8 @@ export function broadcastLocalWorkspaceChange(params: {
       deletedCategoryIds: params.deletedCategoryIds,
     },
     'events',
-    false
+    false,
+    'workspace:updated:latest'
   );
 }
 
@@ -1369,8 +1717,13 @@ export function broadcastLocalPresenceChange(presence: DirectorPresenceState): v
     }
   }
 
-  // Retain latest presence on MQTT topic + push via Port-443 WSS so every TV receives it in ~100ms
-  void publishCloudEnvelope('presence:updated', { presence }, 'presence', true);
+  void publishCloudEnvelope(
+    'presence:updated',
+    { presence },
+    'presence',
+    true,
+    'presence:updated:latest'
+  );
 }
 
 export function broadcastBoardSettingsChange(settings: BoardRemoteSettings): void {
@@ -1390,6 +1743,133 @@ export function broadcastBoardSettingsChange(settings: BoardRemoteSettings): voi
     }
   }
 
-  // Retain latest board display settings on MQTT topic + push via Port-443 WSS so TVs mirror filter/theme/date instantly
-  void publishCloudEnvelope('board:settings', { settings }, 'board', true);
+  void publishCloudEnvelope(
+    'board:settings',
+    { settings },
+    'board',
+    true,
+    'board:settings:latest'
+  );
+}
+
+export function requestConnectedTvPing(): void {
+  ensureInitialized();
+  const requestedAt = new Date().toISOString();
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: 'tv:ping',
+        clientOriginId: CLIENT_TAB_ID,
+        requestedAt,
+      });
+    } catch {
+      // Ignore
+    }
+  }
+  void publishCloudEnvelope('tv:ping', { requestedAt }, 'events', false, 'tv:ping:latest');
+}
+
+export function announceTvScreenPresence(
+  screen: Omit<TvScreenHeartbeat, 'tvClientId' | 'transport' | 'updatedAt'>
+): void {
+  ensureInitialized();
+  const fullScreen: TvScreenHeartbeat = {
+    tvClientId: CLIENT_TAB_ID,
+    label: screen.label,
+    viewportW: screen.viewportW,
+    viewportH: screen.viewportH,
+    scale: screen.scale,
+    isPresentationMode: screen.isPresentationMode,
+    transport: 'cloud',
+    updatedAt: new Date().toISOString(),
+  };
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: 'tv:pong',
+        clientOriginId: CLIENT_TAB_ID,
+        screen: { ...fullScreen, transport: 'local_hdmi' },
+      });
+    } catch {
+      // Ignore
+    }
+  }
+  void publishCloudEnvelope(
+    'tv:pong',
+    { screen: fullScreen },
+    'events',
+    false,
+    `tv:pong:${CLIENT_TAB_ID}`
+  );
+}
+
+export function sendTvRemoteCommand(action: TvRemoteCommandAction): void {
+  ensureInitialized();
+  const issuedAt = new Date().toISOString();
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: 'tv:command',
+        clientOriginId: CLIENT_TAB_ID,
+        action,
+        issuedAt,
+      });
+    } catch {
+      // Ignore
+    }
+  }
+  void publishCloudEnvelope(
+    'tv:command',
+    { action, issuedAt },
+    'events',
+    false,
+    `tv:command:${action}`
+  );
+}
+
+/**
+ * Pushes Director Presence, Board Display Settings, Categories, and compact chunked Task Deltas
+ * (< 2,800 bytes per frame) so any TV PC behind a Port-443 HTTPS firewall receives 100% of state immediately.
+ */
+export function pushFullStateToTvScreens(params: {
+  tasks: Task[];
+  categories: Category[];
+  categoriesUpdatedAt?: number;
+  deletedTaskIds?: string[];
+  presence: DirectorPresenceState;
+  settings: BoardRemoteSettings;
+}): void {
+  ensureInitialized();
+  broadcastLocalPresenceChange(params.presence);
+  broadcastBoardSettingsChange(params.settings);
+  publishCategoriesDelta({
+    categories: params.categories,
+    categoriesUpdatedAt: params.categoriesUpdatedAt || Date.now(),
+  });
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const prioritizedTasks = [...params.tasks].sort((a, b) => {
+    const aEnd = a.endDate && a.endDate > a.date ? a.endDate : a.date;
+    const bEnd = b.endDate && b.endDate > b.date ? b.endDate : b.date;
+    const aActiveOrFuture = aEnd >= todayIso ? 0 : 1;
+    const bActiveOrFuture = bEnd >= todayIso ? 0 : 1;
+    if (aActiveOrFuture !== bActiveOrFuture) return aActiveOrFuture - bActiveOrFuture;
+    return `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`);
+  });
+
+  // Send compact chunks of 6 tasks per envelope so each encrypted frame stays well under 3,500 bytes
+  const CHUNK_SIZE = 6;
+  const maxTasksForInstantPush = prioritizedTasks.slice(0, 36);
+  if (maxTasksForInstantPush.length === 0 && params.deletedTaskIds?.length) {
+    publishTaskDelta({ deletedTaskIds: params.deletedTaskIds.slice(0, 40) });
+    return;
+  }
+
+  for (let i = 0; i < maxTasksForInstantPush.length; i += CHUNK_SIZE) {
+    const chunk = maxTasksForInstantPush.slice(i, i + CHUNK_SIZE);
+    publishTaskDelta({
+      upsertedTasks: chunk,
+      deletedTaskIds: i === 0 ? params.deletedTaskIds?.slice(0, 30) : undefined,
+    });
+  }
 }

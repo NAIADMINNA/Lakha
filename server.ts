@@ -1488,10 +1488,11 @@ async function startServer() {
 
   let serverRelaySeq = 0;
   let lastServerRelayMs = 0;
+  let lastRelayedPresenceStamp = '';
 
   function pushEncryptedServerEventToGlobalRelay(payload: Record<string, unknown>) {
     try {
-      // Browser-originated updates already publish directly to MQTT WSS + Port-443 WSS;
+      // Browser-originated updates already publish directly to MQTT WSS + Port-443 HTTPS;
       // only relay server-originated events (e.g., LINE Group bot commands or server GAS sync)
       if (payload.clientOriginId) return;
       const now = Date.now();
@@ -1500,21 +1501,30 @@ async function startServer() {
       const msgType = String(payload.type || '');
       if (msgType !== 'workspace:updated' && msgType !== 'presence:updated') return;
 
+      if (msgType === 'presence:updated') {
+        const pObj = payload.presence as Record<string, unknown> | undefined;
+        const stamp = `${String(pObj?.mode || '')}|${String(pObj?.customNote || '')}|${String(
+          pObj?.updatedAt || ''
+        )}`;
+        if (!pObj?.updatedAt || stamp === lastRelayedPresenceStamp) return;
+        lastRelayedPresenceStamp = stamp;
+      }
+
       const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
       const match = cleanGas.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})/);
       const gasSeed =
         match && match[1]
           ? match[1]
           : 'AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg';
-      const seed = `${gasSeed}|sheetcal-team-clean`;
-      const topicHash = `scv2_${crypto
+      const seed = `${gasSeed}|sheetcal-live-v3`;
+      const topicHash = `scv3_${crypto
         .createHash('sha256')
-        .update(`sheetcal-live-topic-v2:${seed}`)
+        .update(`sheetcal-live-topic-v3:${seed}`)
         .digest('hex')
         .slice(0, 24)}`;
       const keyBytes = crypto
         .createHash('sha256')
-        .update(`sheetcal-live-aes256-v2:${seed}`)
+        .update(`sheetcal-live-aes256-v3:${seed}`)
         .digest();
 
       serverRelaySeq += 1;

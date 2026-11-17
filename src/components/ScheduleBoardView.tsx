@@ -11,8 +11,8 @@ import {
   ChevronUp,
   Circle,
   Clock,
+  Copy,
   Edit3,
-  Link2,
   MapPin,
   Maximize2,
   Minimize2,
@@ -21,7 +21,10 @@ import {
   Pause,
   Play,
   Plus,
+  Radio,
+  RefreshCw,
   Search,
+  Send,
   SlidersHorizontal,
   Sun,
   Sunset,
@@ -56,11 +59,16 @@ import {
 } from '../services/internetTimeService';
 import {
   BoardRemoteSettings,
+  TvScreenHeartbeat,
+  announceTvScreenPresence,
   broadcastBoardSettingsChange,
   broadcastLocalPresenceChange,
   getClientTabId,
+  pushFullStateToTvScreens,
   readLocalBoardSettings,
   readLocalDirectorPresence,
+  requestConnectedTvPing,
+  sendTvRemoteCommand,
   subscribeRealtimeEvents,
   writeLocalDirectorPresence,
 } from '../services/realtimeSync';
@@ -74,6 +82,7 @@ interface ScheduleBoardViewProps {
   onUpdateStatus?: (task: Task, nextStatus: TaskStatus) => void;
   onOpenCalendarDate: (dateStr: string) => void;
   onPresenceStaticSync?: () => void;
+  onForcePushRealtimeToTv?: (currentBoardSettings: BoardRemoteSettings) => void;
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
@@ -426,6 +435,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onUpdateStatus,
   onOpenCalendarDate,
   onPresenceStaticSync,
+  onForcePushRealtimeToTv,
 }) => {
   // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
   const [nowDate, setNowDate] = useState<Date>(() => getInternetNow());
@@ -517,7 +527,15 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   );
   const [isTvControlsIdle, setIsTvControlsIdle] = useState<boolean>(false);
   const [copiedTvLink, setCopiedTvLink] = useState<boolean>(false);
+  const [isTvRemoteModalOpen, setIsTvRemoteModalOpen] = useState<boolean>(false);
+  const [connectedTvScreens, setConnectedTvScreens] = useState<
+    Record<string, TvScreenHeartbeat>
+  >({});
+  const [tvRemoteActionFeedback, setTvRemoteActionFeedback] = useState<
+    'idle' | 'pushed' | 'reloaded' | 'pinging'
+  >('idle');
   const tvIdleTimerRef = useRef<number | null>(null);
+  const loadedScriptHashRef = useRef<string>('');
 
   const wakeTvControls = useCallback(() => {
     setIsTvControlsIdle((prev) => (prev ? false : prev));
@@ -586,6 +604,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
 
     const handleKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && isTvRemoteModalOpen) {
+        setIsTvRemoteModalOpen(false);
+        return;
+      }
       if (ev.key === 'Escape' && isPresentationMode) {
         setIsPresentationMode(false);
         setIsToolbarCollapsedInFullscreen(false);
@@ -613,7 +635,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         vv.removeEventListener('resize', syncViewportMetrics);
       }
     };
-  }, [isPresentationMode, isTvAutoFit, isTvLaunchEnv, wakeTvControls]);
+  }, [isPresentationMode, isTvAutoFit, isTvLaunchEnv, isTvRemoteModalOpen, wakeTvControls]);
 
   // Broadcast board display controls to TV screens whenever Admin clicks any toolbar control
   useEffect(() => {
@@ -718,18 +740,111 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     });
   };
 
+  const tvDirectShareUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('section', 'schedule');
+      url.searchParams.set('tv', '1');
+      url.searchParams.delete('_v');
+      return url.toString();
+    } catch {
+      return '';
+    }
+  }, []);
+
   const handleCopyTvLink = async () => {
     try {
       const url = new URL(window.location.href);
       url.searchParams.set('section', 'schedule');
       url.searchParams.set('tv', '1');
+      url.searchParams.set('_v', String(Date.now()));
       await navigator.clipboard.writeText(url.toString());
       setCopiedTvLink(true);
-      window.setTimeout(() => setCopiedTvLink(false), 2400);
+      window.setTimeout(() => setCopiedTvLink(false), 2600);
     } catch {
       // Ignore clipboard restriction
     }
   };
+
+  const buildCurrentBoardSettingsSnapshot = useCallback((): BoardRemoteSettings => {
+    const nextIso = new Date().toISOString();
+    lastBoardSettingsUpdatedAtRef.current = nextIso;
+    return {
+      rangeMode,
+      layoutMode,
+      focusDate,
+      selectedCategoryId,
+      selectedPriority,
+      showCompleted,
+      expandMultiDay,
+      boardTheme,
+      isLargeText,
+      isAutoScroll,
+      tvAutoFit: isTvAutoFit,
+      updatedAt: nextIso,
+    };
+  }, [
+    boardTheme,
+    expandMultiDay,
+    focusDate,
+    isAutoScroll,
+    isLargeText,
+    isTvAutoFit,
+    layoutMode,
+    rangeMode,
+    selectedCategoryId,
+    selectedPriority,
+    showCompleted,
+  ]);
+
+  const handleForcePushToTv = useCallback(() => {
+    const currentSettings = buildCurrentBoardSettingsSnapshot();
+    if (onForcePushRealtimeToTv) {
+      onForcePushRealtimeToTv(currentSettings);
+    } else {
+      pushFullStateToTvScreens({
+        tasks,
+        categories,
+        presence: readLocalDirectorPresence(),
+        settings: currentSettings,
+      });
+      onPresenceStaticSync?.();
+    }
+    requestConnectedTvPing();
+    setTvRemoteActionFeedback('pushed');
+    window.setTimeout(() => {
+      setTvRemoteActionFeedback((prev) => (prev === 'pushed' ? 'idle' : prev));
+    }, 2800);
+  }, [
+    buildCurrentBoardSettingsSnapshot,
+    categories,
+    onForcePushRealtimeToTv,
+    onPresenceStaticSync,
+    tasks,
+  ]);
+
+  const handleRemoteReloadTv = useCallback(() => {
+    sendTvRemoteCommand('reload');
+    setTvRemoteActionFeedback('reloaded');
+    window.setTimeout(() => {
+      setTvRemoteActionFeedback((prev) => (prev === 'reloaded' ? 'idle' : prev));
+    }, 3000);
+  }, []);
+
+  const handlePingTvScreens = useCallback(() => {
+    requestConnectedTvPing();
+    setTvRemoteActionFeedback('pinging');
+    window.setTimeout(() => {
+      setTvRemoteActionFeedback((prev) => (prev === 'pinging' ? 'idle' : prev));
+    }, 1800);
+  }, []);
+
+  const activeTvScreenList = useMemo<TvScreenHeartbeat[]>(() => {
+    return (Object.values(connectedTvScreens) as TvScreenHeartbeat[]).sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt)
+    );
+  }, [connectedTvScreens]);
 
   const handleTogglePresentationFullscreen = async () => {
     const nextState = !isPresentationMode;
@@ -1209,10 +1324,179 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         if (ev.settings.tvAutoFit !== undefined) {
           setIsTvAutoFit(ev.settings.tvAutoFit);
         }
+      } else if (ev.type === 'tv:ping') {
+        if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+        if (isPresentationMode || isTvLaunchEnv) {
+          const metrics = computeTvStageMetrics();
+          announceTvScreenPresence({
+            label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
+            viewportW: metrics.viewportW,
+            viewportH: metrics.viewportH,
+            scale: metrics.scale,
+            isPresentationMode: true,
+          });
+        }
+      } else if (ev.type === 'tv:pong' && ev.screen) {
+        if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+        setConnectedTvScreens((prev) => ({
+          ...prev,
+          [ev.screen.tvClientId]: ev.screen,
+        }));
+      } else if (ev.type === 'tv:command') {
+        if (ev.clientOriginId && ev.clientOriginId === getClientTabId()) return;
+        if (ev.action === 'reload' && (isPresentationMode || isTvLaunchEnv)) {
+          try {
+            const nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.set('section', 'schedule');
+            nextUrl.searchParams.set('tv', '1');
+            nextUrl.searchParams.set('_v', String(Date.now()));
+            window.location.replace(nextUrl.toString());
+          } catch {
+            window.location.reload();
+          }
+        } else if (ev.action === 'enter_fullscreen' && isTvLaunchEnv) {
+          setIsPresentationMode(true);
+          setIsTvAutoFit(true);
+          setIsLargeText(true);
+          setIsAutoScroll(true);
+          setIsToolbarCollapsedInFullscreen(true);
+        }
       }
     });
     return () => unsubscribeRealtime();
-  }, [applyIncomingPresence]);
+  }, [applyIncomingPresence, isPresentationMode, isTvLaunchEnv]);
+
+  // Announce TV screen presence while in Presentation Mode & auto-request initial sync on ?tv=1 boot
+  useEffect(() => {
+    if (!isPresentationMode && !isTvLaunchEnv) return;
+    const sendPresence = () => {
+      const m = computeTvStageMetrics();
+      announceTvScreenPresence({
+        label: isTvLaunchEnv ? 'จอทีวีนำเสนอ (?tv=1)' : 'หน้าจอโหมดนำเสนอเต็มจอ',
+        viewportW: m.viewportW,
+        viewportH: m.viewportH,
+        scale: m.scale,
+        isPresentationMode: true,
+      });
+    };
+    sendPresence();
+    const syncReqTimer = isTvLaunchEnv
+      ? window.setTimeout(() => {
+          sendTvRemoteCommand('force_sync_request');
+        }, 650)
+      : null;
+    const heartbeatId = window.setInterval(sendPresence, 28000);
+    return () => {
+      if (syncReqTimer !== null) window.clearTimeout(syncReqTimer);
+      window.clearInterval(heartbeatId);
+    };
+  }, [isPresentationMode, isTvLaunchEnv]);
+
+  // Prune stale TV heartbeats (>75s) on Admin view & ping connected TVs when opening the modal or mounting
+  useEffect(() => {
+    if (!isTvLaunchEnv) {
+      requestConnectedTvPing();
+    }
+    const pruneId = window.setInterval(() => {
+      const cutoff = Date.now() - 75000;
+      setConnectedTvScreens((prev) => {
+        let changed = false;
+        const next: Record<string, TvScreenHeartbeat> = {};
+        (Object.entries(prev) as Array<[string, TvScreenHeartbeat]>).forEach(([k, v]) => {
+          const ts = v.updatedAt ? new Date(v.updatedAt).getTime() : 0;
+          if (Number.isFinite(ts) && ts >= cutoff) {
+            next[k] = v;
+          } else {
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, 15000);
+    return () => window.clearInterval(pruneId);
+  }, [isTvLaunchEnv]);
+
+  // Auto-reload TV screen when a newer frontend build is deployed to GitHub Pages / server
+  useEffect(() => {
+    if (!isPresentationMode && !isTvLaunchEnv) return;
+    const detectCurrentScriptBundle = (): string => {
+      const scripts = Array.from(document.querySelectorAll('script[src]'));
+      for (const s of scripts) {
+        const src = s.getAttribute('src') || '';
+        const match = src.match(/assets\/index-[A-Za-z0-9_-]+\.js/);
+        if (match) return match[0];
+      }
+      return '';
+    };
+    if (!loadedScriptHashRef.current) {
+      loadedScriptHashRef.current = detectCurrentScriptBundle();
+    }
+    if (!loadedScriptHashRef.current) return;
+
+    const checkId = window.setInterval(async () => {
+      try {
+        const indexUrl = new URL('./index.html', window.location.href);
+        indexUrl.searchParams.set('_t', String(Date.now()));
+        const res = await fetch(indexUrl.toString(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const html = await res.text();
+        const remoteMatch = html.match(/assets\/index-[A-Za-z0-9_-]+\.js/);
+        if (
+          remoteMatch &&
+          remoteMatch[0] &&
+          loadedScriptHashRef.current &&
+          remoteMatch[0] !== loadedScriptHashRef.current
+        ) {
+          const reloadUrl = new URL(window.location.href);
+          reloadUrl.searchParams.set('section', 'schedule');
+          reloadUrl.searchParams.set('tv', '1');
+          reloadUrl.searchParams.set('_v', String(Date.now()));
+          window.location.replace(reloadUrl.toString());
+        }
+      } catch {
+        // Ignore offline/network check error
+      }
+    }, 90000);
+
+    return () => window.clearInterval(checkId);
+  }, [isPresentationMode, isTvLaunchEnv]);
+
+  // Keep Notebook + HDMI TV awake all day (prevents Windows screen sleep / HDMI "No Signal" when idle)
+  useEffect(() => {
+    if (!isPresentationMode && !isTvLaunchEnv) return;
+    let wakeLockSentinel: { release: () => Promise<void> } | null = null;
+    let disposed = false;
+
+    const acquireWakeLock = async () => {
+      if (disposed || typeof navigator === 'undefined') return;
+      const navWithWakeLock = navigator as Navigator & {
+        wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> };
+      };
+      if (!navWithWakeLock.wakeLock || document.visibilityState !== 'visible') return;
+      try {
+        wakeLockSentinel = await navWithWakeLock.wakeLock.request('screen');
+      } catch {
+        // Ignore if browser policy requires user gesture or battery saver is active
+      }
+    };
+
+    void acquireWakeLock();
+    const handleVis = () => {
+      if (document.visibilityState === 'visible') {
+        void acquireWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVis);
+
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', handleVis);
+      if (wakeLockSentinel) {
+        wakeLockSentinel.release().catch(() => {});
+        wakeLockSentinel = null;
+      }
+    };
+  }, [isPresentationMode, isTvLaunchEnv]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2831,29 +3115,27 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
                 <button
                   type="button"
-                  onClick={handleCopyTvLink}
-                  title="คัดลอกลิงก์สำหรับเปิดบน Smart TV หรือ Mini-PC ให้เข้าโหมดตารางนำเสนออัตโนมัติทันที"
+                  onClick={() => {
+                    setIsTvRemoteModalOpen(true);
+                    requestConnectedTvPing();
+                  }}
+                  title="เชื่อมต่อและควบคุมจอ TV แบบเรียลไทม์ (คนละเครื่องผ่าน Wi-Fi/อินเทอร์เน็ต หรือต่อสาย HDMI 2 จอ)"
                   className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
-                    copiedTvLink
-                      ? 'bg-emerald-600 text-white border-emerald-600'
+                    activeTvScreenList.length > 0
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs hover:bg-emerald-700'
                       : isNavyGold
-                      ? 'bg-[#091526]/80 text-amber-200 border-amber-400/30 hover:border-amber-400/60'
+                      ? 'bg-[#091526]/80 text-amber-200 border-amber-400/35 hover:border-amber-400/70'
                       : isDarkDisplay
-                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
-                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                      ? 'bg-slate-800/90 text-sky-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50/70 hover:border-indigo-300'
                   }`}
                 >
-                  {copiedTvLink ? (
-                    <>
-                      <Check className="h-3.5 w-3.5" />
-                      <span>คัดลอกลิงก์จอ TV แล้ว</span>
-                    </>
-                  ) : (
-                    <>
-                      <Link2 className="h-3.5 w-3.5" />
-                      <span>ลิงก์สำหรับจอ TV</span>
-                    </>
-                  )}
+                  <Radio className="h-3.5 w-3.5" />
+                  <span>
+                    {activeTvScreenList.length > 0
+                      ? `เชื่อมต่อจอ TV แล้ว (${activeTvScreenList.length})`
+                      : 'เชื่อมต่อจอ TV เรียลไทม์'}
+                  </span>
                 </button>
 
                 <button
@@ -3965,6 +4247,203 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         </div>
       )}
       </div>
+
+      {/* Live TV Remote Sync & Channel Setup Modal */}
+      {isTvRemoteModalOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4"
+          onClick={() => setIsTvRemoteModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-10 w-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Tv className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-extrabold text-slate-900 truncate">
+                    เชื่อมต่อและควบคุมจอ TV แบบเรียลไทม์
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    ซิงก์ตารางงาน สถานะผู้บริหาร และมุมมองจากเครื่องแอดมินขึ้นจอทีวีอัตโนมัติ
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTvRemoteModalOpen(false)}
+                className="h-8 w-8 rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-slate-100 inline-flex items-center justify-center shrink-0"
+                title="ปิดหน้าต่าง"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+              {/* Active TV Status & Direct Remote Actions */}
+              <div
+                className={`rounded-xl border p-4 space-y-3 ${
+                  activeTvScreenList.length > 0
+                    ? 'bg-emerald-50/70 border-emerald-200'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                        activeTvScreenList.length > 0 ? 'bg-emerald-600' : 'bg-amber-500'
+                      }`}
+                    />
+                    <span className="text-sm font-bold text-slate-900">
+                      {activeTvScreenList.length > 0
+                        ? `พบหน้าจอ TV เปิดรับสัญญาณเรียลไทม์อยู่ (${activeTvScreenList.length} จอ)`
+                        : 'รอการเปิดลิงก์สำหรับจอ TV บนเครื่องที่ต่อเข้าทีวี'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePingTvScreens}
+                    className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    <span>
+                      {tvRemoteActionFeedback === 'pinging'
+                        ? 'กำลังตรวจสอบ...'
+                        : 'เช็กสัญญาณจอ TV'}
+                    </span>
+                  </button>
+                </div>
+
+                {activeTvScreenList.length > 0 && (
+                  <div className="space-y-1.5">
+                    {activeTvScreenList.map((scr) => (
+                      <div
+                        key={scr.tvClientId}
+                        className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-white border border-emerald-200/90 text-xs"
+                      >
+                        <div className="flex items-center gap-2 font-semibold text-slate-800">
+                          <MonitorPlay className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                          <span>{scr.label}</span>
+                        </div>
+                        <span className="font-sans tabular-nums text-slate-600 font-medium">
+                          ความละเอียด {scr.viewportW}×{scr.viewportH} · สัดส่วน{' '}
+                          {Math.round(scr.scale * 100)}% ·{' '}
+                          {scr.transport === 'local_hdmi'
+                            ? 'สาย HDMI ในเครื่อง (0 วินาที)'
+                            : 'คลาวด์ HTTPS (Port 443)'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleForcePushToTv}
+                    className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    {tvRemoteActionFeedback === 'pushed' ? (
+                      <>
+                        <Check className="h-4 w-4" />
+                        <span>ส่งข้อมูลและมุมมองขึ้นจอ TV แล้ว</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4" />
+                        <span>ส่งข้อมูลและมุมมองขึ้นจอ TV เดี๋ยวนี้</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRemoteReloadTv}
+                    className="inline-flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs sm:text-sm font-bold transition-colors"
+                  >
+                    {tvRemoteActionFeedback === 'reloaded' ? (
+                      <>
+                        <Check className="h-4 w-4 text-emerald-600" />
+                        <span className="text-emerald-700">ส่งคำสั่งรีเฟรชจอ TV แล้ว</span>
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4" />
+                        <span>สั่งรีเฟรชเบราว์เซอร์จอ TV ระยะไกล</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 1: Separate PC / Notebook+HDMI over Internet / Office Wi-Fi */}
+              <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/40 p-4 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wide text-indigo-700">
+                    ช่องทางที่ 1 · คอมแอดมิน + โน้ตบุ๊กอีกเครื่องต่อสาย HDMI เข้าทีวี (ผ่านเน็ต/Wi-Fi)
+                  </span>
+                  <span className="text-[11px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-md">
+                    ไม่ต้องล็อกอินบนโน้ตบุ๊ก
+                  </span>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed">
+                  เสียบสาย HDMI จากโน้ตบุ๊กเข้าทีวี (แนะนำกด <strong>Windows + P → เฉพาะหน้าจอที่สอง / Second screen only</strong> หรือ <strong>Extend</strong> เพื่อให้ภาพออกเต็มความละเอียดทีวีและไม่ติดขอบดำ) จากนั้นเปิดลิงก์ด้านล่างบนเบราว์เซอร์ของโน้ตบุ๊กและกด <strong>F11</strong> ระบบจะกันพักหน้าจออัตโนมัติและซิงก์กับคอมแอดมินผ่าน <strong>HTTPS (Port 443)</strong> ภายใน ~0.5–1.5 วินาที
+                </p>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
+                  <input
+                    type="text"
+                    readOnly
+                    value={tvDirectShareUrl}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="flex-1 h-9 px-3 rounded-lg border border-slate-200 bg-white text-xs font-mono text-slate-700 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyTvLink}
+                    className={`inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-lg text-xs font-bold transition-colors shrink-0 ${
+                      copiedTvLink
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-900 hover:bg-slate-800 text-white'
+                    }`}
+                  >
+                    {copiedTvLink ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        <span>คัดลอกลิงก์แล้ว</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        <span>คัดลอกลิงก์สำหรับจอ TV</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Channel 2: Dual-Monitor HDMI / Wireless Display from Admin PC */}
+              <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
+                    ช่องทางที่ 2 · ต่อสาย HDMI / Wireless Display แยก 2 จอจากเครื่องแอดมิน
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                    เร็ว 0.00 วินาที · ไม่พึ่งเน็ต
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  หากเครื่องแอดมินต่อสาย HDMI หรือส่งภาพไร้สายเข้าทีวีแบบขยายหน้าจอ (<strong>Windows + P → Extend</strong>) ให้กด <strong>Ctrl + N</strong> เปิดหน้าต่างเบราว์เซอร์ใหม่ วางลิงก์สำหรับจอ TV แล้วลากหน้าต่างไปวางบนจอทีวีแล้วกด <strong>F11</strong> ทุกการกดเปลี่ยนสถานะหรือแก้ไขจะซิงก์ตรงในเครื่องทันทีแบบ 0 วินาที
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
