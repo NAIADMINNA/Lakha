@@ -5910,7 +5910,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleToggleTaskStatus(task)}
-                              className="mt-1 text-slate-400 hover:text-emerald-600 transition-colors shrink-0"
+                              className="mt-1 text-slate-400 hover:text-red-600 transition-colors shrink-0"
                               title={
                                 isDone
                                   ? 'เปลี่ยนเป็นรอดำเนินการ'
@@ -5918,7 +5918,7 @@ export default function App() {
                               }
                             >
                               {isDone ? (
-                                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                <CheckCircle2 className="h-4 w-4 text-red-600" />
                               ) : (
                                 <Circle className="h-4 w-4" style={{ color: catColor }} />
                               )}
@@ -5928,7 +5928,9 @@ export default function App() {
                               <div className="flex flex-wrap items-center gap-2">
                                 <span
                                   className={`inline-flex items-center gap-1 font-mono-tabular text-xs font-extrabold ${
-                                    isDone ? 'text-slate-400' : 'text-indigo-950'
+                                    isDone
+                                      ? 'line-through decoration-red-600 decoration-2 text-slate-400'
+                                      : 'text-indigo-950'
                                   }`}
                                 >
                                   <Clock className="h-3 w-3 text-indigo-500 shrink-0" />
@@ -5940,12 +5942,17 @@ export default function App() {
                                 <span
                                   className={`text-sm font-bold break-words ${
                                     isDone
-                                      ? 'line-through text-slate-400'
+                                      ? 'line-through decoration-red-600 decoration-2 text-slate-500'
                                       : 'text-slate-900'
                                   }`}
                                 >
                                   {task.title}
                                 </span>
+                                {isDone && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-red-200 bg-red-50 text-red-700 text-[11px] font-bold whitespace-nowrap">
+                                    เสร็จสิ้นแล้ว
+                                  </span>
+                                )}
                               </div>
 
                               {(parsedLocation || cleanNotes) && (

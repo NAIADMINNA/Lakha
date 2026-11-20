@@ -2142,7 +2142,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     : 'text-lg sm:text-xl'
                 } ${
                   isDone
-                    ? 'text-slate-400 line-through'
+                    ? isDarkDisplay
+                      ? 'text-slate-400 line-through decoration-red-500 decoration-[2.5px]'
+                      : 'text-slate-500 line-through decoration-red-600 decoration-2'
                     : isNextUpcomingRow
                     ? isDarkDisplay
                       ? 'text-amber-300'
@@ -2179,7 +2181,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     isLargeText ? 'text-2xl' : 'text-lg sm:text-xl'
                   } ${
                     isDone
-                      ? 'line-through text-slate-400'
+                      ? isDarkDisplay
+                        ? 'line-through decoration-red-500 decoration-[2.5px] text-slate-300'
+                        : 'line-through decoration-red-600 decoration-2 text-slate-500'
                       : isDarkDisplay
                       ? 'text-white'
                       : 'text-slate-900'
@@ -2296,13 +2300,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     isLargeText ? 'text-base' : 'text-sm'
                   } font-bold whitespace-nowrap shrink-0 ${
                     isDarkDisplay
-                      ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-                      : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      ? 'bg-red-950/75 border-red-500/80 text-red-300'
+                      : 'bg-red-50 border-red-300 text-red-700'
                   }`}
                 >
                   <CheckCircle2
                     className={`h-4 w-4 ${
-                      isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                      isDarkDisplay ? 'text-red-400' : 'text-red-600'
                     }`}
                   />
                   <span>เสร็จสิ้นแล้ว</span>
@@ -3279,7 +3283,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 <span>เสร็จสิ้นแล้ว</span>
                 <strong
                   className={`font-sans tabular-nums font-extrabold ${
-                    isDarkDisplay ? 'text-emerald-300' : 'text-emerald-700'
+                    isDarkDisplay ? 'text-red-400' : 'text-red-600'
                   }`}
                 >
                   {todayTasksSummary.completed}
@@ -4262,7 +4266,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               isLargeText ? 'text-lg' : 'text-sm'
                             } ${
                               isDone
-                                ? 'text-slate-400 line-through'
+                                ? isDarkDisplay
+                                  ? 'text-slate-400 line-through decoration-red-500 decoration-[2.5px]'
+                                  : 'text-slate-500 line-through decoration-red-600 decoration-2'
                                 : isDarkDisplay
                                 ? 'text-emerald-400'
                                 : 'text-slate-900'
@@ -4280,7 +4286,9 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                               isLargeText ? 'text-lg' : 'text-sm'
                             } ${
                               isDone
-                                ? 'line-through text-slate-400'
+                                ? isDarkDisplay
+                                  ? 'line-through decoration-red-500 decoration-[2.5px] text-slate-300'
+                                  : 'line-through decoration-red-600 decoration-2 text-slate-500'
                                 : isDarkDisplay
                                 ? 'text-white'
                                 : 'text-slate-900'
@@ -4344,11 +4352,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                             {isDone ? (
                               <>
                                 <span
-                                  className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
-                                    isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold whitespace-nowrap shrink-0 ${
+                                    isDarkDisplay
+                                      ? 'bg-red-950/75 border-red-500/80 text-red-300'
+                                      : 'bg-red-50 border-red-300 text-red-700'
                                   }`}
                                 >
-                                  <CheckCircle2 className="h-4 w-4" />
+                                  <CheckCircle2
+                                    className={`h-4 w-4 ${
+                                      isDarkDisplay ? 'text-red-400' : 'text-red-600'
+                                    }`}
+                                  />
                                   <span>เสร็จสิ้นแล้ว</span>
                                 </span>
                                 {!isTvCleanSignage && (

@@ -311,7 +311,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>
-                  เสร็จแล้ว <strong className="font-mono-tabular text-emerald-700">{monthSummary.done}</strong>
+                  เสร็จแล้ว <strong className="font-mono-tabular text-red-600">{monthSummary.done}</strong>
                 </span>
                 {monthSummary.high > 0 && (
                   <>
@@ -581,7 +581,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         }}
                         className={`flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] border transition-colors truncate ${
                           isDone
-                            ? 'border-slate-200/80 opacity-60 line-through text-slate-500'
+                            ? 'border-red-200/80 opacity-85 line-through decoration-red-600 decoration-2 text-slate-500'
                             : isUrgent
                             ? 'border-rose-200/90 hover:border-rose-300'
                             : 'border-transparent hover:border-slate-200'
@@ -636,7 +636,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           backgroundColor: isDone ? '#F1F5F9' : `${catColor}18`,
                         }}
                         className={`flex items-center gap-1 px-1 py-0.5 rounded text-[9px] font-medium truncate leading-tight ${
-                          isDone ? 'line-through text-slate-400' : 'text-slate-800'
+                          isDone
+                            ? 'line-through decoration-red-600 decoration-2 text-slate-500'
+                            : 'text-slate-800'
                         }`}
                       >
                         <span
@@ -749,7 +751,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     key={task.id}
                     className={`group rounded-xl border p-4 transition-all ${
                       isCompleted
-                        ? 'border-slate-200/70 bg-slate-50/60 opacity-75'
+                        ? 'border-red-200/80 bg-red-50/40'
                         : 'border-slate-200/90 bg-white hover:border-indigo-300/80 shadow-2xs'
                     }`}
                   >
@@ -759,7 +761,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         <button
                           type="button"
                           onClick={() => onToggleStatus(task)}
-                          className="text-slate-400 hover:text-emerald-600 transition-colors shrink-0"
+                          className="text-slate-400 hover:text-red-600 transition-colors shrink-0"
                           title={
                             isCompleted
                               ? 'เปลี่ยนเป็นรอดำเนินการ'
@@ -767,7 +769,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           }
                         >
                           {isCompleted ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                            <CheckCircle2 className="h-4 w-4 text-red-600" />
                           ) : (
                             <Circle className="h-4 w-4" style={{ color: catColor }} />
                           )}
@@ -779,6 +781,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           <Clock className="h-3.5 w-3.5 shrink-0 opacity-80" />
                           <span>{task.time} น.</span>
                         </span>
+                        {isCompleted && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md border border-red-200 bg-red-50 text-red-700 text-[10px] font-bold">
+                            เสร็จสิ้นแล้ว
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-0.5 shrink-0">
@@ -815,7 +822,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         type="button"
                         onClick={() => onEditTask(task)}
                         className={`text-left text-sm font-bold leading-snug hover:text-indigo-700 transition-colors break-words ${
-                          isCompleted ? 'line-through text-slate-400' : 'text-slate-900'
+                          isCompleted
+                            ? 'line-through decoration-red-600 decoration-2 text-slate-500'
+                            : 'text-slate-900'
                         }`}
                       >
                         {task.title}

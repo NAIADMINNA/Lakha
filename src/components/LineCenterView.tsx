@@ -2179,7 +2179,9 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                                     <div
                                       className={`text-sm font-bold mt-2 break-words leading-relaxed ${
-                                        isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                        isDone
+                                          ? 'line-through decoration-red-600 decoration-2 text-slate-500'
+                                          : 'text-slate-900'
                                       }`}
                                     >
                                       {t.title}
@@ -2755,7 +2757,9 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                                           <div
                                             className={`text-sm font-bold mt-2 break-words leading-relaxed ${
-                                              isDone ? 'line-through text-slate-400' : 'text-slate-900'
+                                              isDone
+                                                ? 'line-through decoration-red-600 decoration-2 text-slate-500'
+                                                : 'text-slate-900'
                                             }`}
                                           >
                                             {item.title}
