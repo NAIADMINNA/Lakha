@@ -5207,10 +5207,6 @@ async function startServer() {
                 ].filter(Boolean);
                 await sendServerTelegramHtml({
                   htmlText: tgDigestLines.join('\n'),
-                  buttons:
-                    runtimeScheduleConfig.telegramShowButtons !== false
-                      ? [[{ text: '📅 เปิดปฏิทินทีม', url: defaultAppUrl }]]
-                      : undefined,
                   dedupKey: `tg-morning-digest-${todayYMD}`,
                 });
               }
@@ -5355,10 +5351,6 @@ async function startServer() {
             ].filter(Boolean);
             await sendServerTelegramHtml({
               htmlText: tgLines.join('\n'),
-              buttons:
-                runtimeScheduleConfig.telegramShowButtons !== false
-                  ? [[{ text: '📅 เปิดปฏิทินทีม', url: defaultAppUrl }]]
-                  : undefined,
               dedupKey: `tg-task-remind-${String(t.id || '')}-${effectiveDate}-${cleanTime}`,
             });
           }

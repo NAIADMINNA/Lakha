@@ -8,7 +8,6 @@ import {
 import {
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
-  resolvePublicTvShareUrl,
 } from './lineCommandParser';
 import { getEffectiveGasUrl } from '../data/initialData';
 
@@ -80,52 +79,14 @@ export function isTelegramConfigured(settings: {
   );
 }
 
-export function buildTelegramActionButtons(options: {
+export function buildTelegramActionButtons(_options?: {
   calendarUrl?: string;
   googleCalendarUrl?: string;
   includeCalendarButton?: boolean;
   includeTvButton?: boolean;
   showButtons?: boolean;
 }): TelegramInlineButton[][] {
-  if (options.showButtons === false) return [];
-  const rows: TelegramInlineButton[][] = [];
-  const primaryRow: TelegramInlineButton[] = [];
-
-  if (
-    options.includeCalendarButton !== false &&
-    options.calendarUrl &&
-    /^https?:\/\//i.test(options.calendarUrl)
-  ) {
-    primaryRow.push({
-      text: '📅 เปิดปฏิทินทีม',
-      url: options.calendarUrl,
-    });
-  }
-
-  if (options.includeTvButton !== false) {
-    const tvUrl = resolvePublicTvShareUrl();
-    if (tvUrl && /^https?:\/\//i.test(tvUrl)) {
-      primaryRow.push({
-        text: '📺 เปิดหน้าจอ TV',
-        url: tvUrl,
-      });
-    }
-  }
-
-  if (primaryRow.length > 0) {
-    rows.push(primaryRow);
-  }
-
-  if (options.googleCalendarUrl && /^https?:\/\//i.test(options.googleCalendarUrl)) {
-    rows.push([
-      {
-        text: '🗓 เพิ่มลง Google Calendar',
-        url: options.googleCalendarUrl,
-      },
-    ]);
-  }
-
-  return rows;
+  return [];
 }
 
 export function formatSingleTaskTelegramHtml(params: {

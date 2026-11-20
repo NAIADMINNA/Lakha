@@ -1573,7 +1573,7 @@ export function generateGoogleAppsScriptCode(
   let effectiveDailyDigestEnabled = telegramOptions?.dailyDigestEnabled !== false;
   let effectiveDailyDigestTime = (telegramOptions?.dailyDigestTime || '08:00').trim();
   let effectiveShowStats = telegramOptions?.showStats !== false;
-  let effectiveShowButtons = telegramOptions?.showButtons !== false;
+  const effectiveShowButtons = false;
   let initialTasksJson = '[]';
   try {
     if (typeof localStorage !== 'undefined') {
@@ -4524,15 +4524,8 @@ function formatRemindMinutesInGas(mins) {
   return 'ล่วงหน้า ' + days + ' วัน';
 }
 
-function buildTelegramButtonsInGas(dateYMD, showButtons) {
-  if (showButtons === false) return [];
-  var calUrl = getCalendarDeepLink('', dateYMD);
-  var tvBase = String(MAIN_SERVER_URL || 'https://naiadminna.github.io/Lakha').replace(/\\/+$/, '');
-  var tvUrl = tvBase + '/?view=board&tv=1&sheet=' + encodeURIComponent(SPREADSHEET_ID);
-  return [[
-    { text: '📅 เปิดปฏิทินทีม', url: calUrl },
-    { text: '📺 เปิดหน้าจอ TV', url: tvUrl }
-  ]];
+function buildTelegramButtonsInGas() {
+  return [];
 }
 
 function hasTelegramReminderBeenSentInGas(key) {

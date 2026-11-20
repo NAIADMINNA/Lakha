@@ -130,5 +130,5 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   telegramStyle: 'executive_card',
   telegramHeaderTitle: 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา',
   telegramShowStats: true,
-  telegramShowButtons: true,
+  telegramShowButtons: false,
 };

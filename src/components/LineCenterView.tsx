@@ -4836,21 +4836,6 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         />
                         <span>แสดงแถบสรุปยอดงาน</span>
                       </label>
-
-                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={lineSettings.telegramShowButtons !== false}
-                          onChange={(e) =>
-                            onUpdateSettings({
-                              ...lineSettings,
-                              telegramShowButtons: e.target.checked,
-                            })
-                          }
-                          className="h-3.5 w-3.5 rounded border-slate-300 accent-[#0088cc]"
-                        />
-                        <span>แสดงปุ่มเปิดปฏิทิน / จอ TV</span>
-                      </label>
                     </div>
                   </div>
 

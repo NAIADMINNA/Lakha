@@ -13,6 +13,8 @@ import {
   Clock,
   Copy,
   Edit3,
+  Eye,
+  EyeOff,
   MapPin,
   Maximize2,
   Minimize2,
@@ -521,6 +523,16 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const [isPresentationMode, setIsPresentationMode] = useState<boolean>(() => isTvLaunchEnv);
   const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
     useState<boolean>(() => isTvLaunchEnv);
+  const [isAutoHideToolbar, setIsAutoHideToolbar] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const saved = window.localStorage.getItem('sheetcal_tv_autohide_toolbar_v1');
+      if (saved === '0' || saved === 'false') return false;
+      return true;
+    } catch {
+      return true;
+    }
+  });
   const [isAutoScroll, setIsAutoScroll] = useState<boolean>(() =>
     isTvLaunchEnv ? true : Boolean(initialBoardSettings?.isAutoScroll)
   );
@@ -543,21 +555,64 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const boardStaticSyncTimerRef = useRef<number | null>(null);
   const loadedScriptHashRef = useRef<string>('');
 
-  const wakeTvControls = useCallback(() => {
-    setIsTvControlsIdle((prev) => (prev ? false : prev));
+  const isToolbarInteractionLocked = useCallback(() => {
+    if (isTvRemoteModalOpen) return true;
+    if (typeof document === 'undefined') return false;
+    if (document.querySelector('[data-presence-note-form="true"]')) return true;
+    const active = document.activeElement;
+    if (!active) return false;
+    const tag = active.tagName.toLowerCase();
+    return (
+      tag === 'input' ||
+      tag === 'textarea' ||
+      tag === 'select' ||
+      (active as HTMLElement).isContentEditable
+    );
+  }, [isTvRemoteModalOpen]);
+
+  const scheduleAutoHideCheck = useCallback(() => {
     if (tvIdleTimerRef.current !== null) {
       window.clearTimeout(tvIdleTimerRef.current);
       tvIdleTimerRef.current = null;
     }
-    if (isPresentationMode && isTvAutoFit && isToolbarCollapsedInFullscreen) {
-      tvIdleTimerRef.current = window.setTimeout(() => {
-        setIsTvControlsIdle(true);
-      }, 6500);
-    }
-  }, [isPresentationMode, isTvAutoFit, isToolbarCollapsedInFullscreen]);
+    if (!isAutoHideToolbar || isTvRemoteModalOpen) return;
+    tvIdleTimerRef.current = window.setTimeout(() => {
+      if (isToolbarInteractionLocked()) {
+        scheduleAutoHideCheck();
+        return;
+      }
+      setIsToolbarCollapsedInFullscreen(true);
+      setIsTvControlsIdle(true);
+    }, 5000);
+  }, [isAutoHideToolbar, isTvRemoteModalOpen, isToolbarInteractionLocked]);
+
+  const wakeTvControls = useCallback(() => {
+    setIsTvControlsIdle((prev) => (prev ? false : prev));
+    scheduleAutoHideCheck();
+  }, [scheduleAutoHideCheck]);
+
+  const handleToggleAutoHideToolbar = useCallback(() => {
+    setIsAutoHideToolbar((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('sheetcal_tv_autohide_toolbar_v1', next ? '1' : '0');
+      } catch {
+        // Ignore storage restrictions
+      }
+      if (!next) {
+        if (tvIdleTimerRef.current !== null) {
+          window.clearTimeout(tvIdleTimerRef.current);
+          tvIdleTimerRef.current = null;
+        }
+        setIsTvControlsIdle(false);
+        setIsToolbarCollapsedInFullscreen(false);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
-    if (!isPresentationMode || !isTvAutoFit || !isToolbarCollapsedInFullscreen) {
+    if (!isAutoHideToolbar || isTvRemoteModalOpen) {
       setIsTvControlsIdle(false);
       if (tvIdleTimerRef.current !== null) {
         window.clearTimeout(tvIdleTimerRef.current);
@@ -565,16 +620,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
       return;
     }
-    tvIdleTimerRef.current = window.setTimeout(() => {
-      setIsTvControlsIdle(true);
-    }, 6500);
+    scheduleAutoHideCheck();
     return () => {
       if (tvIdleTimerRef.current !== null) {
         window.clearTimeout(tvIdleTimerRef.current);
         tvIdleTimerRef.current = null;
       }
     };
-  }, [isPresentationMode, isTvAutoFit, isToolbarCollapsedInFullscreen]);
+  }, [isAutoHideToolbar, isPresentationMode, isTvRemoteModalOpen, scheduleAutoHideCheck]);
 
   // Real-time TV resolution, DPI scale, orientation, Esc, and browser Fullscreen synchronization
   useEffect(() => {
@@ -617,7 +670,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       if (ev.key === 'Escape' && isPresentationMode) {
         setIsPresentationMode(false);
         setIsToolbarCollapsedInFullscreen(false);
-      } else if (isPresentationMode) {
+        setIsTvControlsIdle(false);
+      } else if (isAutoHideToolbar || isPresentationMode) {
         wakeTvControls();
       }
     };
@@ -641,7 +695,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         vv.removeEventListener('resize', syncViewportMetrics);
       }
     };
-  }, [isPresentationMode, isTvAutoFit, isTvLaunchEnv, isTvRemoteModalOpen, wakeTvControls]);
+  }, [
+    isAutoHideToolbar,
+    isPresentationMode,
+    isTvAutoFit,
+    isTvLaunchEnv,
+    isTvRemoteModalOpen,
+    wakeTvControls,
+  ]);
 
   // Broadcast board display controls to TV screens whenever Admin clicks any toolbar control
   useEffect(() => {
@@ -699,15 +760,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     showCompleted,
   ]);
 
-  const isToolbarCollapsed = isPresentationMode && isToolbarCollapsedInFullscreen;
+  const isToolbarCollapsed = isToolbarCollapsedInFullscreen;
   const isTvStageActive = isPresentationMode && isTvAutoFit;
   const isLandscapeTvStage = isTvStageActive && tvStageMetrics.isLandscape;
   const isPortraitTvStage = isTvStageActive && !tvStageMetrics.isLandscape;
-  const isTvCleanSignage =
-    isPresentationMode &&
-    isTvAutoFit &&
-    isToolbarCollapsedInFullscreen &&
-    isTvControlsIdle;
+  const isTvCleanSignage = isAutoHideToolbar && isTvControlsIdle;
 
   const isDarkDisplay = boardTheme === 'dark' || boardTheme === 'navy_gold';
   const isNavyGold = boardTheme === 'navy_gold';
@@ -909,6 +966,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       setIsLargeText(true);
       if (isTvAutoFit) {
         setIsAutoScroll(true);
+      }
+      if (isTvAutoFit || isAutoHideToolbar) {
         setIsToolbarCollapsedInFullscreen(true);
       }
       try {
@@ -1837,6 +1896,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     boardTheme,
     isPresentationMode,
     isToolbarCollapsed,
+    isTvCleanSignage,
     isAutoScroll,
     layoutMode,
     rangeMode,
@@ -2487,10 +2547,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
   return (
     <div
-      onMouseMove={isPresentationMode ? wakeTvControls : undefined}
-      onPointerDown={isPresentationMode ? wakeTvControls : undefined}
-      onTouchStart={isPresentationMode ? wakeTvControls : undefined}
-      onWheel={isPresentationMode ? wakeTvControls : undefined}
+      onMouseMove={isAutoHideToolbar ? wakeTvControls : undefined}
+      onPointerDown={isAutoHideToolbar ? wakeTvControls : undefined}
+      onTouchStart={isAutoHideToolbar ? wakeTvControls : undefined}
+      onWheel={isAutoHideToolbar ? wakeTvControls : undefined}
       className={
         isPresentationMode
           ? `fixed inset-0 z-50 overflow-hidden transition-colors ${presentationSurfaceClasses} ${
@@ -2875,6 +2935,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                 {isEditingPresenceNote ? (
                   <form
+                    data-presence-note-form="true"
                     onSubmit={(e) => {
                       e.preventDefault();
                       updateDirectorPresence(directorPresence.mode, presenceNoteDraft);
@@ -3176,6 +3237,39 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         : 'ปรับตามจอ TV อัตโนมัติ'
                       : 'สัดส่วนปกติ (1:1)'}
                   </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleToggleAutoHideToolbar}
+                  title="ซ่อนแถบเครื่องมือและปุ่มควบคุมอัตโนมัติเมื่อไม่ได้ขยับเมาส์เกิน 5 วินาที (ขยับเมาส์เพื่อแสดงกลับมา)"
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isAutoHideToolbar
+                      ? isNavyGold
+                        ? 'bg-amber-400/20 text-amber-200 border-amber-400/70 shadow-xs'
+                        : isDarkDisplay
+                        ? 'bg-sky-500/20 text-sky-200 border-sky-400/70 shadow-xs'
+                        : isEmeraldExec
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                        : 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-slate-200 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  {isAutoHideToolbar ? (
+                    <>
+                      <EyeOff className="h-3.5 w-3.5" />
+                      <span>ซ่อนแถบอัตโนมัติ: เปิด</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3.5 w-3.5" />
+                      <span>ตรึงแถบเครื่องมือไว้</span>
+                    </>
+                  )}
                 </button>
 
                 <button
@@ -3524,25 +3618,23 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             </div>
           ) : null}
 
-          {isPresentationMode && (
-            <button
-              type="button"
-              onClick={() => setIsToolbarCollapsedInFullscreen(true)}
-              className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap shrink-0 ml-auto ${
-                isNavyGold
-                  ? 'bg-[#091526]/90 text-amber-300 border-amber-400/40 hover:border-amber-400/80 hover:bg-[#091526]'
-                  : isDarkDisplay
-                  ? 'bg-slate-800 text-sky-300 border-slate-700 hover:bg-slate-700'
-                  : isEmeraldExec
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/80'
-              }`}
-              title="ย่อแถบตัวกรองและสลับมุมมองเพื่อเพิ่มพื้นที่แสดงตารางงาน"
-            >
-              <ChevronUp className="h-3.5 w-3.5" />
-              <span>ย่อแถบเครื่องมือ</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setIsToolbarCollapsedInFullscreen(true)}
+            className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap shrink-0 ml-auto ${
+              isNavyGold
+                ? 'bg-[#091526]/90 text-amber-300 border-amber-400/40 hover:border-amber-400/80 hover:bg-[#091526]'
+                : isDarkDisplay
+                ? 'bg-slate-800 text-sky-300 border-slate-700 hover:bg-slate-700'
+                : isEmeraldExec
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/80'
+            }`}
+            title="ย่อแถบตัวกรองและสลับมุมมองเพื่อเพิ่มพื้นที่แสดงตารางงาน"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+            <span>ย่อแถบเครื่องมือ</span>
+          </button>
         </div>
 
         {/* Toolbar Tier 2: Search, Category & Priority Filters, and Display Toggles */}
