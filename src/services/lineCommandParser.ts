@@ -1547,10 +1547,33 @@ export function formatLineDeliveryErrorThai(
 export function generateGoogleAppsScriptCode(
   spreadsheetId: string,
   channelAccessToken?: string,
-  appUrl?: string
+  appUrl?: string,
+  telegramOptions?: {
+    botToken?: string;
+    chatId?: string;
+    headerTitle?: string;
+    reminderTimings?: number[];
+    dailyDigestEnabled?: boolean;
+    dailyDigestTime?: string;
+    showStats?: boolean;
+    showButtons?: boolean;
+  }
 ): string {
   let effectiveSheetId = (spreadsheetId || '').trim();
   let effectiveGroupId = '';
+  let effectiveTgToken = (telegramOptions?.botToken || '').trim();
+  let effectiveTgChatId = (telegramOptions?.chatId || '').trim();
+  let effectiveTgHeader = (
+    telegramOptions?.headerTitle || 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'
+  ).trim();
+  let effectiveReminderTimings: number[] =
+    Array.isArray(telegramOptions?.reminderTimings) && telegramOptions.reminderTimings.length > 0
+      ? telegramOptions.reminderTimings
+      : [0, 15, 60];
+  let effectiveDailyDigestEnabled = telegramOptions?.dailyDigestEnabled !== false;
+  let effectiveDailyDigestTime = (telegramOptions?.dailyDigestTime || '08:00').trim();
+  let effectiveShowStats = telegramOptions?.showStats !== false;
+  let effectiveShowButtons = telegramOptions?.showButtons !== false;
   let initialTasksJson = '[]';
   try {
     if (typeof localStorage !== 'undefined') {
@@ -1571,6 +1594,39 @@ export function generateGoogleAppsScriptCode(
         ).trim();
         if (/^[CR][0-9a-fA-F]{32}$/.test(candidateGrp)) {
           effectiveGroupId = candidateGrp;
+        }
+        if (!effectiveTgToken && typeof parsedSettings?.telegramBotToken === 'string') {
+          effectiveTgToken = parsedSettings.telegramBotToken.trim();
+        }
+        if (!effectiveTgChatId && typeof parsedSettings?.telegramChatId === 'string') {
+          effectiveTgChatId = parsedSettings.telegramChatId.trim();
+        }
+        if (
+          !telegramOptions?.headerTitle &&
+          typeof parsedSettings?.telegramHeaderTitle === 'string' &&
+          parsedSettings.telegramHeaderTitle.trim()
+        ) {
+          effectiveTgHeader = parsedSettings.telegramHeaderTitle.trim();
+        }
+        if (
+          !telegramOptions?.reminderTimings &&
+          Array.isArray(parsedSettings?.reminderTimings) &&
+          parsedSettings.reminderTimings.length > 0
+        ) {
+          effectiveReminderTimings = parsedSettings.reminderTimings;
+        }
+        if (
+          telegramOptions?.dailyDigestTime === undefined &&
+          typeof parsedSettings?.dailyDigestTime === 'string' &&
+          /^\d{1,2}:\d{2}$/.test(parsedSettings.dailyDigestTime.trim())
+        ) {
+          effectiveDailyDigestTime = parsedSettings.dailyDigestTime.trim();
+        }
+        if (
+          telegramOptions?.dailyDigestEnabled === undefined &&
+          typeof parsedSettings?.dailyDigestEnabled === 'boolean'
+        ) {
+          effectiveDailyDigestEnabled = parsedSettings.dailyDigestEnabled;
         }
       }
       const rawTasks = localStorage.getItem('sheetcal_tasks_v3_clean');
@@ -1649,6 +1705,14 @@ export function generateGoogleAppsScriptCode(
 
 const SPREADSHEET_ID = '${sheetIdDisplay}';
 const LINE_CHANNEL_ACCESS_TOKEN = '${tokenDisplay}';
+const TELEGRAM_BOT_TOKEN = '${effectiveTgToken.replace(/[\r\n']/g, '')}';
+const TELEGRAM_CHAT_ID = '${effectiveTgChatId.replace(/[\r\n']/g, '')}';
+const TELEGRAM_HEADER_TITLE = '${effectiveTgHeader.replace(/[\r\n']/g, '')}';
+const TELEGRAM_REMINDER_TIMINGS = ${JSON.stringify(effectiveReminderTimings)};
+const TELEGRAM_DAILY_DIGEST_ENABLED = ${effectiveDailyDigestEnabled ? 'true' : 'false'};
+const TELEGRAM_DAILY_DIGEST_TIME = '${effectiveDailyDigestTime.replace(/[\r\n']/g, '')}';
+const TELEGRAM_SHOW_STATS = ${effectiveShowStats ? 'true' : 'false'};
+const TELEGRAM_SHOW_BUTTONS = ${effectiveShowButtons ? 'true' : 'false'};
 const MAIN_SERVER_URL = '${mainServerOrigin}';
 const WEB_APP_URL = '${webAppUrl}';
 const INITIAL_GROUP_ID = '${groupIdDisplay}';
@@ -3167,13 +3231,106 @@ function doPost(e) {
     if (typeof payload.allowAddTaskFromLine === 'boolean') {
       setAllowAddTaskFromLine(payload.allowAddTaskFromLine);
     }
+    if (typeof payload.telegramBotToken === 'string' && payload.telegramBotToken.trim()) {
+      setSavedTelegramConfig(payload.telegramBotToken.trim(), payload.telegramChatId);
+    } else if (typeof payload.telegramChatId === 'string' && payload.telegramChatId.trim()) {
+      setSavedTelegramConfig('', payload.telegramChatId.trim());
+    }
+    setSavedTelegramScheduleConfig(payload);
 
     if (payload.action === 'set_config') {
+      var savedSched = getSavedTelegramScheduleConfig();
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_set_config',
-        allowAddTaskFromLine: getAllowAddTaskFromLine()
+        version: '3.3-telegram-24x7-reminders',
+        allowAddTaskFromLine: getAllowAddTaskFromLine(),
+        hasTelegram: Boolean(getSavedTelegramToken() && getSavedTelegramChatId()),
+        reminderTimings: savedSched.reminderTimings,
+        dailyDigestEnabled: savedSched.dailyDigestEnabled,
+        dailyDigestTime: savedSched.dailyDigestTime
       })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ส่งแจ้งเตือนผ่าน Telegram Bot API (ฟรีไม่จำกัดข้อความ)
+    if (payload.action === 'push_telegram') {
+      var tgRes = sendTelegramMessageInGas({
+        botToken: payload.botToken || getSavedTelegramToken(),
+        chatId: payload.chatId || getSavedTelegramChatId(),
+        htmlText: payload.htmlText || payload.text || '',
+        buttons: payload.buttons,
+        dedupKey: payload.dedupKey
+      });
+      return ContentService.createTextOutput(JSON.stringify({
+        status: tgRes.ok ? 'ok' : 'error',
+        mode: 'gas_push_telegram',
+        version: '3.2-telegram-photo-card',
+        ok: tgRes.ok,
+        deliveredCount: tgRes.deliveredCount,
+        failedCount: tgRes.failedCount,
+        telegramError: tgRes.error || ''
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ส่งการ์ดภาพกราฟิก (sendPhoto) ผ่าน Telegram Bot API
+    if (payload.action === 'push_telegram_photo') {
+      var pToken = String(payload.botToken || getSavedTelegramToken() || '').trim();
+      var pChatIds = parseTelegramChatIdsInGas(payload.chatId || getSavedTelegramChatId());
+      var pBase64 = String(payload.photoBase64 || '').trim();
+      var pCaption = String(payload.captionHtml || '').slice(0, 1000);
+      var pButtons = payload.buttons && payload.buttons.length ? JSON.stringify({ inline_keyboard: payload.buttons }) : '';
+      var pDelivered = 0;
+      var pFailed = 0;
+      var pLastErr = '';
+      if (pToken && pChatIds.length > 0 && pBase64) {
+        var imgBlob = Utilities.newBlob(Utilities.base64Decode(pBase64), 'image/png', 'lakha-schedule-card.png');
+        for (var pi = 0; pi < pChatIds.length; pi++) {
+          try {
+            var photoPayload = {
+              chat_id: pChatIds[pi],
+              photo: imgBlob
+            };
+            if (pCaption) {
+              photoPayload.caption = pCaption;
+              photoPayload.parse_mode = 'HTML';
+            }
+            if (pButtons) {
+              photoPayload.reply_markup = pButtons;
+            }
+            var photoRes = UrlFetchApp.fetch('https://api.telegram.org/bot' + pToken + '/sendPhoto', {
+              method: 'post',
+              payload: photoPayload,
+              muteHttpExceptions: true
+            });
+            var photoJson = {};
+            try { photoJson = JSON.parse(photoRes.getContentText() || '{}'); } catch (e) {}
+            if (photoRes.getResponseCode() >= 200 && photoRes.getResponseCode() < 300 && photoJson.ok) {
+              pDelivered++;
+            } else {
+              pFailed++;
+              pLastErr = photoJson.description || ('HTTP ' + photoRes.getResponseCode());
+            }
+          } catch (e) {
+            pFailed++;
+            pLastErr = String(e);
+          }
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: pDelivered > 0 ? 'ok' : 'error',
+        mode: 'gas_push_telegram_photo',
+        version: '3.2-telegram-photo-card',
+        ok: pDelivered > 0,
+        deliveredCount: pDelivered,
+        failedCount: pFailed,
+        telegramError: pLastErr
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ค้นหา Telegram Chat ID / Group ID อัตโนมัติจาก getMe + getUpdates
+    if (payload.action === 'telegram_get_updates') {
+      var tgInfo = detectTelegramChatsInGas(payload.botToken || getSavedTelegramToken());
+      return ContentService.createTextOutput(JSON.stringify(tgInfo)).setMimeType(ContentService.MimeType.JSON);
     }
 
     // คำสั่งลบ Rich Menu ทั้งหมดออกจาก LINE OA
@@ -4253,6 +4410,465 @@ function replyLineMessages(replyToken, messages) {
       muteHttpExceptions: true
     });
   } catch (err) {}
+}
+
+// ============================================================================
+// Telegram Bot Integration (ฟรีไม่จำกัดข้อความ · ส่งตรงจากเซิร์ฟเวอร์ Google)
+// ============================================================================
+function setSavedTelegramConfig(botToken, chatId) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (botToken && String(botToken).trim()) {
+      props.setProperty('SAVED_TELEGRAM_BOT_TOKEN', String(botToken).trim());
+    }
+    if (chatId !== undefined && chatId !== null && String(chatId).trim()) {
+      props.setProperty('SAVED_TELEGRAM_CHAT_ID', String(chatId).trim());
+    }
+  } catch (err) {}
+}
+
+function getSavedTelegramToken() {
+  try {
+    var saved = PropertiesService.getScriptProperties().getProperty('SAVED_TELEGRAM_BOT_TOKEN');
+    if (saved && String(saved).trim()) return String(saved).trim();
+  } catch (err) {}
+  return String(TELEGRAM_BOT_TOKEN || '').trim();
+}
+
+function getSavedTelegramChatId() {
+  try {
+    var saved = PropertiesService.getScriptProperties().getProperty('SAVED_TELEGRAM_CHAT_ID');
+    if (saved && String(saved).trim()) return String(saved).trim();
+  } catch (err) {}
+  return String(TELEGRAM_CHAT_ID || '').trim();
+}
+
+function parseTelegramChatIdsInGas(raw) {
+  return String(raw || '')
+    .split(/[\\s,;]+/)
+    .map(function(s) { return s.trim(); })
+    .filter(function(s) { return Boolean(s); });
+}
+
+function setSavedTelegramScheduleConfig(payload) {
+  if (!payload) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (typeof payload.telegramHeaderTitle === 'string' && payload.telegramHeaderTitle.trim()) {
+      props.setProperty('SAVED_TG_HEADER_TITLE', payload.telegramHeaderTitle.trim());
+    }
+    if (Array.isArray(payload.reminderTimings) && payload.reminderTimings.length > 0) {
+      var cleanTimings = payload.reminderTimings
+        .map(function(n) { return Number(n); })
+        .filter(function(n) { return !isNaN(n) && n >= 0 && n <= 10080; });
+      if (cleanTimings.length > 0) {
+        props.setProperty('SAVED_TG_REMINDER_TIMINGS', JSON.stringify(cleanTimings));
+      }
+    }
+    if (typeof payload.dailyDigestEnabled === 'boolean') {
+      props.setProperty('SAVED_TG_DIGEST_ENABLED', payload.dailyDigestEnabled ? 'true' : 'false');
+    }
+    if (typeof payload.dailyDigestTime === 'string' && /^\\d{1,2}:\\d{2}$/.test(payload.dailyDigestTime.trim())) {
+      props.setProperty('SAVED_TG_DIGEST_TIME', payload.dailyDigestTime.trim());
+    }
+    if (typeof payload.telegramShowStats === 'boolean') {
+      props.setProperty('SAVED_TG_SHOW_STATS', payload.telegramShowStats ? 'true' : 'false');
+    }
+    if (typeof payload.telegramShowButtons === 'boolean') {
+      props.setProperty('SAVED_TG_SHOW_BUTTONS', payload.telegramShowButtons ? 'true' : 'false');
+    }
+  } catch (err) {}
+}
+
+function getSavedTelegramScheduleConfig() {
+  var cfg = {
+    headerTitle: String(TELEGRAM_HEADER_TITLE || 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'),
+    reminderTimings: Array.isArray(TELEGRAM_REMINDER_TIMINGS) ? TELEGRAM_REMINDER_TIMINGS.slice() : [0, 15, 60],
+    dailyDigestEnabled: Boolean(TELEGRAM_DAILY_DIGEST_ENABLED),
+    dailyDigestTime: String(TELEGRAM_DAILY_DIGEST_TIME || '08:00'),
+    showStats: Boolean(TELEGRAM_SHOW_STATS),
+    showButtons: Boolean(TELEGRAM_SHOW_BUTTONS)
+  };
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var h = props.getProperty('SAVED_TG_HEADER_TITLE');
+    if (h && String(h).trim()) cfg.headerTitle = String(h).trim();
+    var rt = props.getProperty('SAVED_TG_REMINDER_TIMINGS');
+    if (rt) {
+      var parsed = JSON.parse(rt);
+      if (Array.isArray(parsed) && parsed.length > 0) cfg.reminderTimings = parsed;
+    }
+    var de = props.getProperty('SAVED_TG_DIGEST_ENABLED');
+    if (de === 'true' || de === 'false') cfg.dailyDigestEnabled = (de === 'true');
+    var dt = props.getProperty('SAVED_TG_DIGEST_TIME');
+    if (dt && /^\\d{1,2}:\\d{2}$/.test(String(dt).trim())) cfg.dailyDigestTime = String(dt).trim();
+    var ss = props.getProperty('SAVED_TG_SHOW_STATS');
+    if (ss === 'true' || ss === 'false') cfg.showStats = (ss === 'true');
+    var sb = props.getProperty('SAVED_TG_SHOW_BUTTONS');
+    if (sb === 'true' || sb === 'false') cfg.showButtons = (sb === 'true');
+  } catch (err) {}
+  return cfg;
+}
+
+function formatRemindMinutesInGas(mins) {
+  var m = Number(mins || 0);
+  if (m <= 0) return 'ตรงเวลาที่กำหนด';
+  if (m < 60) return 'ล่วงหน้า ' + m + ' นาที';
+  if (m === 60) return 'ล่วงหน้า 1 ชั่วโมง';
+  if (m < 1440) {
+    var hrs = Math.floor(m / 60);
+    var rem = m % 60;
+    return rem > 0 ? ('ล่วงหน้า ' + hrs + ' ชม. ' + rem + ' นาที') : ('ล่วงหน้า ' + hrs + ' ชั่วโมง');
+  }
+  var days = Math.round(m / 1440);
+  return 'ล่วงหน้า ' + days + ' วัน';
+}
+
+function buildTelegramButtonsInGas(dateYMD, showButtons) {
+  if (showButtons === false) return [];
+  var calUrl = getCalendarDeepLink('', dateYMD);
+  var tvBase = String(MAIN_SERVER_URL || 'https://naiadminna.github.io/Lakha').replace(/\\/+$/, '');
+  var tvUrl = tvBase + '/?view=board&tv=1&sheet=' + encodeURIComponent(SPREADSHEET_ID);
+  return [[
+    { text: '📅 เปิดปฏิทินทีม', url: calUrl },
+    { text: '📺 เปิดหน้าจอ TV', url: tvUrl }
+  ]];
+}
+
+function hasTelegramReminderBeenSentInGas(key) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (cache.get('tgr_' + key)) return true;
+  } catch (e) {}
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty('TG_SENT_REMIND_KEYS');
+    if (raw) {
+      var list = JSON.parse(raw);
+      if (Array.isArray(list) && list.indexOf(key) !== -1) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function markTelegramReminderSentInGas(key) {
+  try {
+    CacheService.getScriptCache().put('tgr_' + key, '1', 21600);
+  } catch (e) {}
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var raw = props.getProperty('TG_SENT_REMIND_KEYS');
+    var list = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(list)) list = [];
+    if (list.indexOf(key) === -1) {
+      list.push(key);
+      if (list.length > 180) list = list.slice(list.length - 180);
+      props.setProperty('TG_SENT_REMIND_KEYS', JSON.stringify(list));
+    }
+  } catch (e) {}
+}
+
+function escapeTelegramHtmlInGas(raw) {
+  return String(raw || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function sendTelegramMessageInGas(opts) {
+  var token = String((opts && opts.botToken) || getSavedTelegramToken() || '').trim();
+  var rawChatIds = String((opts && opts.chatId) || getSavedTelegramChatId() || '').trim();
+  var htmlText = String((opts && opts.htmlText) || '').trim();
+  if (!token || !rawChatIds || !htmlText) {
+    return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Missing Telegram Bot Token, Chat ID, or message' };
+  }
+  if (opts && opts.dedupKey) {
+    try {
+      var cache = CacheService.getScriptCache();
+      if (cache.get('tg_dedup_' + opts.dedupKey)) {
+        return { ok: true, deliveredCount: 1, failedCount: 0, deduplicated: true };
+      }
+      cache.put('tg_dedup_' + opts.dedupKey, '1', 2700);
+    } catch (e) {}
+  }
+
+  var chatIds = parseTelegramChatIdsInGas(rawChatIds);
+  var delivered = 0;
+  var failed = 0;
+  var lastErr = '';
+  for (var i = 0; i < chatIds.length; i++) {
+    try {
+      var body = {
+        chat_id: chatIds[i],
+        text: htmlText,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      };
+      if (opts && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+        body.reply_markup = { inline_keyboard: opts.buttons };
+      }
+      var resp = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(body),
+        muteHttpExceptions: true
+      });
+      var parsed = {};
+      try { parsed = JSON.parse(resp.getContentText() || '{}'); } catch (e) {}
+      if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300 && parsed.ok) {
+        delivered++;
+      } else {
+        failed++;
+        lastErr = String(parsed.description || ('HTTP ' + resp.getResponseCode()));
+      }
+    } catch (err) {
+      failed++;
+      lastErr = String(err);
+    }
+  }
+  return { ok: delivered > 0, deliveredCount: delivered, failedCount: failed, error: lastErr };
+}
+
+function detectTelegramChatsInGas(botToken) {
+  var token = String(botToken || getSavedTelegramToken() || '').trim();
+  if (!token) {
+    return { status: 'error', mode: 'gas_telegram_updates', ok: false, chats: [], message: 'Missing Bot Token' };
+  }
+  try {
+    var meResp = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getMe', { muteHttpExceptions: true });
+    var meData = JSON.parse(meResp.getContentText() || '{}');
+    if (!meData.ok) {
+      return { status: 'error', mode: 'gas_telegram_updates', ok: false, chats: [], message: String(meData.description || 'Invalid Bot Token') };
+    }
+    var botUsername = meData.result && meData.result.username ? '@' + meData.result.username : '';
+    var botFirstName = meData.result && meData.result.first_name ? meData.result.first_name : '';
+
+    var updResp = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getUpdates?limit=50', { muteHttpExceptions: true });
+    var updData = JSON.parse(updResp.getContentText() || '{}');
+    var updates = Array.isArray(updData.result) ? updData.result : [];
+    var byId = {};
+    for (var i = 0; i < updates.length; i++) {
+      var u = updates[i] || {};
+      var msg = u.message || u.channel_post || u.my_chat_member || u.edited_message;
+      if (!msg || !msg.chat || msg.chat.id === undefined) continue;
+      var cid = String(msg.chat.id);
+      var title = String(msg.chat.title || '').trim() ||
+        [msg.chat.first_name, msg.chat.last_name].filter(Boolean).join(' ').trim() ||
+        (msg.chat.username ? '@' + msg.chat.username : 'Chat ' + cid);
+      byId[cid] = {
+        chatId: cid,
+        type: String(msg.chat.type || 'private'),
+        title: title,
+        username: msg.chat.username ? '@' + msg.chat.username : undefined,
+        lastMessageText: typeof msg.text === 'string' ? msg.text.slice(0, 60) : undefined
+      };
+    }
+    var chats = Object.keys(byId).map(function(k) { return byId[k]; }).reverse();
+    return {
+      status: 'ok',
+      mode: 'gas_telegram_updates',
+      ok: true,
+      botUsername: botUsername,
+      botFirstName: botFirstName,
+      chats: chats,
+      message: chats.length > 0
+        ? ('เชื่อมต่อบอท ' + (botUsername || botFirstName) + ' สำเร็จ! พบ ' + chats.length + ' ห้องแชทล่าสุด')
+        : ('เชื่อมต่อบอท ' + (botUsername || botFirstName) + ' สำเร็จ แต่ยังไม่พบข้อความล่าสุด กรุณาพิมพ์ในกลุ่มหรือกด Start ในบอทแล้วลองใหม่')
+    };
+  } catch (err) {
+    return { status: 'error', mode: 'gas_telegram_updates', ok: false, chats: [], message: String(err) };
+  }
+}
+
+// ฟังก์ชัน 1: สรุปงานประจำวันตอนเช้าผ่าน Telegram ฟรี 24 ชม.
+function sendDailyTelegramDigest() {
+  var token = getSavedTelegramToken();
+  var chatId = getSavedTelegramChatId();
+  if (!token || !chatId) return;
+  var cfg = getSavedTelegramScheduleConfig();
+  var now = new Date();
+  var todayYMD = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+  var nowHM = Utilities.formatDate(now, 'Asia/Bangkok', 'HH:mm');
+  var allTasks = readSheetTasksForWeb() || [];
+  var todayTasks = allTasks.filter(function(t) {
+    var sd = String(t.date || '').slice(0, 10);
+    var ed = String(t.endDate || sd).slice(0, 10);
+    return sd && sd <= todayYMD && ed >= todayYMD;
+  }).sort(function(a, b) {
+    return String(a.time || '09:00').localeCompare(String(b.time || '09:00'));
+  });
+  if (todayTasks.length === 0) return;
+
+  var doneCnt = todayTasks.filter(function(t) { return t.status === 'completed'; }).length;
+  var pendingCnt = todayTasks.length - doneCnt;
+  var rows = [];
+  for (var i = 0; i < Math.min(todayTasks.length, 15); i++) {
+    var item = todayTasks[i];
+    var icon = item.status === 'completed' ? '✅' : (item.priority === 'high' ? '🔴' : '▪️');
+    var titleHtml = item.status === 'completed'
+      ? ('<s>' + escapeTelegramHtmlInGas(item.title) + '</s>')
+      : ('<b>' + escapeTelegramHtmlInGas(item.title) + '</b>');
+    rows.push((i + 1) + '. ' + icon + ' <code>' + escapeTelegramHtmlInGas(item.time || '09:00') + ' น.</code> ' + titleHtml);
+  }
+  var lines = [
+    '🏛 <b>' + escapeTelegramHtmlInGas(cfg.headerTitle) + '</b>',
+    '☀️ <b>สรุปตารางงานประจำวัน</b>',
+    '📅 ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(todayYMD)) + ' · ณ <code>' + nowHM + ' น.</code>'
+  ];
+  if (cfg.showStats) {
+    lines.push('📊 ทั้งหมด <b>' + todayTasks.length + '</b> · รอทำ <b>' + pendingCnt + '</b> · เสร็จแล้ว <b>' + doneCnt + '</b>');
+  }
+  lines.push('<blockquote><b>📌 กำหนดการวันนี้ (' + todayTasks.length + ' รายการ)</b>\\n' + rows.join('\\n') + '</blockquote>');
+
+  sendTelegramMessageInGas({
+    botToken: token,
+    chatId: chatId,
+    htmlText: lines.join('\\n'),
+    buttons: buildTelegramButtonsInGas(todayYMD, cfg.showButtons),
+    dedupKey: 'gas-tg-morning-' + todayYMD
+  });
+}
+
+// ฟังก์ชัน 2 (แนะนำให้ตั้ง Trigger ทุก 5 นาที): เช็กแจ้งเตือนงานล่วงหน้ารายงาน + สรุปงานเช้าอัตโนมัติ 24 ชม. แม้ปิดคอมพิวเตอร์
+function checkTelegramTaskReminders() {
+  var token = getSavedTelegramToken();
+  var chatId = getSavedTelegramChatId();
+  if (!token || !chatId) return;
+
+  var cfg = getSavedTelegramScheduleConfig();
+  var now = new Date();
+  var nowMs = now.getTime();
+  var todayYMD = Utilities.formatDate(now, 'Asia/Bangkok', 'yyyy-MM-dd');
+
+  // A) เช็กส่งสรุปงานประจำวันตอนเช้าตามเวลา dailyDigestTime เป๊ะๆ (วันละ 1 ครั้ง)
+  if (cfg.dailyDigestEnabled && /^\\d{1,2}:\\d{2}$/.test(cfg.dailyDigestTime)) {
+    var parts = cfg.dailyDigestTime.split(':');
+    var paddedDigestHM = (parts[0].length === 1 ? '0' + parts[0] : parts[0]) + ':' + parts[1];
+    var digestTarget = new Date(todayYMD + 'T' + paddedDigestHM + ':00+07:00');
+    if (!isNaN(digestTarget.getTime())) {
+      var diffDigestMin = (nowMs - digestTarget.getTime()) / 60000;
+      if (diffDigestMin >= 0 && diffDigestMin <= 15) {
+        var props = PropertiesService.getScriptProperties();
+        var lastDigestDate = props.getProperty('LAST_TG_DIGEST_DATE') || '';
+        if (lastDigestDate !== todayYMD) {
+          sendDailyTelegramDigest();
+          props.setProperty('LAST_TG_DIGEST_DATE', todayYMD);
+        }
+      }
+    }
+  }
+
+  // B) เช็กแจ้งเตือนงานล่วงหน้ารายงาน (ทุกช่วงเวลาที่ตั้งไว้ เช่น ตรงเวลา / 15 นาที / 1 ชม. / 1 วัน)
+  var allTasks = readSheetTasksForWeb() || [];
+  if (allTasks.length === 0) return;
+
+  var totalCount = allTasks.length;
+  var completedCount = allTasks.filter(function(t) { return t.status === 'completed'; }).length;
+  var pendingCount = totalCount - completedCount;
+
+  for (var i = 0; i < allTasks.length; i++) {
+    var task = allTasks[i];
+    if (!task || task.status === 'completed') continue;
+    var taskDate = String(task.date || '').slice(0, 10);
+    var rawTime = String(task.time || '09:00').trim();
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(taskDate) || !/^\\d{1,2}:\\d{2}$/.test(rawTime)) continue;
+    var tParts = rawTime.split(':');
+    var taskHM = (tParts[0].length === 1 ? '0' + tParts[0] : tParts[0]) + ':' + tParts[1];
+    var taskStart = new Date(taskDate + 'T' + taskHM + ':00+07:00');
+    if (isNaN(taskStart.getTime())) continue;
+    var taskStartMs = taskStart.getTime();
+
+    // รวมช่วงเตือนล่วงหน้าจากการตั้งค่าหลัก + ของงานนั้นๆ
+    var timingMap = {};
+    for (var ti = 0; ti < cfg.reminderTimings.length; ti++) {
+      var m = Number(cfg.reminderTimings[ti]);
+      if (!isNaN(m) && m >= 0) timingMap[String(m)] = m;
+    }
+    var ownRemind = Number(task.remindMinutesBefore);
+    if (!isNaN(ownRemind) && ownRemind >= 0) {
+      timingMap[String(ownRemind)] = ownRemind;
+    }
+
+    var offsets = Object.keys(timingMap).map(function(k) { return timingMap[k]; });
+    for (var oi = 0; oi < offsets.length; oi++) {
+      var rm = offsets[oi];
+      var triggerMs = taskStartMs - rm * 60000;
+      var deltaMin = (nowMs - triggerMs) / 60000;
+      // หน้าต่าง 7 นาที (-1 ถึง +6 นาที) เพื่อให้ Trigger ทุก 5 นาทีไม่พลาดแม้แต่รายการเดียว
+      if (deltaMin >= -1 && deltaMin <= 6) {
+        var dedupKey = String(task.id || task.title).slice(0, 28) + '_' + taskDate + '_' + taskHM + '_' + rm;
+        if (hasTelegramReminderBeenSentInGas(dedupKey)) continue;
+
+        var prioBadge = task.priority === 'high'
+          ? '🔴 ด่วนมาก'
+          : (task.priority === 'low' ? '🟢 ทั่วไป' : '🟡 สำคัญปานกลาง');
+        var alertHeading = task.priority === 'high'
+          ? '🚨 แจ้งเตือนภารกิจด่วนมาก'
+          : '⏰ แจ้งเตือนกำหนดการตามเวลา';
+        var remindText = formatRemindMinutesInGas(rm);
+        var cardLines = [
+          '<b>' + escapeTelegramHtmlInGas(task.title) + '</b>',
+          '',
+          '📅 <b>วันที่:</b> ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(taskDate)),
+          '🕐 <b>เวลา:</b> <code>' + escapeTelegramHtmlInGas(taskHM) + ' น.</code> <i>(' + escapeTelegramHtmlInGas(remindText) + ')</i>',
+          '⚡ <b>ระดับ:</b> ' + prioBadge
+        ];
+        var msgLines = [
+          '🏛 <b>' + escapeTelegramHtmlInGas(cfg.headerTitle) + '</b>',
+          '<b>' + alertHeading + '</b>',
+          '<blockquote>' + cardLines.join('\\n') + '</blockquote>'
+        ];
+        if (task.description && String(task.description).trim()) {
+          msgLines.push('<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\\n' + escapeTelegramHtmlInGas(String(task.description).trim()) + '</blockquote>');
+        }
+        if (cfg.showStats) {
+          msgLines.push('📊 <i>สรุปงาน: ทั้งหมด ' + totalCount + ' · รอทำ ' + pendingCount + ' · เสร็จแล้ว ' + completedCount + '</i>');
+        }
+
+        var sendRes = sendTelegramMessageInGas({
+          botToken: token,
+          chatId: chatId,
+          htmlText: msgLines.join('\\n'),
+          buttons: buildTelegramButtonsInGas(taskDate, cfg.showButtons),
+          dedupKey: 'gas-tg-rem-' + dedupKey
+        });
+        if (sendRes.ok) {
+          markTelegramReminderSentInGas(dedupKey);
+        }
+      }
+    }
+  }
+}
+
+// ฟังก์ชัน 3 (กด Run เพียงครั้งเดียว!): ตั้งค่า Trigger อัตโนมัติทุก 5 นาทีให้ครบทั้งแจ้งเตือนล่วงหน้าและสรุปงานเช้า 24 ชม.
+function setupTelegramAutoTriggers() {
+  var existing = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < existing.length; i++) {
+    var fn = existing[i].getHandlerFunction();
+    if (fn === 'checkTelegramTaskReminders' || fn === 'sendDailyTelegramDigest') {
+      ScriptApp.deleteTrigger(existing[i]);
+    }
+  }
+  ScriptApp.newTrigger('checkTelegramTaskReminders')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  Logger.log('✅ ตั้งค่าแจ้งเตือน Telegram อัตโนมัติ 24 ชม. สำเร็จ! (เช็กแจ้งเตือนงานล่วงหน้าและสรุปงานเช้าทุก 5 นาที แม้ปิดคอมพิวเตอร์)');
+}
+
+// ฟังก์ชันทดสอบส่งจากหน้า Apps Script โดยตรง
+function testSendTelegramReminderNow() {
+  var token = getSavedTelegramToken();
+  var chatId = getSavedTelegramChatId();
+  var cfg = getSavedTelegramScheduleConfig();
+  var nowHM = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'HH:mm');
+  var todayYMD = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  sendTelegramMessageInGas({
+    botToken: token,
+    chatId: chatId,
+    htmlText: [
+      '🏛 <b>' + escapeTelegramHtmlInGas(cfg.headerTitle) + '</b>',
+      '✅ <b>ระบบแจ้งเตือนอัตโนมัติ 24 ชม. (Apps Script) พร้อมทำงานแล้ว!</b>',
+      '<blockquote>⏰ ช่วงแจ้งเตือนล่วงหน้า: <code>' + escapeTelegramHtmlInGas(cfg.reminderTimings.map(formatRemindMinutesInGas).join(', ')) + '</code>\\n☀️ สรุปงานประจำวัน: <code>' + escapeTelegramHtmlInGas(cfg.dailyDigestTime) + ' น.</code>\\n🕒 ทดสอบเมื่อ: <code>' + nowHM + ' น.</code></blockquote>'
+    ].join('\\n'),
+    buttons: buildTelegramButtonsInGas(todayYMD, cfg.showButtons)
+  });
 }`;
 }
 

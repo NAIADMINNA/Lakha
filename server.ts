@@ -1110,6 +1110,11 @@ function resolveCleanGasUrl(candidate?: string | null): string {
 let runtimeChannelAccessToken = sanitizeToken(process.env.LINE_CHANNEL_ACCESS_TOKEN || '');
 let runtimeDefaultUserId = (process.env.LINE_DEFAULT_USER_ID || '').trim();
 let runtimeDetectedGroupId = (process.env.LINE_DEFAULT_GROUP_ID || '').trim();
+let runtimeTelegramEnabled = Boolean(
+  (process.env.TELEGRAM_BOT_TOKEN || '').trim() && (process.env.TELEGRAM_CHAT_ID || '').trim()
+);
+let runtimeTelegramBotToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+let runtimeTelegramChatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
 let runtimeGasUrl = DEFAULT_TEAM_GAS_URL;
 let lastMorningDigestSentDate = '';
 let runtimeScheduleConfig: {
@@ -1129,6 +1134,10 @@ let runtimeScheduleConfig: {
   cardLineSpacing: 'tight' | 'normal' | 'relaxed';
   allowAddTaskFromLine: boolean;
   allowAddTaskFromLineUpdatedAt: string;
+  telegramStyle: 'executive_card' | 'compact_brief' | 'timeline_digest';
+  telegramHeaderTitle: string;
+  telegramShowStats: boolean;
+  telegramShowButtons: boolean;
 } = {
   enabled: true,
   dailyDigestEnabled: true,
@@ -1146,6 +1155,10 @@ let runtimeScheduleConfig: {
   cardLineSpacing: 'relaxed',
   allowAddTaskFromLine: true,
   allowAddTaskFromLineUpdatedAt: '',
+  telegramStyle: 'executive_card',
+  telegramHeaderTitle: 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา',
+  telegramShowStats: true,
+  telegramShowButtons: true,
 };
 let runtimeDirectorPresence: {
   mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
@@ -1191,6 +1204,15 @@ function loadPersistedWorkspaceCache(): void {
       }
       if (typeof parsed.runtimeDetectedGroupId === 'string' && parsed.runtimeDetectedGroupId) {
         runtimeDetectedGroupId = parsed.runtimeDetectedGroupId.trim();
+      }
+      if (typeof parsed.runtimeTelegramEnabled === 'boolean') {
+        runtimeTelegramEnabled = parsed.runtimeTelegramEnabled;
+      }
+      if (typeof parsed.runtimeTelegramBotToken === 'string' && parsed.runtimeTelegramBotToken) {
+        runtimeTelegramBotToken = parsed.runtimeTelegramBotToken.trim();
+      }
+      if (typeof parsed.runtimeTelegramChatId === 'string' && parsed.runtimeTelegramChatId) {
+        runtimeTelegramChatId = parsed.runtimeTelegramChatId.trim();
       }
       if (typeof parsed.runtimeGasUrl === 'string' && parsed.runtimeGasUrl) {
         runtimeGasUrl = resolveCleanGasUrl(parsed.runtimeGasUrl);
@@ -1269,6 +1291,9 @@ function savePersistedWorkspaceCache(): void {
           runtimeChannelAccessToken,
           runtimeDefaultUserId,
           runtimeDetectedGroupId,
+          runtimeTelegramEnabled,
+          runtimeTelegramBotToken,
+          runtimeTelegramChatId,
           runtimeGasUrl: resolveCleanGasUrl(runtimeGasUrl),
           lastMorningDigestSentDate,
           runtimeScheduleConfig,
@@ -2835,9 +2860,43 @@ async function startServer() {
       cardLineSpacing,
       allowAddTaskFromLine,
       explicitAllowAddTaskUpdate,
+      telegramEnabled,
+      telegramBotToken,
+      telegramChatId,
+      telegramStyle,
+      telegramHeaderTitle,
+      telegramShowStats,
+      telegramShowButtons,
     } = req.body || {};
-    if (typeof channelAccessToken === 'string') {
+    if (typeof channelAccessToken === 'string' && sanitizeToken(channelAccessToken)) {
       runtimeChannelAccessToken = sanitizeToken(channelAccessToken);
+    }
+    if (typeof telegramBotToken === 'string' && telegramBotToken.trim()) {
+      runtimeTelegramBotToken = telegramBotToken.trim();
+    }
+    if (typeof telegramChatId === 'string' && telegramChatId.trim()) {
+      runtimeTelegramChatId = telegramChatId.trim();
+    }
+    if (typeof telegramEnabled === 'boolean') {
+      if (telegramEnabled || (typeof telegramBotToken === 'string' && telegramBotToken.trim())) {
+        runtimeTelegramEnabled = telegramEnabled;
+      }
+    }
+    if (
+      telegramStyle === 'executive_card' ||
+      telegramStyle === 'compact_brief' ||
+      telegramStyle === 'timeline_digest'
+    ) {
+      runtimeScheduleConfig.telegramStyle = telegramStyle;
+    }
+    if (typeof telegramHeaderTitle === 'string' && telegramHeaderTitle.trim()) {
+      runtimeScheduleConfig.telegramHeaderTitle = telegramHeaderTitle.trim();
+    }
+    if (typeof telegramShowStats === 'boolean') {
+      runtimeScheduleConfig.telegramShowStats = telegramShowStats;
+    }
+    if (typeof telegramShowButtons === 'boolean') {
+      runtimeScheduleConfig.telegramShowButtons = telegramShowButtons;
     }
     if (typeof targetUserId === 'string') {
       const trimmedTarget = targetUserId.trim();
@@ -2926,9 +2985,316 @@ async function startServer() {
       ok: true,
       detectedGroupId: runtimeDetectedGroupId || undefined,
       detectedUserId: runtimeDefaultUserId || undefined,
+      hasServerTelegramToken: Boolean(runtimeTelegramBotToken),
+      detectedTelegramChatId: runtimeTelegramChatId || undefined,
+      telegramConfigured: Boolean(
+        runtimeTelegramEnabled && runtimeTelegramBotToken && runtimeTelegramChatId
+      ),
       allowAddTaskFromLine: runtimeScheduleConfig.allowAddTaskFromLine,
       scheduleConfig: runtimeScheduleConfig,
     });
+  });
+
+  // Telegram Bot API helper & server-side endpoints (Free unlimited push notifications)
+  const parseServerTelegramChatIds = (raw: string): string[] =>
+    String(raw || '')
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^-?\d{5,20}$/.test(s) || /^@[A-Za-z0-9_]{4,}$/.test(s));
+
+  const escapeServerTelegramHtml = (raw: string): string =>
+    String(raw || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+  const telegramDedupCache = new Map<string, number>();
+
+  const sendServerTelegramHtml = async (opts: {
+    botToken?: string;
+    chatId?: string;
+    htmlText: string;
+    buttons?: Array<Array<{ text: string; url: string }>>;
+    dedupKey?: string;
+  }): Promise<{ ok: boolean; deliveredCount: number; failedCount: number; error?: string }> => {
+    const token = String(opts.botToken || runtimeTelegramBotToken || '').trim();
+    const chatIds = parseServerTelegramChatIds(opts.chatId || runtimeTelegramChatId || '');
+    if (!token || !/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(token)) {
+      return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Invalid Telegram Bot Token' };
+    }
+    if (chatIds.length === 0) {
+      return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Missing Telegram Chat ID' };
+    }
+
+    if (opts.dedupKey) {
+      const nowMs = Date.now();
+      for (const [k, exp] of telegramDedupCache.entries()) {
+        if (exp <= nowMs) telegramDedupCache.delete(k);
+      }
+      const prevExp = telegramDedupCache.get(opts.dedupKey) || 0;
+      if (prevExp > nowMs) {
+        return { ok: true, deliveredCount: chatIds.length, failedCount: 0 };
+      }
+      telegramDedupCache.set(opts.dedupKey, nowMs + 45 * 60 * 1000);
+    }
+
+    let deliveredCount = 0;
+    let failedCount = 0;
+    let lastError = '';
+    const replyMarkup =
+      Array.isArray(opts.buttons) && opts.buttons.length > 0
+        ? { inline_keyboard: opts.buttons }
+        : undefined;
+
+    for (const cid of chatIds) {
+      try {
+        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: cid,
+            text: opts.htmlText,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }),
+        });
+        const tgJson = (await tgRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          description?: string;
+        };
+        if (tgRes.ok && tgJson.ok) {
+          deliveredCount += 1;
+        } else {
+          failedCount += 1;
+          lastError = String(tgJson.description || `HTTP ${tgRes.status}`);
+        }
+      } catch (err) {
+        failedCount += 1;
+        lastError = err instanceof Error ? err.message : 'Network error';
+      }
+    }
+
+    return {
+      ok: deliveredCount > 0,
+      deliveredCount,
+      failedCount,
+      error: lastError || undefined,
+    };
+  };
+
+  app.post('/api/telegram/send', async (req, res) => {
+    const { botToken, chatId, htmlText, buttons, dedupKey } = req.body || {};
+    if (typeof htmlText !== 'string' || !htmlText.trim()) {
+      res.status(400).json({ ok: false, error: 'Missing message text' });
+      return;
+    }
+    const result = await sendServerTelegramHtml({
+      botToken,
+      chatId,
+      htmlText,
+      buttons,
+      dedupKey,
+    });
+    res.json({
+      ok: result.ok,
+      deliveredCount: result.deliveredCount,
+      failedCount: result.failedCount,
+      error: result.error,
+      message: result.ok
+        ? `ส่งแจ้งเตือนเข้า Telegram สำเร็จ (${result.deliveredCount} แชท)`
+        : result.error || 'ส่งข้อความเข้า Telegram ไม่สำเร็จ',
+    });
+  });
+
+  app.post('/api/telegram/send-photo', async (req, res) => {
+    const { botToken, chatId, photoDataUrl, captionHtml, buttons, dedupKey } = req.body || {};
+    const token = String(botToken || runtimeTelegramBotToken || '').trim();
+    const chatIds = parseServerTelegramChatIds(String(chatId || runtimeTelegramChatId || ''));
+    if (!token || !/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(token)) {
+      res.json({ ok: false, deliveredCount: 0, failedCount: 1, error: 'Invalid Telegram Bot Token' });
+      return;
+    }
+    if (chatIds.length === 0) {
+      res.json({ ok: false, deliveredCount: 0, failedCount: 1, error: 'Missing Telegram Chat ID' });
+      return;
+    }
+    const dataMatch = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i.exec(
+      String(photoDataUrl || '').trim()
+    );
+    if (!dataMatch) {
+      res.status(400).json({ ok: false, error: 'Invalid photoDataUrl' });
+      return;
+    }
+
+    if (typeof dedupKey === 'string' && dedupKey.trim()) {
+      const nowMs = Date.now();
+      for (const [k, exp] of telegramDedupCache.entries()) {
+        if (exp <= nowMs) telegramDedupCache.delete(k);
+      }
+      const prevExp = telegramDedupCache.get(dedupKey.trim()) || 0;
+      if (prevExp > nowMs) {
+        res.json({
+          ok: true,
+          deliveredCount: chatIds.length,
+          failedCount: 0,
+          message: `ส่งการ์ดแจ้งเตือนเข้า Telegram สำเร็จ (${chatIds.length} แชท)`,
+        });
+        return;
+      }
+      telegramDedupCache.set(dedupKey.trim(), nowMs + 45 * 60 * 1000);
+    }
+
+    const mime = `image/${dataMatch[1].toLowerCase() === 'jpg' ? 'jpeg' : dataMatch[1].toLowerCase()}`;
+    const imgBuffer = Buffer.from(dataMatch[2], 'base64');
+    const safeCaption = typeof captionHtml === 'string' ? captionHtml.slice(0, 1000) : '';
+    const replyMarkup =
+      Array.isArray(buttons) && buttons.length > 0
+        ? JSON.stringify({ inline_keyboard: buttons })
+        : undefined;
+
+    let deliveredCount = 0;
+    let failedCount = 0;
+    let lastError = '';
+
+    for (const cid of chatIds) {
+      try {
+        const form = new FormData();
+        form.append('chat_id', cid);
+        form.append('photo', new Blob([imgBuffer], { type: mime }), 'lakha-schedule-card.png');
+        if (safeCaption) {
+          form.append('caption', safeCaption);
+          form.append('parse_mode', 'HTML');
+        }
+        if (replyMarkup) {
+          form.append('reply_markup', replyMarkup);
+        }
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: 'POST',
+          body: form,
+        });
+        const tgJson = (await tgRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          description?: string;
+        };
+        if (tgRes.ok && tgJson.ok) {
+          deliveredCount += 1;
+        } else {
+          failedCount += 1;
+          lastError = String(tgJson.description || `HTTP ${tgRes.status}`);
+        }
+      } catch (err) {
+        failedCount += 1;
+        lastError = err instanceof Error ? err.message : 'Network error';
+      }
+    }
+
+    res.json({
+      ok: deliveredCount > 0,
+      deliveredCount,
+      failedCount,
+      error: lastError || undefined,
+      message:
+        deliveredCount > 0
+          ? `ส่งการ์ดภาพแจ้งเตือนเข้า Telegram สำเร็จ (${deliveredCount} แชท)`
+          : lastError || 'ส่งการ์ดภาพเข้า Telegram ไม่สำเร็จ',
+    });
+  });
+
+  app.post('/api/telegram/detect-chats', async (req, res) => {
+    const token = String(req.body?.botToken || runtimeTelegramBotToken || '').trim();
+    if (!/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(token)) {
+      res.json({
+        ok: false,
+        chats: [],
+        message: 'รูปแบบ Bot Token ไม่ถูกต้อง (ตัวอย่าง: 1234567890:AAHxxxx...)',
+      });
+      return;
+    }
+    try {
+      const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const meJson = (await meRes.json().catch(() => ({}))) as {
+        ok?: boolean;
+        description?: string;
+        result?: { username?: string; first_name?: string };
+      };
+      if (!meRes.ok || !meJson.ok) {
+        res.json({
+          ok: false,
+          chats: [],
+          message: `Bot Token ไม่ถูกต้อง: ${meJson.description || `HTTP ${meRes.status}`}`,
+        });
+        return;
+      }
+
+      const botUsername = meJson.result?.username ? `@${meJson.result.username}` : undefined;
+      const botFirstName = meJson.result?.first_name || '';
+
+      const updRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=50`);
+      const updJson = (await updRes.json().catch(() => ({}))) as {
+        ok?: boolean;
+        result?: Array<Record<string, unknown>>;
+      };
+      const updates = Array.isArray(updJson.result) ? updJson.result : [];
+      const chatMap = new Map<
+        string,
+        {
+          chatId: string;
+          type: string;
+          title: string;
+          username?: string;
+          lastMessageText?: string;
+          lastDate?: string;
+        }
+      >();
+
+      for (const u of updates) {
+        const msg = (u.message ||
+          u.channel_post ||
+          u.my_chat_member ||
+          u.edited_message) as Record<string, unknown> | undefined;
+        const chat = msg?.chat as Record<string, unknown> | undefined;
+        if (!chat || chat.id === undefined) continue;
+        const cid = String(chat.id);
+        const type = String(chat.type || 'private');
+        const title =
+          String(chat.title || '').trim() ||
+          [chat.first_name, chat.last_name].filter(Boolean).join(' ').trim() ||
+          (chat.username ? `@${chat.username}` : `Chat ${cid}`);
+        const text = typeof msg?.text === 'string' ? msg.text : '';
+        const dateSec = typeof msg?.date === 'number' ? msg.date : 0;
+
+        chatMap.set(cid, {
+          chatId: cid,
+          type,
+          title,
+          username: chat.username ? `@${chat.username}` : undefined,
+          lastMessageText: text ? text.slice(0, 60) : undefined,
+          lastDate: dateSec > 0 ? new Date(dateSec * 1000).toISOString() : undefined,
+        });
+      }
+
+      const chats = Array.from(chatMap.values()).reverse();
+      res.json({
+        ok: true,
+        botUsername,
+        botFirstName,
+        chats,
+        message:
+          chats.length > 0
+            ? `เชื่อมต่อบอท ${botUsername || botFirstName} สำเร็จ! พบ ${chats.length} ห้องแชทล่าสุด — กดเลือกห้องที่ต้องการรับแจ้งเตือนได้เลย`
+            : `เชื่อมต่อบอท ${botUsername || botFirstName} สำเร็จ แต่ยังไม่พบข้อความล่าสุด — กรุณาดึงบอทเข้ากลุ่ม Telegram แล้วพิมพ์ "สวัสดี" (หรือกด Start ในแชทบอท) แล้วกดค้นหาอีกครั้ง`,
+      });
+    } catch (err) {
+      res.json({
+        ok: false,
+        chats: [],
+        message: `เชื่อมต่อ Telegram API ไม่สำเร็จ: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`,
+      });
+    }
   });
 
   // Explicit endpoint to clear/delete all Rich Menus from the user's LINE Official Account
@@ -4720,7 +5086,14 @@ async function startServer() {
 
   setInterval(async () => {
     try {
-      if (!runtimeScheduleConfig.enabled || !runtimeChannelAccessToken) return;
+      const hasTelegramScheduler = Boolean(
+        runtimeTelegramEnabled &&
+          runtimeTelegramBotToken &&
+          parseServerTelegramChatIds(runtimeTelegramChatId).length > 0
+      );
+      if (!runtimeScheduleConfig.enabled || (!runtimeChannelAccessToken && !hasTelegramScheduler)) {
+        return;
+      }
       const ws =
         sharedWorkspaces.get('sheetcal-team-clean') ||
         sharedWorkspaces.get('team-default') ||
@@ -4797,10 +5170,50 @@ async function startServer() {
                 digestItems,
                 defaultAppUrl
               );
-              await deliverScheduledFlexToLine(
-                flexMsg,
-                `☀️ สรุปตารางงานประจำวัน (${formatThaiDateReadable(todayYMD)}) — ทั้งหมด ${digestItems.length} รายการ`
-              );
+              if (runtimeChannelAccessToken) {
+                await deliverScheduledFlexToLine(
+                  flexMsg,
+                  `☀️ สรุปตารางงานประจำวัน (${formatThaiDateReadable(todayYMD)}) — ทั้งหมด ${digestItems.length} รายการ`
+                );
+              }
+              if (hasTelegramScheduler) {
+                const tgHeader = escapeServerTelegramHtml(
+                  runtimeScheduleConfig.telegramHeaderTitle ||
+                    'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'
+                );
+                const tgDone = digestItems.filter((i) => i.status === 'completed').length;
+                const tgPending = digestItems.length - tgDone;
+                const tgRows = digestItems.slice(0, 15).map((item, idx) => {
+                  const icon =
+                    item.status === 'completed'
+                      ? '✅'
+                      : item.priority === 'high'
+                      ? '🔴'
+                      : '▪️';
+                  return `${idx + 1}. ${icon} <code>${escapeServerTelegramHtml(
+                    item.time
+                  )} น.</code> <b>${escapeServerTelegramHtml(item.title)}</b>`;
+                });
+                const tgDigestLines = [
+                  `🏛 <b>${tgHeader}</b>`,
+                  `☀️ <b>สรุปตารางงานประจำวัน</b>`,
+                  `📅 ${escapeServerTelegramHtml(formatThaiDateReadable(todayYMD))} · ณ <code>${nowHM} น.</code>`,
+                  runtimeScheduleConfig.telegramShowStats !== false
+                    ? `📊 ทั้งหมด <b>${digestItems.length}</b> · รอทำ <b>${tgPending}</b> · เสร็จแล้ว <b>${tgDone}</b>`
+                    : '',
+                  `<blockquote><b>📌 กำหนดการวันนี้ (${digestItems.length} รายการ)</b>\n${tgRows.join(
+                    '\n'
+                  )}</blockquote>`,
+                ].filter(Boolean);
+                await sendServerTelegramHtml({
+                  htmlText: tgDigestLines.join('\n'),
+                  buttons:
+                    runtimeScheduleConfig.telegramShowButtons !== false
+                      ? [[{ text: '📅 เปิดปฏิทินทีม', url: defaultAppUrl }]]
+                      : undefined,
+                  dedupKey: `tg-morning-digest-${todayYMD}`,
+                });
+              }
             }
           }
         }
@@ -4900,10 +5313,55 @@ async function startServer() {
             },
           });
 
-          await deliverScheduledFlexToLine(
-            singleFlex,
-            `🔔 แจ้งเตือนงานตามเวลา: ${String(t.title || '')} (${formatThaiDateReadable(effectiveDate)} เวลา ${cleanTime} น.)`
-          );
+          if (runtimeChannelAccessToken) {
+            await deliverScheduledFlexToLine(
+              singleFlex,
+              `🔔 แจ้งเตือนงานตามเวลา: ${String(t.title || '')} (${formatThaiDateReadable(effectiveDate)} เวลา ${cleanTime} น.)`
+            );
+          }
+          if (hasTelegramScheduler) {
+            const tgHeader = escapeServerTelegramHtml(
+              runtimeScheduleConfig.telegramHeaderTitle ||
+                'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'
+            );
+            const prioStr =
+              String(t.priority || '') === 'high'
+                ? '🔴 ด่วนมาก'
+                : String(t.priority || '') === 'low'
+                ? '🟢 ทั่วไป'
+                : '🟡 สำคัญปานกลาง';
+            const cardBody = [
+              `<b>${escapeServerTelegramHtml(String(t.title || 'รายการงาน'))}</b>`,
+              '',
+              `📅 <b>วันที่:</b> ${escapeServerTelegramHtml(formatThaiDateReadable(effectiveDate))}`,
+              `🕐 <b>เวลา:</b> <code>${escapeServerTelegramHtml(cleanTime)} น.</code>`,
+              `🗂 <b>หมวดหมู่:</b> ${escapeServerTelegramHtml(catInfo?.name || 'ทั่วไป')}`,
+              `⚡ <b>ความสำคัญ:</b> ${prioStr}`,
+            ];
+            const tgLines = [
+              `🏛 <b>${tgHeader}</b>`,
+              String(t.priority || '') === 'high'
+                ? '<b>🚨 แจ้งเตือนภารกิจด่วนมาก</b>'
+                : '<b>⏰ แจ้งเตือนกำหนดการตามเวลา</b>',
+              `<blockquote>${cardBody.join('\n')}</blockquote>`,
+              t.description
+                ? `<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\n${escapeServerTelegramHtml(
+                    String(t.description)
+                  )}</blockquote>`
+                : '',
+              runtimeScheduleConfig.telegramShowStats !== false
+                ? `📊 <i>สรุปงาน: ทั้งหมด <b>${totalCount}</b> · รอทำ <b>${pendingCount}</b> · เสร็จแล้ว <b>${completedCount}</b></i>`
+                : '',
+            ].filter(Boolean);
+            await sendServerTelegramHtml({
+              htmlText: tgLines.join('\n'),
+              buttons:
+                runtimeScheduleConfig.telegramShowButtons !== false
+                  ? [[{ text: '📅 เปิดปฏิทินทีม', url: defaultAppUrl }]]
+                  : undefined,
+              dedupKey: `tg-task-remind-${String(t.id || '')}-${effectiveDate}-${cleanTime}`,
+            });
+          }
         }
       }
 

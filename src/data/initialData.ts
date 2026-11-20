@@ -123,4 +123,12 @@ export const DEFAULT_LINE_SETTINGS: LineSettings = {
   cardFontSize: 'md',
   cardTitleWeight: 'bold',
   cardLineSpacing: 'relaxed',
+  telegramEnabled: false,
+  telegramBotToken: '',
+  telegramChatId: '',
+  telegramDeliveryMode: 'photo_card',
+  telegramStyle: 'executive_card',
+  telegramHeaderTitle: 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา',
+  telegramShowStats: true,
+  telegramShowButtons: true,
 };

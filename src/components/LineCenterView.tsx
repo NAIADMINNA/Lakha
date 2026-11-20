@@ -20,12 +20,14 @@ import {
 } from 'lucide-react';
 import {
   Category,
+  FlexDigestItem,
   LineMessageLog,
   LineNotificationFormat,
   LineSettings,
   Task,
   TaskPriority,
   TaskStatus,
+  TelegramTemplateStyle,
 } from '../types';
 import {
   REMINDER_TIMING_OPTIONS,
@@ -33,6 +35,7 @@ import {
   doesTaskTriggerNotification,
   formatLineDeliveryErrorThai,
   formatLocalDateYMD,
+  formatLocalTimeHM,
   formatRemindMinutesLabel,
   formatSummaryCardHeaderDate,
   formatTaskDateRangeLabel,
@@ -43,6 +46,26 @@ import {
   renderCustomLineMessage,
   resolveTeamCalendarAppUrl,
 } from '../services/lineCommandParser';
+import {
+  DEFAULT_TELEGRAM_HEADER_TITLE,
+  TelegramDetectedChat,
+  buildShortDigestPhotoCaption,
+  buildShortTaskPhotoCaption,
+  buildTelegramActionButtons,
+  detectTelegramChats,
+  escapeTelegramHtml,
+  formatDailyDigestTelegramHtml,
+  formatSingleTaskTelegramHtml,
+  isTelegramConfigured,
+  parseTelegramChatIds,
+  sendTelegramNotification,
+  sendTelegramPhotoCard,
+} from '../services/telegramService';
+import {
+  renderDailyDigestTelegramCardPng,
+  renderSingleTaskTelegramCardPng,
+  renderTestConnectionCardPng,
+} from '../services/telegramCardRenderer';
 import { DEFAULT_GAS_WEB_APP_URL } from '../data/initialData';
 
 interface LineCenterViewProps {
@@ -73,6 +96,153 @@ const TEMPLATE_VARIABLES: { token: string; label: string }[] = [
   { token: '{description}', label: 'รายละเอียด' },
 ];
 
+const TELEGRAM_STYLE_PRESETS: {
+  id: TelegramTemplateStyle;
+  title: string;
+  subtitle: string;
+  badge?: string;
+}[] = [
+  {
+    id: 'executive_card',
+    title: 'การ์ดผู้บริหาร',
+    subtitle: 'หัวหน่วยงาน + กล่องการ์ด Quote + ป้ายเวลาเด่นชัด',
+    badge: 'แนะนำ',
+  },
+  {
+    id: 'compact_brief',
+    title: 'กระชับ อ่านไว',
+    subtitle: 'สั้น ชัดเจน ในกล่องเดียว เหมาะกับกลุ่มงานที่ส่งบ่อย',
+  },
+  {
+    id: 'timeline_digest',
+    title: 'ไทม์ไลน์ เช้า–บ่าย–เย็น',
+    subtitle: 'แยกช่วงเวลาอัตโนมัติ พร้อมแถบสรุปและกล่องรายละเอียด',
+  },
+];
+
+function decodeTelegramPreviewEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function renderTelegramInlineNodes(raw: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const tokenRegex = /<(b|i|code|s)>([\s\S]*?)<\/\1>/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+
+  while ((match = tokenRegex.exec(raw)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(
+        <React.Fragment key={`${keyPrefix}-t-${idx++}`}>
+          {decodeTelegramPreviewEntities(raw.slice(lastIndex, match.index))}
+        </React.Fragment>
+      );
+    }
+    const tag = match[1];
+    const inner = match[2];
+    const childKey = `${keyPrefix}-${tag}-${idx++}`;
+    if (tag === 'b') {
+      nodes.push(
+        <strong key={childKey} className="font-semibold text-slate-900">
+          {renderTelegramInlineNodes(inner, childKey)}
+        </strong>
+      );
+    } else if (tag === 'i') {
+      nodes.push(
+        <em key={childKey} className="italic text-slate-600">
+          {renderTelegramInlineNodes(inner, childKey)}
+        </em>
+      );
+    } else if (tag === 'code') {
+      nodes.push(
+        <code
+          key={childKey}
+          className="inline-block rounded bg-[#0088cc]/10 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#006699] tabular-nums"
+        >
+          {decodeTelegramPreviewEntities(inner)}
+        </code>
+      );
+    } else if (tag === 's') {
+      nodes.push(
+        <span key={childKey} className="line-through text-slate-400">
+          {renderTelegramInlineNodes(inner, childKey)}
+        </span>
+      );
+    }
+    lastIndex = tokenRegex.lastIndex;
+  }
+
+  if (lastIndex < raw.length) {
+    nodes.push(
+      <React.Fragment key={`${keyPrefix}-end`}>
+        {decodeTelegramPreviewEntities(raw.slice(lastIndex))}
+      </React.Fragment>
+    );
+  }
+  return nodes;
+}
+
+function renderTelegramMultilineText(raw: string, keyPrefix: string): React.ReactNode {
+  const lines = raw.split('\n');
+  return lines.map((line, i) => (
+    <React.Fragment key={`${keyPrefix}-ln-${i}`}>
+      {renderTelegramInlineNodes(line, `${keyPrefix}-ln-${i}`)}
+      {i < lines.length - 1 && <br />}
+    </React.Fragment>
+  ));
+}
+
+function renderTelegramPreviewBlocks(htmlText: string): React.ReactNode[] {
+  const blocks: React.ReactNode[] = [];
+  const quoteRegex = /<blockquote(\s+expandable)?>([\s\S]*?)<\/blockquote>/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let idx = 0;
+
+  while ((match = quoteRegex.exec(htmlText)) !== null) {
+    const before = htmlText.slice(lastIndex, match.index).replace(/^\n+|\n+$/g, '');
+    if (before) {
+      blocks.push(
+        <div key={`tg-txt-${idx++}`} className="text-[12.5px] leading-relaxed text-slate-800">
+          {renderTelegramMultilineText(before, `tg-txt-${idx}`)}
+        </div>
+      );
+    }
+    const isExpandable = Boolean(match[1]);
+    const quoteBody = match[2].replace(/^\n+|\n+$/g, '');
+    blocks.push(
+      <div
+        key={`tg-qt-${idx++}`}
+        className="my-1.5 rounded-r-lg border-l-[3px] border-[#0088cc] bg-[#eaf5fc] px-2.5 py-2 text-[12px] leading-relaxed text-slate-800"
+      >
+        <div>{renderTelegramMultilineText(quoteBody, `tg-qt-${idx}`)}</div>
+        {isExpandable && (
+          <div className="mt-1 text-[10px] font-medium text-[#0077b3]">
+            ▾ แตะเพื่อขยาย/ย่อในแอป Telegram
+          </div>
+        )}
+      </div>
+    );
+    lastIndex = quoteRegex.lastIndex;
+  }
+
+  const after = htmlText.slice(lastIndex).replace(/^\n+|\n+$/g, '');
+  if (after) {
+    blocks.push(
+      <div key={`tg-tail-${idx++}`} className="text-[12.5px] leading-relaxed text-slate-800">
+        {renderTelegramMultilineText(after, `tg-tail-${idx}`)}
+      </div>
+    );
+  }
+  return blocks;
+}
+
 export const LineCenterView: React.FC<LineCenterViewProps> = ({
   logs,
   categories,
@@ -94,8 +264,28 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const [copiedScript, setCopiedScript] = useState(false);
   const [showScriptPanel, setShowScriptPanel] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<
-    'timing' | 'format' | 'triggers' | 'api'
+    'timing' | 'format' | 'triggers' | 'api' | 'telegram'
   >('format');
+  const [isDetectingTelegram, setIsDetectingTelegram] = useState(false);
+  const [telegramDetectResult, setTelegramDetectResult] = useState<{
+    ok: boolean;
+    botUsername?: string;
+    chats: TelegramDetectedChat[];
+    message: string;
+  } | null>(null);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+  const [telegramTestStatus, setTelegramTestStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [showTelegramGuide, setShowTelegramGuide] = useState(false);
+  const [telegramPreviewMode, setTelegramPreviewMode] = useState<'task' | 'digest'>('task');
+  const [telegramPreviewCardUrl, setTelegramPreviewCardUrl] = useState<string | null>(null);
+  const [isSyncingTgToGas, setIsSyncingTgToGas] = useState(false);
+  const [tgGasSyncStatus, setTgGasSyncStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   const [gasUrl, setGasUrl] = useState(() => {
     try {
       const saved = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
@@ -680,8 +870,299 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const appsScriptCode = generateGoogleAppsScriptCode(
     spreadsheetId,
     lineSettings.channelAccessToken,
-    resolvedCalendarButtonUrl
+    resolvedCalendarButtonUrl,
+    {
+      botToken: lineSettings.telegramBotToken,
+      chatId: lineSettings.telegramChatId,
+      headerTitle: lineSettings.telegramHeaderTitle,
+      reminderTimings:
+        lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
+          ? lineSettings.reminderTimings
+          : [lineSettings.defaultRemindMinutes || 15],
+      dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
+      dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
+      showStats: lineSettings.telegramShowStats !== false,
+      showButtons: lineSettings.telegramShowButtons !== false,
+    }
   );
+
+  const telegramReady = useMemo(() => isTelegramConfigured(lineSettings), [lineSettings]);
+
+  const handleDetectTelegramChats = async () => {
+    const token = (lineSettings.telegramBotToken || '').trim();
+    if (!token && runtimeMode !== 'fullstack') {
+      setTelegramDetectResult({
+        ok: false,
+        chats: [],
+        message: 'กรุณาวาง Telegram Bot Token จาก @BotFather ก่อนกดค้นหา Chat ID ครับ',
+      });
+      return;
+    }
+    setIsDetectingTelegram(true);
+    setTelegramDetectResult(null);
+    try {
+      const res = await detectTelegramChats(token, gasUrl);
+      setTelegramDetectResult({
+        ok: res.ok,
+        botUsername: res.botUsername,
+        chats: res.chats,
+        message: res.message,
+      });
+      if (res.ok && res.chats.length === 1 && !(lineSettings.telegramChatId || '').trim()) {
+        onUpdateSettings({
+          ...lineSettings,
+          telegramEnabled: true,
+          telegramChatId: res.chats[0].chatId,
+        });
+      }
+    } finally {
+      setIsDetectingTelegram(false);
+    }
+  };
+
+  const handleSelectDetectedTelegramChat = (chatId: string, append = false) => {
+    const existing = parseTelegramChatIds(lineSettings.telegramChatId || '');
+    const nextIds = append
+      ? Array.from(new Set([...existing, chatId]))
+      : [chatId];
+    onUpdateSettings({
+      ...lineSettings,
+      telegramEnabled: true,
+      telegramChatId: nextIds.join(', '),
+    });
+  };
+
+  const handleTestTelegramSend = async () => {
+    const token = (lineSettings.telegramBotToken || '').trim();
+    const chatId = (lineSettings.telegramChatId || '').trim();
+    if ((!token && runtimeMode !== 'fullstack') || !chatId) {
+      setTelegramTestStatus({
+        ok: false,
+        message: 'กรุณากรอก Bot Token และ Chat ID ให้ครบก่อนกดทดสอบส่งครับ',
+      });
+      return;
+    }
+
+    setIsTestingTelegram(true);
+    setTelegramTestStatus(null);
+    try {
+      const activeHeader = (
+        lineSettings.telegramHeaderTitle || DEFAULT_TELEGRAM_HEADER_TITLE
+      ).trim();
+      const nowHM = formatLocalTimeHM();
+      const testHtml = [
+        `🏛 <b>${escapeTelegramHtml(activeHeader)}</b>`,
+        `✅ <b>ทดสอบเชื่อมต่อ Telegram Bot สำเร็จ!</b>`,
+        `<blockquote>✨ ระบบน้องเลขาพร้อมส่งแจ้งเตือนตารางงานและสรุปงานประจำวันเข้าห้องนี้ <b>ฟรีไม่จำกัดข้อความ</b>\n🕒 เวลาทดสอบ: <code>${escapeTelegramHtml(nowHM)} น.</code></blockquote>`,
+        lineSettings.telegramShowStats !== false
+          ? `📊 <i>ตารางงานปัจจุบัน: ทั้งหมด ${summaryMetrics.total} งาน · วันนี้ ${summaryMetrics.todayCount} งาน · รอทำ ${summaryMetrics.pendingCount} งาน</i>`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const testButtons = buildTelegramActionButtons({
+        calendarUrl: resolvedCalendarButtonUrl,
+        includeCalendarButton: true,
+        includeTvButton: true,
+        showButtons: lineSettings.telegramShowButtons !== false,
+      });
+
+      let result;
+      if (lineSettings.telegramDeliveryMode !== 'text_html') {
+        const photoDataUrl = await renderTestConnectionCardPng({
+          headerTitle: activeHeader,
+          nowHM,
+          summaryStats: {
+            total: summaryMetrics.total,
+            todayCount: summaryMetrics.todayCount,
+            pendingCount: summaryMetrics.pendingCount,
+          },
+          showStats: lineSettings.telegramShowStats !== false,
+        });
+        result = await sendTelegramPhotoCard({
+          botToken: token,
+          chatId,
+          photoDataUrl,
+          captionHtml: `✅ <b>ทดสอบเชื่อมต่อ Telegram Bot สำเร็จ!</b> · <code>${escapeTelegramHtml(nowHM)} น.</code>`,
+          fallbackHtmlText: testHtml,
+          buttons: testButtons,
+          gasUrl,
+        });
+      } else {
+        result = await sendTelegramNotification({
+          botToken: token,
+          chatId,
+          htmlText: testHtml,
+          buttons: testButtons,
+          gasUrl,
+        });
+      }
+
+      setTelegramTestStatus({
+        ok: result.ok,
+        message: result.message,
+      });
+
+      if (result.ok && !lineSettings.telegramEnabled) {
+        onUpdateSettings({
+          ...lineSettings,
+          telegramEnabled: true,
+        });
+      }
+
+      // Sync Telegram credentials & reminder schedule to Google Apps Script properties silently when GAS URL is set
+      if (result.ok && gasUrl.trim().startsWith('https://script.google.com/macros/s/')) {
+        fetch(gasUrl.trim(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'set_config',
+            telegramBotToken: token,
+            telegramChatId: chatId,
+            telegramHeaderTitle: activeHeader,
+            reminderTimings:
+              lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
+                ? lineSettings.reminderTimings
+                : [lineSettings.defaultRemindMinutes || 15],
+            dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
+            dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
+            telegramShowStats: lineSettings.telegramShowStats !== false,
+            telegramShowButtons: lineSettings.telegramShowButtons !== false,
+          }),
+        }).catch(() => {});
+      }
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
+
+  const handleSyncTelegramScheduleToGas = async () => {
+    const trimmedGas = gasUrl.trim();
+    if (!trimmedGas.startsWith('https://script.google.com/macros/s/')) {
+      setTgGasSyncStatus({
+        ok: false,
+        message: 'ยังไม่พบลิงก์ Google Apps Script Web App URL (กรุณาตรวจสอบที่แท็บ เชื่อมต่อ API)',
+      });
+      return;
+    }
+    const token = (lineSettings.telegramBotToken || '').trim();
+    const chatId = (lineSettings.telegramChatId || '').trim();
+    const timings =
+      lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
+        ? lineSettings.reminderTimings
+        : [lineSettings.defaultRemindMinutes || 15];
+    setIsSyncingTgToGas(true);
+    setTgGasSyncStatus(null);
+    try {
+      const res = await fetch(trimmedGas, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'set_config',
+          telegramBotToken: token,
+          telegramChatId: chatId,
+          telegramHeaderTitle: (
+            lineSettings.telegramHeaderTitle || DEFAULT_TELEGRAM_HEADER_TITLE
+          ).trim(),
+          reminderTimings: timings,
+          dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
+          dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
+          telegramShowStats: lineSettings.telegramShowStats !== false,
+          telegramShowButtons: lineSettings.telegramShowButtons !== false,
+        }),
+      });
+      const data = JSON.parse((await res.text()) || '{}');
+      if (data && data.mode === 'gas_set_config' && data.version === '3.3-telegram-24x7-reminders') {
+        setTgGasSyncStatus({
+          ok: true,
+          message: `ซิงก์เวลาเตือนล่วงหน้า (${timings.map(formatRemindMinutesLabel).join(', ')}) และสรุปเช้า ${lineSettings.dailyDigestTime || '08:00'} น. เข้า Apps Script สำเร็จแล้ว!`,
+        });
+      } else {
+        setTgGasSyncStatus({
+          ok: false,
+          message:
+            'Apps Script ของคุณยังเป็นเวอร์ชันก่อนหน้า — กรุณากด "คัดลอกโค้ด Apps Script" ด้านบน ไปวางทับแล้วกด Deploy > Edit > New version จากนั้นรัน setupTelegramAutoTriggers 1 ครั้งครับ',
+        });
+      }
+    } catch {
+      setTgGasSyncStatus({
+        ok: false,
+        message: 'ไม่สามารถเชื่อมต่อ Google Apps Script ได้ กรุณาตรวจสอบสิทธิ์ Deploy เป็น Anyone',
+      });
+    } finally {
+      setIsSyncingTgToGas(false);
+    }
+  };
+
+  const handleSendSampleTaskToTelegramOnly = async () => {
+    const token = (lineSettings.telegramBotToken || '').trim();
+    const chatId = (lineSettings.telegramChatId || '').trim();
+    if ((!token && runtimeMode !== 'fullstack') || !chatId) {
+      setTelegramTestStatus({
+        ok: false,
+        message: 'กรุณากรอก Bot Token และ Chat ID ให้ครบก่อนกดส่งตัวอย่างครับ',
+      });
+      return;
+    }
+    setIsTestingTelegram(true);
+    setTelegramTestStatus(null);
+    try {
+      let res;
+      if (lineSettings.telegramDeliveryMode !== 'text_html') {
+        const photoDataUrl =
+          telegramPreviewCardUrl ||
+          (telegramPreviewMode === 'digest'
+            ? await renderDailyDigestTelegramCardPng({
+                dateYMD: telegramPreviewDigestData.dateYMD,
+                referenceTimeHM: formatLocalTimeHM(),
+                items: telegramPreviewDigestData.items,
+                heading:
+                  telegramFormatOptions.style === 'timeline_digest'
+                    ? 'ไทม์ไลน์กำหนดการประจำวัน'
+                    : 'สรุปตารางงานประจำวัน',
+                format: telegramFormatOptions,
+              })
+            : await renderSingleTaskTelegramCardPng({
+                task: samplePreviewTask,
+                categoryName: sampleCategory?.name || 'งานตารางทีม',
+                categoryColor: sampleCategory?.color || '#0284C7',
+                remindLabel: formatRemindMinutesLabel(
+                  samplePreviewTask.remindMinutesBefore || lineSettings.defaultRemindMinutes || 15
+                ),
+                includeDescription: lineSettings.includeDescriptionInNotification !== false,
+                summaryStats: {
+                  total: summaryMetrics.total,
+                  pending: summaryMetrics.pendingCount,
+                  completed: summaryMetrics.completedCount,
+                },
+                isManualTrigger: true,
+                format: telegramFormatOptions,
+              }));
+
+        res = await sendTelegramPhotoCard({
+          botToken: token,
+          chatId,
+          photoDataUrl,
+          captionHtml: telegramPreviewPhotoCaption,
+          fallbackHtmlText: telegramPreviewHtml,
+          buttons: telegramPreviewButtons,
+          gasUrl,
+        });
+      } else {
+        res = await sendTelegramNotification({
+          botToken: token,
+          chatId,
+          htmlText: telegramPreviewHtml,
+          buttons: telegramPreviewButtons,
+          gasUrl,
+        });
+      }
+      setTelegramTestStatus({ ok: res.ok, message: res.message });
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
 
   const handleCopyScript = async () => {
     try {
@@ -1006,6 +1487,233 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       summaryMetrics.total,
     ]
   );
+
+  const telegramFormatOptions = useMemo(
+    () => ({
+      style: (lineSettings.telegramStyle || 'executive_card') as TelegramTemplateStyle,
+      headerTitle: (
+        lineSettings.telegramHeaderTitle || DEFAULT_TELEGRAM_HEADER_TITLE
+      ).trim(),
+      showStats: lineSettings.telegramShowStats !== false,
+      showButtons: lineSettings.telegramShowButtons !== false,
+      cardFontSize: lineSettings.cardFontSize,
+      cardTitleWeight: lineSettings.cardTitleWeight,
+      cardLineSpacing: lineSettings.cardLineSpacing,
+    }),
+    [
+      lineSettings.cardFontSize,
+      lineSettings.cardLineSpacing,
+      lineSettings.cardTitleWeight,
+      lineSettings.telegramHeaderTitle,
+      lineSettings.telegramShowButtons,
+      lineSettings.telegramShowStats,
+      lineSettings.telegramStyle,
+    ]
+  );
+
+  const telegramPreviewButtons = useMemo(
+    () =>
+      buildTelegramActionButtons({
+        calendarUrl: resolvedCalendarButtonUrl,
+        includeCalendarButton: lineSettings.includeOpenAppButton !== false,
+        includeTvButton: true,
+        showButtons: telegramFormatOptions.showButtons,
+      }),
+    [
+      lineSettings.includeOpenAppButton,
+      resolvedCalendarButtonUrl,
+      telegramFormatOptions.showButtons,
+    ]
+  );
+
+  const telegramPreviewDigestData = useMemo(() => {
+    const todayItems = tasks
+      .filter((t) => t.date === todayStr)
+      .sort((a, b) => a.time.localeCompare(b.time));
+    const sourceTasks =
+      todayItems.length > 0
+        ? todayItems
+        : [...tasks]
+            .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
+            .slice(0, 5);
+    const items: FlexDigestItem[] =
+      sourceTasks.length > 0
+        ? sourceTasks.map((t) => {
+            const cat = categories.find((c) => c.id === t.categoryId);
+            return {
+              title: t.title,
+              time: t.time || '09:00',
+              status: t.status,
+              priority: t.priority,
+              description: t.description,
+              categoryName: cat?.name || 'งานตารางทีม',
+              categoryColor: cat?.color || '#0284c7',
+            };
+          })
+        : [
+            {
+              title: 'ประชุมสรุปแผนการดำเนินงานประจำสัปดาห์',
+              time: '09:30',
+              status: TaskStatus.PENDING,
+              priority: TaskPriority.HIGH,
+              description: 'ห้องประชุมชั้น 5 · ฝ่ายบริหาร',
+              categoryName: 'งานบริหาร',
+              categoryColor: '#ef4444',
+            },
+            {
+              title: 'ตรวจรับรองเอกสารและสรุปยอดนำเข้าข้อมูล',
+              time: '13:30',
+              status: TaskStatus.IN_PROGRESS,
+              priority: TaskPriority.MEDIUM,
+              description: 'ส่งมอบทีมงานก่อน 16:00 น.',
+              categoryName: 'งานปฏิบัติการ',
+              categoryColor: '#0284c7',
+            },
+            {
+              title: 'อัปเดตสถานะตารางขึ้นจอ TV ประจำวัน',
+              time: '17:00',
+              status: TaskStatus.COMPLETED,
+              priority: TaskPriority.LOW,
+              categoryName: 'งานทั่วไป',
+              categoryColor: '#10b981',
+            },
+          ];
+    return {
+      dateYMD: todayItems.length > 0 ? todayStr : sourceTasks[0]?.date || todayStr,
+      items,
+    };
+  }, [categories, tasks, todayStr]);
+
+  const telegramPreviewHtml = useMemo(() => {
+    if (telegramPreviewMode === 'digest') {
+      return formatDailyDigestTelegramHtml({
+        dateYMD: telegramPreviewDigestData.dateYMD,
+        referenceTimeHM: formatLocalTimeHM(),
+        items: telegramPreviewDigestData.items,
+        heading:
+          telegramFormatOptions.style === 'timeline_digest'
+            ? 'ไทม์ไลน์กำหนดการประจำวัน'
+            : 'สรุปตารางงานประจำวัน',
+        format: telegramFormatOptions,
+      });
+    }
+
+    return formatSingleTaskTelegramHtml({
+      task: samplePreviewTask,
+      categoryName: sampleCategory?.name || 'งานตารางทีม',
+      remindLabel: formatRemindMinutesLabel(
+        samplePreviewTask.remindMinutesBefore || lineSettings.defaultRemindMinutes || 15
+      ),
+      includeDescription: lineSettings.includeDescriptionInNotification !== false,
+      summaryStats: {
+        total: summaryMetrics.total,
+        pending: summaryMetrics.pendingCount,
+        completed: summaryMetrics.completedCount,
+      },
+      isManualTrigger: true,
+      format: telegramFormatOptions,
+    });
+  }, [
+    lineSettings.defaultRemindMinutes,
+    lineSettings.includeDescriptionInNotification,
+    sampleCategory?.name,
+    samplePreviewTask,
+    summaryMetrics.completedCount,
+    summaryMetrics.pendingCount,
+    summaryMetrics.total,
+    telegramFormatOptions,
+    telegramPreviewDigestData,
+    telegramPreviewMode,
+  ]);
+
+  const telegramPreviewPhotoCaption = useMemo(() => {
+    if (telegramPreviewMode === 'digest') {
+      const doneCnt = telegramPreviewDigestData.items.filter(
+        (i) => i.status === 'completed'
+      ).length;
+      return buildShortDigestPhotoCaption({
+        dateYMD: telegramPreviewDigestData.dateYMD,
+        referenceTimeHM: formatLocalTimeHM(),
+        total: telegramPreviewDigestData.items.length,
+        pending: telegramPreviewDigestData.items.length - doneCnt,
+        completed: doneCnt,
+        heading:
+          telegramFormatOptions.style === 'timeline_digest'
+            ? 'ไทม์ไลน์กำหนดการประจำวัน'
+            : 'สรุปตารางงานประจำวัน',
+      });
+    }
+    return buildShortTaskPhotoCaption({
+      task: samplePreviewTask,
+      categoryName: sampleCategory?.name || 'งานตารางทีม',
+      remindLabel: formatRemindMinutesLabel(
+        samplePreviewTask.remindMinutesBefore || lineSettings.defaultRemindMinutes || 15
+      ),
+    });
+  }, [
+    lineSettings.defaultRemindMinutes,
+    sampleCategory?.name,
+    samplePreviewTask,
+    telegramFormatOptions.style,
+    telegramPreviewDigestData,
+    telegramPreviewMode,
+  ]);
+
+  useEffect(() => {
+    if (activeSettingsTab !== 'telegram') return;
+    if (lineSettings.telegramDeliveryMode === 'text_html') return;
+    let cancelled = false;
+    (async () => {
+      const url =
+        telegramPreviewMode === 'digest'
+          ? await renderDailyDigestTelegramCardPng({
+              dateYMD: telegramPreviewDigestData.dateYMD,
+              referenceTimeHM: formatLocalTimeHM(),
+              items: telegramPreviewDigestData.items,
+              heading:
+                telegramFormatOptions.style === 'timeline_digest'
+                  ? 'ไทม์ไลน์กำหนดการประจำวัน'
+                  : 'สรุปตารางงานประจำวัน',
+              format: telegramFormatOptions,
+            })
+          : await renderSingleTaskTelegramCardPng({
+              task: samplePreviewTask,
+              categoryName: sampleCategory?.name || 'งานตารางทีม',
+              categoryColor: sampleCategory?.color || '#0284C7',
+              remindLabel: formatRemindMinutesLabel(
+                samplePreviewTask.remindMinutesBefore || lineSettings.defaultRemindMinutes || 15
+              ),
+              includeDescription: lineSettings.includeDescriptionInNotification !== false,
+              summaryStats: {
+                total: summaryMetrics.total,
+                pending: summaryMetrics.pendingCount,
+                completed: summaryMetrics.completedCount,
+              },
+              isManualTrigger: true,
+              format: telegramFormatOptions,
+            });
+      if (!cancelled) {
+        setTelegramPreviewCardUrl(url);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSettingsTab,
+    lineSettings.defaultRemindMinutes,
+    lineSettings.includeDescriptionInNotification,
+    lineSettings.telegramDeliveryMode,
+    sampleCategory?.color,
+    sampleCategory?.name,
+    samplePreviewTask,
+    summaryMetrics.completedCount,
+    summaryMetrics.pendingCount,
+    summaryMetrics.total,
+    telegramFormatOptions,
+    telegramPreviewDigestData,
+    telegramPreviewMode,
+  ]);
 
   const recentLineCreatedTasks = tasks.filter((t) => t.source === 'line').slice(0, 5);
   const hasSheet = Boolean(spreadsheetId.trim());
@@ -2404,10 +3112,10 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 <Settings2 className="h-4 w-4 text-violet-600 shrink-0" />
                 <div>
                   <h3 className="text-base font-bold text-slate-900">
-                    ตั้งค่ารูปแบบและเวลาแจ้งเตือน LINE OA
+                    ตั้งค่าการแจ้งเตือน LINE OA &amp; Telegram Bot
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    ปรับแต่งดีไซน์การ์ดแจ้งเตือน สรุปงานประจำวัน และเวลาเตือนล่วงหน้า
+                    ปรับแต่งดีไซน์การ์ด เวลาเตือนล่วงหน้า และเชื่อมต่อ Telegram ฟรีไม่จำกัดข้อความ
                   </p>
                 </div>
               </div>
@@ -2482,12 +3190,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               </label>
             </div>
 
-            {/* 4 Segmented Settings Sub-Tabs */}
-            <div className="mt-4 grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-lg">
+            {/* 5 Segmented Settings Sub-Tabs */}
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 bg-slate-100 rounded-lg">
               <button
                 type="button"
                 onClick={() => setActiveSettingsTab('format')}
-                className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                   activeSettingsTab === 'format'
                     ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2499,7 +3207,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveSettingsTab('timing')}
-                className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                   activeSettingsTab === 'timing'
                     ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2511,7 +3219,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveSettingsTab('triggers')}
-                className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                   activeSettingsTab === 'triggers'
                     ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2523,7 +3231,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveSettingsTab('api')}
-                className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                   activeSettingsTab === 'api'
                     ? 'bg-indigo-600 text-white shadow-2xs font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -2531,6 +3239,20 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               >
                 <Bell className="h-3.5 w-3.5 shrink-0" />
                 <span>LINE Token</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSettingsTab('telegram')}
+                className={`col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  activeSettingsTab === 'telegram'
+                    ? 'bg-[#0088cc] text-white shadow-2xs font-semibold'
+                    : telegramReady
+                    ? 'text-[#006da3] bg-sky-50 hover:bg-sky-100 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Send className="h-3.5 w-3.5 shrink-0" />
+                <span>Telegram</span>
               </button>
             </div>
 
@@ -3403,9 +4125,19 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                       <div className="text-[11px] leading-relaxed opacity-90">
                         {lineQuotaInfo.isExhausted
-                          ? 'การพิมพ์ถามบอทในแชทกลุ่มหรือแชทส่วนตัว เช่น "สรุปงานวันนี้", "งานพรุ่งนี้", "งานค้าง" หรือ "เพิ่มงาน ..." ใช้ระบบตอบกลับ (Reply API) ซึ่งยังใช้งานได้ฟรีไม่จำกัดตามปกติครับ'
-                          : 'คำแนะนำประหยัดโควต้า: เลือกโหมด "2. ห้องแชทกลุ่ม (C...)" ด้านล่างแทน "ส่งทั้ง 2 รูปแบบ" เพื่อลดการใช้โควต้าลงครึ่งหนึ่ง'}
+                          ? 'การพิมพ์ถามบอทในแชทกลุ่มหรือแชทส่วนตัว เช่น "สรุปงานวันนี้", "งานพรุ่งนี้", "งานค้าง" ใช้ระบบตอบกลับ (Reply API) ฟรีไม่จำกัด — หรือสลับใช้ Telegram Bot เพื่อรับแจ้งเตือนอัตโนมัติฟรีไม่จำกัดข้อความแทนได้ทันที'
+                          : 'คำแนะนำประหยัดโควต้า: เลือกโหมด "2. ห้องแชทกลุ่ม (C...)" ด้านล่างแทน "ส่งทั้ง 2 รูปแบบ" หรือเปิดใช้งาน Telegram Bot ควบคู่เพื่อรับแจ้งเตือนฟรีไม่จำกัดข้อความ'}
                       </div>
+                      {lineQuotaInfo.isExhausted && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveSettingsTab('telegram')}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0088cc] hover:bg-[#0077b3] text-white text-xs font-semibold transition-colors whitespace-nowrap"
+                        >
+                          <Send className="h-3.5 w-3.5 shrink-0" />
+                          <span>ตั้งค่า Telegram Bot (ฟรีไม่จำกัดข้อความ)</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -3740,6 +4472,650 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: Telegram Bot (Free Unlimited Notifications) */}
+            {activeSettingsTab === 'telegram' && (
+              <div className="mt-4 space-y-4">
+                <div className="p-3.5 rounded-xl border border-sky-200 bg-sky-50/70 flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-900">
+                      เปิดใช้งานแจ้งเตือนผ่าน Telegram Bot (ฟรีไม่จำกัดข้อความ)
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                      {telegramReady
+                        ? 'พร้อมส่งแจ้งเตือนตามเวลาและสรุปงานประจำวันเข้า Telegram โดยอัตโนมัติ (ใช้งานแทนหรือควบคู่กับ LINE ได้ทันที)'
+                        : 'กรอก Bot Token และ Chat ID ด้านล่างเพื่อเปิดรับแจ้งเตือนตารางงานฟรี ไม่มีโควตา 300 ข้อความ/เดือน'}
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none whitespace-nowrap shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(lineSettings.telegramEnabled)}
+                      onChange={(e) =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          telegramEnabled: e.target.checked,
+                        })
+                      }
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                        lineSettings.telegramEnabled ? 'bg-[#0088cc]' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-2xs transition-transform ${
+                          lineSettings.telegramEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </span>
+                    <span
+                      className={`text-xs font-bold ${
+                        lineSettings.telegramEnabled ? 'text-[#006da3]' : 'text-slate-600'
+                      }`}
+                    >
+                      {lineSettings.telegramEnabled ? 'เปิดใช้งาน' : 'ปิดไว้'}
+                    </span>
+                  </label>
+                </div>
+
+                {/* Step 1: Bot Token */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="block text-xs font-semibold text-slate-900">
+                      1. Telegram Bot Token (จาก @BotFather)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowTelegramGuide((prev) => !prev)}
+                      className="text-[11px] font-semibold text-[#0077b3] hover:underline whitespace-nowrap shrink-0"
+                    >
+                      {showTelegramGuide ? 'ซ่อนวิธีสร้างบอท' : 'ดูวิธีสร้างบอทใน 2 นาที'}
+                    </button>
+                  </div>
+                  <input
+                    type="password"
+                    value={lineSettings.telegramBotToken || ''}
+                    onChange={(e) =>
+                      onUpdateSettings({
+                        ...lineSettings,
+                        telegramBotToken: e.target.value,
+                      })
+                    }
+                    placeholder="เช่น 7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono tabular-nums text-slate-900 focus:outline-none focus:border-[#0088cc]"
+                  />
+                </div>
+
+                {showTelegramGuide && (
+                  <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-700 space-y-1.5 leading-relaxed">
+                    <div className="font-bold text-slate-900">
+                      ขั้นตอนสร้าง Telegram Bot และเชื่อมเข้ากลุ่มทีม (ทำครั้งเดียว):
+                    </div>
+                    <ol className="list-decimal pl-4 space-y-1">
+                      <li>
+                        เปิดแอป <strong>Telegram</strong> แล้วค้นหา <code className="font-mono bg-white px-1 rounded border border-slate-200">@BotFather</code> กด <strong>Start</strong> แล้วพิมพ์ <code className="font-mono bg-white px-1 rounded border border-slate-200">/newbot</code>
+                      </li>
+                      <li>
+                        ตั้งชื่อบอท (เช่น <em>น้องเลขา สบต.</em>) และ Username ที่ลงท้ายด้วย <code className="font-mono bg-white px-1 rounded border border-slate-200">bot</code> แล้วคัดลอก <strong>HTTP API Token</strong> มาวางในช่องที่ 1 ด้านบน
+                      </li>
+                      <li>
+                        ถ้าส่งเข้าแชทส่วนตัว ให้เปิดแชทบอทแล้วกด <strong>Start</strong> — ถ้าส่งเข้า<strong>กลุ่มทีม</strong> ให้ดึงบอทเข้ากลุ่ม Telegram แล้วพิมพ์ข้อความในกลุ่ม 1 ครั้ง (เช่น <em>&ldquo;สวัสดี&rdquo;</em>)
+                      </li>
+                      <li>
+                        กลับมากดปุ่ม <strong>&ldquo;ค้นหา Chat ID อัตโนมัติ&rdquo;</strong> ด้านล่าง แล้วคลิกเลือกห้องที่ต้องการ กด <strong>&ldquo;ทดสอบส่งเข้า Telegram&rdquo;</strong> เป็นอันเสร็จครับ
+                      </li>
+                    </ol>
+                  </div>
+                )}
+
+                {/* Step 2: Chat ID + Auto Detector */}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="block text-xs font-semibold text-slate-900">
+                      2. Telegram Chat ID / Group ID (ใส่หลายห้องคั่นด้วยเครื่องหมายจุลภาคได้)
+                    </label>
+                    {parseTelegramChatIds(lineSettings.telegramChatId || '').length > 0 && (
+                      <span className="text-[11px] font-semibold text-emerald-700 tabular-nums">
+                        ✓ พร้อมส่ง {parseTelegramChatIds(lineSettings.telegramChatId || '').length} ห้องแชท
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="text"
+                      value={lineSettings.telegramChatId || ''}
+                      onChange={(e) =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          telegramChatId: e.target.value,
+                        })
+                      }
+                      placeholder="เช่น -1001234567890 (กลุ่ม) หรือ 987654321 (ส่วนตัว)"
+                      className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono tabular-nums text-slate-900 focus:outline-none focus:border-[#0088cc]"
+                    />
+                    <button
+                      type="button"
+                      disabled={isDetectingTelegram}
+                      onClick={handleDetectTelegramChats}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-xs font-semibold text-[#006da3] transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+                    >
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${isDetectingTelegram ? 'animate-spin' : ''}`}
+                      />
+                      <span>
+                        {isDetectingTelegram ? 'กำลังค้นหา...' : 'ค้นหา Chat ID อัตโนมัติ'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {telegramDetectResult && (
+                    <div
+                      className={`p-3 rounded-lg border text-xs space-y-2 ${
+                        telegramDetectResult.ok
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                          : 'bg-amber-50 border-amber-200 text-amber-950'
+                      }`}
+                    >
+                      <div className="font-semibold leading-relaxed">
+                        {telegramDetectResult.message}
+                      </div>
+                      {telegramDetectResult.chats.length > 0 && (
+                        <div className="divide-y divide-emerald-200/70 border border-emerald-200 rounded-lg bg-white overflow-hidden">
+                          {telegramDetectResult.chats.map((ch) => {
+                            const isSelected = parseTelegramChatIds(
+                              lineSettings.telegramChatId || ''
+                            ).includes(ch.chatId);
+                            return (
+                              <div
+                                key={ch.chatId}
+                                className="px-3 py-2 flex flex-wrap items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold text-slate-900 truncate">
+                                    {ch.title}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                                    {ch.type === 'private' ? 'แชทส่วนตัว' : 'กลุ่ม/ช่อง'} · ID:{' '}
+                                    {ch.chatId}
+                                    {ch.lastMessageText ? ` · ล่าสุด: "${ch.lastMessageText}"` : ''}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectDetectedTelegramChat(ch.chatId, false)}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                                      isSelected
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-[#0088cc] hover:bg-[#0077b3] text-white'
+                                    }`}
+                                  >
+                                    {isSelected ? 'เลือกอยู่แล้ว' : 'ใช้ห้องนี้'}
+                                  </button>
+                                  {!isSelected &&
+                                    parseTelegramChatIds(lineSettings.telegramChatId || '').length >
+                                      0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleSelectDetectedTelegramChat(ch.chatId, true)
+                                        }
+                                        className="px-2 py-1 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 whitespace-nowrap"
+                                      >
+                                        + เพิ่มอีกห้อง
+                                      </button>
+                                    )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 3: Message Styling & Live Preview */}
+                <div className="pt-3 border-t border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="text-[11px] font-semibold text-slate-800">
+                      3) ปรับแต่งรูปแบบการ์ด Telegram ให้สวยงาม
+                    </label>
+                    <span className="text-[10px] font-medium text-slate-500">
+                      ส่งเป็นภาพการ์ดคมชัดระดับ 2x เหมือน LINE Flex Card ได้ทันที
+                    </span>
+                  </div>
+
+                  {/* Delivery Mode Toggle: Graphic Photo Card vs HTML Text */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          telegramDeliveryMode: 'photo_card',
+                        })
+                      }
+                      className={`text-left p-2.5 rounded-lg border transition-colors ${
+                        lineSettings.telegramDeliveryMode !== 'text_html'
+                          ? 'border-[#0088cc] bg-[#f0f8fd]'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span
+                          className={`text-xs font-semibold ${
+                            lineSettings.telegramDeliveryMode !== 'text_html'
+                              ? 'text-[#006699]'
+                              : 'text-slate-800'
+                          }`}
+                        >
+                          การ์ดภาพกราฟิก (เหมือน LINE Flex)
+                        </span>
+                        <span className="text-[10px] font-semibold text-[#0077b3]">แนะนำ</span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                        แสดงหัวการ์ดสี Royal Navy + แถบสรุป KPI + ตารางคมชัดสวยงามทั้งโหมดสว่างและมืด
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateSettings({
+                          ...lineSettings,
+                          telegramDeliveryMode: 'text_html',
+                        })
+                      }
+                      className={`text-left p-2.5 rounded-lg border transition-colors ${
+                        lineSettings.telegramDeliveryMode === 'text_html'
+                          ? 'border-[#0088cc] bg-[#f0f8fd]'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span
+                          className={`text-xs font-semibold ${
+                            lineSettings.telegramDeliveryMode === 'text_html'
+                              ? 'text-[#006699]'
+                              : 'text-slate-800'
+                          }`}
+                        >
+                          ข้อความ HTML (กล่อง Quote)
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                        ข้อความตัวอักษรล้วนในกรอบ Quote เบา ประหยัดเน็ต และคัดลอกข้อความได้ง่าย
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* 3 Selectable Template Presets */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {TELEGRAM_STYLE_PRESETS.map((preset) => {
+                      const isActive =
+                        (lineSettings.telegramStyle || 'executive_card') === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              telegramStyle: preset.id,
+                            })
+                          }
+                          className={`text-left p-2.5 rounded-lg border transition-colors ${
+                            isActive
+                              ? 'border-[#0088cc] bg-[#f0f8fd]'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span
+                              className={`text-xs font-semibold ${
+                                isActive ? 'text-[#006699]' : 'text-slate-800'
+                              }`}
+                            >
+                              {preset.title}
+                            </span>
+                            {preset.badge && (
+                              <span className="text-[10px] font-semibold text-[#0077b3]">
+                                {preset.badge}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                            {preset.subtitle}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Header Title + Toggle Options */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
+                    <div className="space-y-1">
+                      <label className="block text-[11px] font-semibold text-slate-700">
+                        ชื่อหัวการ์ด / ชื่อหน่วยงาน (บรรทัดบนสุด)
+                      </label>
+                      <input
+                        type="text"
+                        value={
+                          lineSettings.telegramHeaderTitle ?? DEFAULT_TELEGRAM_HEADER_TITLE
+                        }
+                        onChange={(e) =>
+                          onUpdateSettings({
+                            ...lineSettings,
+                            telegramHeaderTitle: e.target.value,
+                          })
+                        }
+                        placeholder={DEFAULT_TELEGRAM_HEADER_TITLE}
+                        className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#0088cc]/30 focus:border-[#0088cc]"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-1">
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={lineSettings.telegramShowStats !== false}
+                          onChange={(e) =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              telegramShowStats: e.target.checked,
+                            })
+                          }
+                          className="h-3.5 w-3.5 rounded border-slate-300 accent-[#0088cc]"
+                        />
+                        <span>แสดงแถบสรุปยอดงาน</span>
+                      </label>
+
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={lineSettings.telegramShowButtons !== false}
+                          onChange={(e) =>
+                            onUpdateSettings({
+                              ...lineSettings,
+                              telegramShowButtons: e.target.checked,
+                            })
+                          }
+                          className="h-3.5 w-3.5 rounded border-slate-300 accent-[#0088cc]"
+                        />
+                        <span>แสดงปุ่มเปิดปฏิทิน / จอ TV</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Card Font Size Quick Control */}
+                  {lineSettings.telegramDeliveryMode !== 'text_html' && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <span className="text-[11px] font-semibold text-slate-700">
+                        ขนาดตัวอักษรบนภาพการ์ด (เหมาะกับจอมือถือ)
+                      </span>
+                      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+                        {(
+                          [
+                            { id: 'sm', label: 'กะทัดรัด' },
+                            { id: 'md', label: 'ใหญ่ชัดเจน (แนะนำ)' },
+                            { id: 'lg', label: 'ใหญ่มาก' },
+                          ] as const
+                        ).map((opt) => {
+                          const isActive = (lineSettings.cardFontSize || 'md') === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() =>
+                                onUpdateSettings({
+                                  ...lineSettings,
+                                  cardFontSize: opt.id,
+                                })
+                              }
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                                isActive
+                                  ? 'bg-[#0088cc] text-white'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Live Telegram Chat Preview */}
+                  <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full bg-[#0088cc]" />
+                        <span className="text-[11px] font-semibold text-slate-700">
+                          ตัวอย่างหน้าตาจริงที่จะได้รับบนแอป Telegram
+                        </span>
+                      </div>
+                      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setTelegramPreviewMode('task')}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            telegramPreviewMode === 'task'
+                              ? 'bg-[#0088cc] text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          เตือน 1 งาน
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTelegramPreviewMode('digest')}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                            telegramPreviewMode === 'digest'
+                              ? 'bg-[#0088cc] text-white'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          สรุปประจำวัน
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-3 sm:p-4 bg-[#17212b]">
+                      <div className="max-w-md">
+                        {lineSettings.telegramDeliveryMode !== 'text_html' ? (
+                          <div className="rounded-2xl rounded-tl-sm bg-[#232e3c] overflow-hidden border border-white/10 shadow-sm">
+                            {telegramPreviewCardUrl ? (
+                              <img
+                                src={telegramPreviewCardUrl}
+                                alt="ตัวอย่างการ์ดแจ้งเตือน Telegram"
+                                className="w-full h-auto block"
+                              />
+                            ) : (
+                              <div className="py-12 text-center text-xs text-slate-300">
+                                กำลังสร้างภาพการ์ดตัวอย่าง...
+                              </div>
+                            )}
+                            <div className="px-3 py-2 text-[12px] leading-relaxed text-slate-100">
+                              <div className="space-y-0.5 [&>div]:text-slate-200 [&_strong]:text-white [&_em]:text-slate-300 [&_code]:bg-sky-500/20 [&_code]:text-sky-300">
+                                {renderTelegramPreviewBlocks(telegramPreviewPhotoCaption)}
+                              </div>
+                              <div className="mt-1 text-right text-[10px] text-slate-400 font-mono tabular-nums">
+                                {formatLocalTimeHM()}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 shadow-2xs border border-slate-200/80 space-y-1">
+                            <div className="flex items-center justify-between gap-2 pb-0.5">
+                              <span className="text-[11px] font-semibold text-[#0077b3]">
+                                Lakha · น้องเลขา
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono tabular-nums">
+                                {formatLocalTimeHM()}
+                              </span>
+                            </div>
+                            <div>{renderTelegramPreviewBlocks(telegramPreviewHtml)}</div>
+                          </div>
+                        )}
+
+                        {telegramPreviewButtons.length > 0 && (
+                          <div className="mt-1.5 space-y-1">
+                            {telegramPreviewButtons.map((row, rowIdx) => (
+                              <div
+                                key={`tg-btn-row-${rowIdx}`}
+                                className={`grid gap-1 ${
+                                  row.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'
+                                }`}
+                              >
+                                {row.map((btn, btnIdx) => (
+                                  <div
+                                    key={`tg-btn-${rowIdx}-${btnIdx}`}
+                                    className="rounded-lg bg-[#2b5278]/90 px-2.5 py-1.5 text-center text-[11px] font-semibold text-white truncate"
+                                  >
+                                    {btn.text}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 4: Live Test Buttons */}
+                <div className="pt-3 border-t border-slate-200 space-y-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isTestingTelegram}
+                      onClick={handleTestTelegramSend}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#0088cc] hover:bg-[#0077b3] text-white text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-60"
+                    >
+                      <Send className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        {isTestingTelegram ? 'กำลังส่งทดสอบ...' : 'ทดสอบส่งข้อความเข้า Telegram'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        isTestingTelegram ||
+                        (!telegramReady &&
+                          !(
+                            runtimeMode === 'fullstack' &&
+                            parseTelegramChatIds(lineSettings.telegramChatId || '').length > 0
+                          ))
+                      }
+                      onClick={handleSendSampleTaskToTelegramOnly}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50"
+                    >
+                      <Bell className="h-3.5 w-3.5 shrink-0 text-[#0088cc]" />
+                      <span>
+                        {telegramPreviewMode === 'digest'
+                          ? 'ส่งตัวอย่างสรุปวันเข้า Telegram จริง'
+                          : 'ส่งตัวอย่างแบบที่เลือกเข้า Telegram จริง'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {telegramTestStatus && (
+                    <div
+                      className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                        telegramTestStatus.ok
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                          : 'bg-rose-50 border-rose-200 text-rose-900'
+                      }`}
+                    >
+                      {telegramTestStatus.message}
+                    </div>
+                  )}
+
+                  {/* 24/7 Offline Google Apps Script Auto-Reminder Box */}
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-800">
+                        แจ้งเตือนอัตโนมัติ 24 ชม. แม้ปิดคอมพิวเตอร์ (Google Apps Script)
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500 tabular-nums">
+                        สรุปเช้า {lineSettings.dailyDigestTime || '08:00'} น. · เตือน{' '}
+                        {(lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
+                          ? lineSettings.reminderTimings
+                          : [lineSettings.defaultRemindMinutes || 15]
+                        )
+                          .map(formatRemindMinutesLabel)
+                          .join(' / ')}
+                      </span>
+                    </div>
+
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 leading-relaxed">
+                      <li>
+                        กดปุ่ม <strong>คัดลอกโค้ด Apps Script</strong> ด้านล่าง แล้วนำไปวางทับใน Google Sheets &gt;{' '}
+                        <code className="font-mono text-slate-800">Extensions &gt; Apps Script</code> กด Save
+                      </li>
+                      <li>
+                        กด <strong>Deploy &gt; Manage deployments &gt; แก้ไข (ดินสอ) &gt; เลือก New version &gt; Deploy</strong>
+                      </li>
+                      <li>
+                        เลือกฟังก์ชัน <code className="font-mono font-semibold text-[#006699]">setupTelegramAutoTriggers</code>{' '}
+                        ที่แถบด้านบนแล้วกด <strong>Run</strong> เพียงครั้งเดียว — ระบบจะเช็กเตือนงานล่วงหน้าและส่งสรุปเช้าเข้า Telegram ทุก 5 นาทีตลอด 24 ชม.
+                      </li>
+                    </ol>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyScript}
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-semibold transition-colors whitespace-nowrap"
+                      >
+                        {copiedScript ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5 shrink-0" />
+                        )}
+                        <span>
+                          {copiedScript
+                            ? 'คัดลอกโค้ด Apps Script (24 ชม.) แล้ว!'
+                            : 'คัดลอกโค้ด Apps Script (รองรับเตือน 24 ชม.)'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isSyncingTgToGas}
+                        onClick={handleSyncTelegramScheduleToGas}
+                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-[11px] font-semibold transition-colors whitespace-nowrap disabled:opacity-60"
+                      >
+                        <RefreshCw
+                          className={`h-3.5 w-3.5 shrink-0 ${isSyncingTgToGas ? 'animate-spin' : ''}`}
+                        />
+                        <span>
+                          {isSyncingTgToGas ? 'กำลังซิงก์...' : 'ซิงก์เวลาเตือนล่าสุดเข้า Apps Script'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {tgGasSyncStatus && (
+                      <div
+                        className={`p-2 rounded-lg border text-[11px] leading-relaxed ${
+                          tgGasSyncStatus.ok
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                            : 'bg-amber-50 border-amber-200 text-amber-950'
+                        }`}
+                      >
+                        {tgGasSyncStatus.message}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

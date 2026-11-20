@@ -99,6 +99,21 @@ import {
   readLocalDirectorPresence,
   subscribeRealtimeEvents,
 } from './services/realtimeSync';
+import {
+  buildShortDigestPhotoCaption,
+  buildShortTaskPhotoCaption,
+  buildTelegramActionButtons,
+  escapeTelegramHtml,
+  formatDailyDigestTelegramHtml,
+  formatSingleTaskTelegramHtml,
+  isTelegramConfigured,
+  sendTelegramNotification,
+  sendTelegramPhotoCard,
+} from './services/telegramService';
+import {
+  renderDailyDigestTelegramCardPng,
+  renderSingleTaskTelegramCardPng,
+} from './services/telegramCardRenderer';
 
 type ActiveSection =
   | 'dashboard'
@@ -662,6 +677,13 @@ export default function App() {
         cardFontSize: lineSettings.cardFontSize || 'md',
         cardTitleWeight: lineSettings.cardTitleWeight || 'bold',
         cardLineSpacing: lineSettings.cardLineSpacing || 'relaxed',
+        telegramEnabled: Boolean(lineSettings.telegramEnabled),
+        telegramBotToken: (lineSettings.telegramBotToken || '').trim(),
+        telegramChatId: (lineSettings.telegramChatId || '').trim(),
+        telegramStyle: lineSettings.telegramStyle || 'executive_card',
+        telegramHeaderTitle: lineSettings.telegramHeaderTitle || '',
+        telegramShowStats: lineSettings.telegramShowStats !== false,
+        telegramShowButtons: lineSettings.telegramShowButtons !== false,
       }),
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -679,6 +701,34 @@ export default function App() {
         }
       })
       .catch(() => {});
+
+    // Also silently keep Google Apps Script 24/7 Telegram reminder schedule in sync
+    if (isTelegramConfigured(lineSettings)) {
+      const effectiveGas = getEffectiveGasUrl();
+      if (effectiveGas && effectiveGas.startsWith('https://script.google.com/macros/s/')) {
+        const timer = window.setTimeout(() => {
+          fetch(effectiveGas, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'set_config',
+              telegramBotToken: (lineSettings.telegramBotToken || '').trim(),
+              telegramChatId: (lineSettings.telegramChatId || '').trim(),
+              telegramHeaderTitle: (lineSettings.telegramHeaderTitle || '').trim(),
+              reminderTimings:
+                lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
+                  ? lineSettings.reminderTimings
+                  : [lineSettings.defaultRemindMinutes || 15],
+              dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
+              dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
+              telegramShowStats: lineSettings.telegramShowStats !== false,
+              telegramShowButtons: lineSettings.telegramShowButtons !== false,
+            }),
+          }).catch(() => {});
+        }, 1200);
+        return () => window.clearTimeout(timer);
+      }
+    }
   }, [lineSettings]);
 
   useEffect(() => {
@@ -1948,6 +1998,93 @@ export default function App() {
         }
       }
 
+      // Also deliver via Telegram Bot (free unlimited) when enabled
+      let telegramDelivered = false;
+      let telegramNotice = '';
+      if (isTelegramConfigured(lineSettings)) {
+        const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+          customPublicUrl: lineSettings.publicCalendarUrl,
+          workspaceId,
+          spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+          date: task.date,
+        });
+        const gcalUrl =
+          lineSettings.includeGoogleCalendarButton !== false
+            ? buildGoogleCalendarTemplateUrl(task, categoryName)
+            : undefined;
+        const tgFormat = {
+          style: lineSettings.telegramStyle || 'executive_card',
+          headerTitle: lineSettings.telegramHeaderTitle,
+          showStats: lineSettings.telegramShowStats !== false,
+          showButtons: lineSettings.telegramShowButtons !== false,
+          cardFontSize: lineSettings.cardFontSize,
+          cardTitleWeight: lineSettings.cardTitleWeight,
+          cardLineSpacing: lineSettings.cardLineSpacing,
+        };
+        const tgHtml = formatSingleTaskTelegramHtml({
+          task,
+          categoryName,
+          remindLabel,
+          includeDescription: includeDesc,
+          summaryStats,
+          isManualTrigger,
+          format: tgFormat,
+        });
+        const tgButtons = buildTelegramActionButtons({
+          calendarUrl: calendarDeepLinkUrl,
+          googleCalendarUrl: gcalUrl,
+          includeCalendarButton: lineSettings.includeOpenAppButton !== false,
+          includeTvButton: true,
+          showButtons: lineSettings.telegramShowButtons !== false,
+        });
+        const dedupKey = !isManualTrigger
+          ? `tg-task-remind-${task.id}-${formatLocalDateYMD()}-${task.time || '09:00'}`
+          : undefined;
+        let tgRes;
+        if (lineSettings.telegramDeliveryMode !== 'text_html') {
+          const catColor =
+            categories.find((c) => c.id === task.categoryId)?.color || '#0284C7';
+          const photoDataUrl = await renderSingleTaskTelegramCardPng({
+            task,
+            categoryName,
+            categoryColor: catColor,
+            remindLabel,
+            includeDescription: includeDesc,
+            summaryStats,
+            isManualTrigger,
+            format: tgFormat,
+          });
+          tgRes = await sendTelegramPhotoCard({
+            botToken: lineSettings.telegramBotToken || '',
+            chatId: lineSettings.telegramChatId || '',
+            photoDataUrl,
+            captionHtml: buildShortTaskPhotoCaption({
+              task,
+              categoryName,
+              remindLabel,
+            }),
+            fallbackHtmlText: tgHtml,
+            buttons: tgButtons,
+            dedupKey,
+          });
+        } else {
+          tgRes = await sendTelegramNotification({
+            botToken: lineSettings.telegramBotToken || '',
+            chatId: lineSettings.telegramChatId || '',
+            htmlText: tgHtml,
+            buttons: tgButtons,
+            dedupKey,
+          });
+        }
+        telegramDelivered = tgRes.ok;
+        telegramNotice = tgRes.message;
+        if (tgRes.ok) {
+          deliveryChannel =
+            deliveryChannel === 'line_messaging_api' ? 'line_and_telegram' : 'telegram_bot';
+          deliveryStatus = 'delivered';
+        }
+      }
+
       const priorityLabelText =
         task.priority === TaskPriority.HIGH
           ? `ความสำคัญสูง · ${task.time} น.`
@@ -2014,17 +2151,33 @@ export default function App() {
           pushCollaborativeWorkspace(toPush, categoriesRef.current, teamMembersRef.current);
         }
 
-        if (deliveryChannel === 'line_messaging_api') {
+        if (deliveryChannel === 'line_and_telegram') {
+          showNotice(
+            'success',
+            `ส่งแจ้งเตือนงาน "${task.title}" เข้าทั้ง LINE OA และ Telegram Bot สำเร็จ!`
+          );
+        } else if (deliveryChannel === 'telegram_bot') {
+          showNotice(
+            'success',
+            telegramDelivered
+              ? `ส่งแจ้งเตือนงาน "${task.title}" เข้า Telegram Bot เรียบร้อยแล้ว!${
+                  apiNotice ? ` (หมายเหตุ LINE: ${apiNotice})` : ''
+                }`
+              : telegramNotice
+          );
+        } else if (deliveryChannel === 'line_messaging_api') {
           showNotice(
             'success',
             apiNotice || `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าแอป LINE OA สำเร็จ!`
           );
+        } else if (telegramNotice && isTelegramConfigured(lineSettings)) {
+          showNotice('error', telegramNotice);
         } else if (lineSettings.channelAccessToken.trim() && apiNotice) {
           showNotice('error', apiNotice);
         } else {
           showNotice(
             'success',
-            `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชท LINE OA เรียบร้อยแล้ว`
+            `ส่งการ์ดแจ้งเตือนงาน "${task.title}" พร้อมสรุปงานเข้าห้องแชทเรียบร้อยแล้ว`
           );
         }
       } finally {
@@ -2156,23 +2309,92 @@ export default function App() {
                   }
                 }
 
+                let tgMorningDelivered = false;
+                if (isTelegramConfigured(lineSettings)) {
+                  const tgFormat = {
+                    style: lineSettings.telegramStyle || 'executive_card',
+                    headerTitle: lineSettings.telegramHeaderTitle,
+                    showStats: lineSettings.telegramShowStats !== false,
+                    showButtons: lineSettings.telegramShowButtons !== false,
+                    cardFontSize: lineSettings.cardFontSize,
+                    cardTitleWeight: lineSettings.cardTitleWeight,
+                    cardLineSpacing: lineSettings.cardLineSpacing,
+                  };
+                  const tgDigestHtml = formatDailyDigestTelegramHtml({
+                    dateYMD: currentBangkokYMD,
+                    referenceTimeHM: currentBangkokHM,
+                    items: digestItems,
+                    format: tgFormat,
+                  });
+                  const tgButtons = buildTelegramActionButtons({
+                    calendarUrl: calendarDeepLinkUrl,
+                    includeCalendarButton: true,
+                    includeTvButton: true,
+                    showButtons: lineSettings.telegramShowButtons !== false,
+                  });
+                  let tgRes;
+                  if (lineSettings.telegramDeliveryMode !== 'text_html') {
+                    const photoDataUrl = await renderDailyDigestTelegramCardPng({
+                      dateYMD: currentBangkokYMD,
+                      referenceTimeHM: currentBangkokHM,
+                      items: digestItems,
+                      format: tgFormat,
+                    });
+                    const completedCnt = digestItems.filter((i) => i.status === 'completed').length;
+                    tgRes = await sendTelegramPhotoCard({
+                      botToken: lineSettings.telegramBotToken || '',
+                      chatId: lineSettings.telegramChatId || '',
+                      photoDataUrl,
+                      captionHtml: buildShortDigestPhotoCaption({
+                        dateYMD: currentBangkokYMD,
+                        referenceTimeHM: currentBangkokHM,
+                        total: digestItems.length,
+                        pending: digestItems.length - completedCnt,
+                        completed: completedCnt,
+                      }),
+                      fallbackHtmlText: tgDigestHtml,
+                      buttons: tgButtons,
+                      dedupKey: `tg-morning-digest-${currentBangkokYMD}`,
+                    });
+                  } else {
+                    tgRes = await sendTelegramNotification({
+                      botToken: lineSettings.telegramBotToken || '',
+                      chatId: lineSettings.telegramChatId || '',
+                      htmlText: tgDigestHtml,
+                      buttons: tgButtons,
+                      dedupKey: `tg-morning-digest-${currentBangkokYMD}`,
+                    });
+                  }
+                  tgMorningDelivered = tgRes.ok;
+                }
+
+                const lineSentMorning = Boolean(lineSettings.channelAccessToken.trim());
+                const morningChannel: LineMessageLog['deliveryChannel'] =
+                  lineSentMorning && tgMorningDelivered
+                    ? 'line_and_telegram'
+                    : tgMorningDelivered
+                    ? 'telegram_bot'
+                    : lineSentMorning
+                    ? 'line_messaging_api'
+                    : 'simulator';
+
                 const morningLog: LineMessageLog = {
                   id: `log-morning-${Date.now()}`,
                   timestamp: new Date().toISOString(),
                   direction: 'auto_reminder',
                   text: parsedDigest.replyText,
-                  deliveryChannel: lineSettings.channelAccessToken.trim()
-                    ? 'line_messaging_api'
-                    : 'simulator',
-                  status: lineSettings.channelAccessToken.trim()
-                    ? 'delivered'
-                    : 'simulated',
+                  deliveryChannel: morningChannel,
+                  status: morningChannel === 'simulator' ? 'simulated' : 'delivered',
                   flexSummary: parsedDigest.flexSummary,
                 };
                 setLineLogs((prev) => [...prev, morningLog]);
                 showNotice(
                   'success',
-                  `☀️ ส่งการ์ดสรุปตารางงานประจำวันตอนเช้า (${digestHM} น.) เข้า LINE OA อัตโนมัติเรียบร้อยแล้ว!`,
+                  morningChannel === 'line_and_telegram'
+                    ? `☀️ ส่งสรุปตารางงานประจำวันตอนเช้า (${digestHM} น.) เข้าทั้ง LINE OA และ Telegram Bot เรียบร้อยแล้ว!`
+                    : morningChannel === 'telegram_bot'
+                    ? `☀️ ส่งสรุปตารางงานประจำวันตอนเช้า (${digestHM} น.) เข้า Telegram Bot อัตโนมัติเรียบร้อยแล้ว!`
+                    : `☀️ ส่งการ์ดสรุปตารางงานประจำวันตอนเช้า (${digestHM} น.) เข้า LINE OA อัตโนมัติเรียบร้อยแล้ว!`,
                   currentBangkokYMD
                 );
               })();
@@ -2591,7 +2813,7 @@ export default function App() {
       if (
         (parsed.action === 'query_today' || parsed.action === 'query_pending') &&
         lineSettings.enabled &&
-        lineSettings.channelAccessToken.trim()
+        (lineSettings.channelAccessToken.trim() || isTelegramConfigured(lineSettings))
       ) {
         const summaryDate = parsed.flexSummary?.date || formatLocalDateYMD();
         const summaryDigestItems = parsed.flexSummary?.digestItems || [];
@@ -2602,54 +2824,111 @@ export default function App() {
           date: summaryDate,
         });
         (async () => {
-          let handled = false;
-          try {
-            const res = await fetch('/api/line/push', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                channelAccessToken: lineSettings.channelAccessToken.trim(),
-                to: lineSettings.targetUserId.trim(),
-                targetGroupId: (lineSettings.targetGroupId || '').trim(),
-                teamNotificationMode: lineSettings.teamNotificationMode || 'both',
-                text: parsed.replyText,
-                date: summaryDate,
-                dateTime: parsed.flexSummary?.dateTime || summaryDate,
-                tasksList: summaryDigestItems,
-                originUrl: calendarDeepLinkUrl,
-              }),
-            });
-            const ct = res.headers.get('content-type') || '';
-            if (res.ok && ct.includes('application/json')) {
-              handled = true;
-            }
-          } catch {
-            handled = false;
-          }
-          if (!handled) {
-            const savedGasUrl = getEffectiveGasUrl();
-            if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
-              try {
-                await fetch(savedGasUrl, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                  body: JSON.stringify({
-                    action: 'push_line',
-                    channelAccessToken: lineSettings.channelAccessToken.trim(),
-                    to: lineSettings.targetUserId.trim(),
-                    targetGroupId: (lineSettings.targetGroupId || '').trim(),
-                    teamNotificationMode: lineSettings.teamNotificationMode || 'both',
-                    text: parsed.replyText,
-                    date: summaryDate,
-                    dateTime: parsed.flexSummary?.dateTime || summaryDate,
-                    tasksList: summaryDigestItems,
-                    messageFormat: lineSettings.messageFormat || 'executive_flex',
-                    originUrl: calendarDeepLinkUrl,
-                  }),
-                });
-              } catch {
-                // Ignore background error
+          if (lineSettings.channelAccessToken.trim()) {
+            let handled = false;
+            try {
+              const res = await fetch('/api/line/push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  channelAccessToken: lineSettings.channelAccessToken.trim(),
+                  to: lineSettings.targetUserId.trim(),
+                  targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                  teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                  text: parsed.replyText,
+                  date: summaryDate,
+                  dateTime: parsed.flexSummary?.dateTime || summaryDate,
+                  tasksList: summaryDigestItems,
+                  originUrl: calendarDeepLinkUrl,
+                }),
+              });
+              const ct = res.headers.get('content-type') || '';
+              if (res.ok && ct.includes('application/json')) {
+                handled = true;
               }
+            } catch {
+              handled = false;
+            }
+            if (!handled) {
+              const savedGasUrl = getEffectiveGasUrl();
+              if (savedGasUrl.startsWith('https://script.google.com/macros/s/')) {
+                try {
+                  await fetch(savedGasUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({
+                      action: 'push_line',
+                      channelAccessToken: lineSettings.channelAccessToken.trim(),
+                      to: lineSettings.targetUserId.trim(),
+                      targetGroupId: (lineSettings.targetGroupId || '').trim(),
+                      teamNotificationMode: lineSettings.teamNotificationMode || 'both',
+                      text: parsed.replyText,
+                      date: summaryDate,
+                      dateTime: parsed.flexSummary?.dateTime || summaryDate,
+                      tasksList: summaryDigestItems,
+                      messageFormat: lineSettings.messageFormat || 'executive_flex',
+                      originUrl: calendarDeepLinkUrl,
+                    }),
+                  });
+                } catch {
+                  // Ignore background error
+                }
+              }
+            }
+          }
+
+          if (isTelegramConfigured(lineSettings)) {
+            const nowHM = formatLocalTimeHM();
+            const tgFormat = {
+              style: lineSettings.telegramStyle || 'executive_card',
+              headerTitle: lineSettings.telegramHeaderTitle,
+              showStats: lineSettings.telegramShowStats !== false,
+              showButtons: lineSettings.telegramShowButtons !== false,
+              cardFontSize: lineSettings.cardFontSize,
+              cardTitleWeight: lineSettings.cardTitleWeight,
+              cardLineSpacing: lineSettings.cardLineSpacing,
+            };
+            const tgHtml = formatDailyDigestTelegramHtml({
+              dateYMD: summaryDate,
+              referenceTimeHM: nowHM,
+              items: summaryDigestItems,
+              format: tgFormat,
+            });
+            const tgButtons = buildTelegramActionButtons({
+              calendarUrl: calendarDeepLinkUrl,
+              includeCalendarButton: true,
+              includeTvButton: true,
+              showButtons: lineSettings.telegramShowButtons !== false,
+            });
+            if (lineSettings.telegramDeliveryMode !== 'text_html') {
+              const photoDataUrl = await renderDailyDigestTelegramCardPng({
+                dateYMD: summaryDate,
+                referenceTimeHM: nowHM,
+                items: summaryDigestItems,
+                format: tgFormat,
+              });
+              const doneCnt = summaryDigestItems.filter((i) => i.status === 'completed').length;
+              await sendTelegramPhotoCard({
+                botToken: lineSettings.telegramBotToken || '',
+                chatId: lineSettings.telegramChatId || '',
+                photoDataUrl,
+                captionHtml: buildShortDigestPhotoCaption({
+                  dateYMD: summaryDate,
+                  referenceTimeHM: nowHM,
+                  total: summaryDigestItems.length,
+                  pending: summaryDigestItems.length - doneCnt,
+                  completed: doneCnt,
+                }),
+                fallbackHtmlText: tgHtml,
+                buttons: tgButtons,
+              }).catch(() => {});
+            } else {
+              await sendTelegramNotification({
+                botToken: lineSettings.telegramBotToken || '',
+                chatId: lineSettings.telegramChatId || '',
+                htmlText: tgHtml,
+                buttons: tgButtons,
+              }).catch(() => {});
             }
           }
         })();
@@ -3874,6 +4153,41 @@ export default function App() {
       }
     }
 
+    if (lineSettings.enabled && isTelegramConfigured(lineSettings)) {
+      const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        workspaceId,
+        spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+        date: todayStr,
+      });
+      const tgMemberHtml = [
+        '👥 <b>สมาชิกใหม่เข้าร่วมปฏิทินทีม</b>',
+        '━━━━━━━━━━━━━━━━━━━━',
+        `👤 <b>ชื่อสมาชิก:</b> ${escapeTelegramHtml(newMember.name)}`,
+        `📧 <b>อีเมล:</b> ${escapeTelegramHtml(newMember.email)}`,
+        newMember.department ? `🏢 <b>ฝ่าย/ทีม:</b> ${escapeTelegramHtml(newMember.department)}` : '',
+        `🔐 <b>สิทธิ์การใช้งาน:</b> ${escapeTelegramHtml(roleLabel)}`,
+        `👨‍👩‍👧‍👦 <b>สมาชิกรวม:</b> ${nextMembers.length} คน`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const tgRes = await sendTelegramNotification({
+        botToken: lineSettings.telegramBotToken || '',
+        chatId: lineSettings.telegramChatId || '',
+        htmlText: tgMemberHtml,
+        buttons: buildTelegramActionButtons({
+          calendarUrl: calendarDeepLinkUrl,
+          includeCalendarButton: true,
+          includeTvButton: false,
+        }),
+      });
+      if (tgRes.ok) {
+        deliveryChannel =
+          deliveryChannel === 'line_messaging_api' ? 'line_and_telegram' : 'telegram_bot';
+        status = 'delivered';
+      }
+    }
+
     const inviteLog: LineMessageLog = {
       id: `log-member-${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -4085,13 +4399,100 @@ export default function App() {
       }
     }
 
+    let telegramOk = false;
+    let telegramMessage = '';
+    if (isTelegramConfigured(lineSettings)) {
+      const calendarDeepLinkUrl = resolveTeamCalendarAppUrl({
+        customPublicUrl: lineSettings.publicCalendarUrl,
+        workspaceId,
+        spreadsheetId: sheetMeta?.spreadsheetId || spreadsheetInput,
+        date: todayStr,
+      });
+      const tgFormat = {
+        style: lineSettings.telegramStyle || 'executive_card',
+        headerTitle: lineSettings.telegramHeaderTitle,
+        showStats: lineSettings.telegramShowStats !== false,
+        showButtons: lineSettings.telegramShowButtons !== false,
+        cardFontSize: lineSettings.cardFontSize,
+        cardTitleWeight: lineSettings.cardTitleWeight,
+        cardLineSpacing: lineSettings.cardLineSpacing,
+      };
+      const tgDigestHtml = formatDailyDigestTelegramHtml({
+        dateYMD: todayStr,
+        referenceTimeHM: nowTimeHM,
+        items: digestItems,
+        format: tgFormat,
+      });
+      const tgButtons = buildTelegramActionButtons({
+        calendarUrl: calendarDeepLinkUrl,
+        includeCalendarButton: lineSettings.includeOpenAppButton !== false,
+        includeTvButton: true,
+        showButtons: lineSettings.telegramShowButtons !== false,
+      });
+      let tgRes;
+      if (lineSettings.telegramDeliveryMode !== 'text_html') {
+        const photoDataUrl = await renderDailyDigestTelegramCardPng({
+          dateYMD: todayStr,
+          referenceTimeHM: nowTimeHM,
+          items: digestItems,
+          format: tgFormat,
+        });
+        const doneCnt = digestItems.filter((i) => i.status === 'completed').length;
+        tgRes = await sendTelegramPhotoCard({
+          botToken: lineSettings.telegramBotToken || '',
+          chatId: lineSettings.telegramChatId || '',
+          photoDataUrl,
+          captionHtml: buildShortDigestPhotoCaption({
+            dateYMD: todayStr,
+            referenceTimeHM: nowTimeHM,
+            total: digestItems.length,
+            pending: digestItems.length - doneCnt,
+            completed: doneCnt,
+          }),
+          fallbackHtmlText: tgDigestHtml,
+          buttons: tgButtons,
+        });
+      } else {
+        tgRes = await sendTelegramNotification({
+          botToken: lineSettings.telegramBotToken || '',
+          chatId: lineSettings.telegramChatId || '',
+          htmlText: tgDigestHtml,
+          buttons: tgButtons,
+        });
+      }
+      telegramOk = tgRes.ok;
+      telegramMessage = tgRes.message;
+    }
+
+    const finalChannel: LineMessageLog['deliveryChannel'] =
+      apiOk && telegramOk
+        ? 'line_and_telegram'
+        : telegramOk
+        ? 'telegram_bot'
+        : apiOk
+        ? 'line_messaging_api'
+        : 'simulator';
+
+    const finalDelivered = apiOk || telegramOk;
+    let finalNoticeMessage = statusMessage;
+    if (apiOk && telegramOk) {
+      finalNoticeMessage =
+        'ส่งสรุปตารางงานประจำวันเข้าทั้ง LINE OA และ Telegram Bot เรียบร้อยแล้ว!';
+    } else if (telegramOk) {
+      finalNoticeMessage = lineSettings.channelAccessToken.trim() && !apiOk
+        ? `ส่งสรุปตารางงานประจำวันเข้า Telegram Bot สำเร็จ! (หมายเหตุ LINE: ${statusMessage})`
+        : `ส่งสรุปตารางงานประจำวันเข้า Telegram Bot เรียบร้อยแล้ว!`;
+    } else if (!apiOk && isTelegramConfigured(lineSettings) && telegramMessage) {
+      finalNoticeMessage = telegramMessage;
+    }
+
     const newLog: LineMessageLog = {
       id: `log-test-${Date.now()}`,
       timestamp: new Date().toISOString(),
       direction: 'auto_reminder',
       text: summaryText,
-      deliveryChannel: apiOk ? 'line_messaging_api' : 'simulator',
-      status: apiOk ? 'delivered' : 'simulated',
+      deliveryChannel: finalChannel,
+      status: finalDelivered ? 'delivered' : 'simulated',
       flexSummary: parsedDigest.flexSummary,
     };
 
@@ -4099,8 +4500,11 @@ export default function App() {
     setLineLogs(nextLogs);
     setIsSendingPush(false);
     showNotice(
-      apiOk || !lineSettings.channelAccessToken.trim() ? 'success' : 'error',
-      statusMessage,
+      finalDelivered ||
+        (!lineSettings.channelAccessToken.trim() && !isTelegramConfigured(lineSettings))
+        ? 'success'
+        : 'error',
+      finalNoticeMessage,
       todayStr
     );
   };

@@ -11,6 +11,7 @@ export enum TaskStatus {
 }
 
 export type LineNotificationFormat = 'executive_flex' | 'compact_flex' | 'text_custom';
+export type TelegramTemplateStyle = 'executive_card' | 'compact_brief' | 'timeline_digest';
 
 export type TeamRole = 'owner' | 'editor' | 'viewer';
 
@@ -71,7 +72,11 @@ export interface LineMessageLog {
   direction: 'incoming_command' | 'outgoing_reply' | 'auto_reminder';
   text: string;
   taskTitle?: string;
-  deliveryChannel: 'simulator' | 'line_messaging_api';
+  deliveryChannel:
+    | 'simulator'
+    | 'line_messaging_api'
+    | 'telegram_bot'
+    | 'line_and_telegram';
   status: 'delivered' | 'simulated' | 'failed';
   flexSummary?: {
     badge: string;
@@ -131,6 +136,14 @@ export interface LineSettings {
   cardFontSize?: 'sm' | 'md' | 'lg';
   cardTitleWeight?: 'bold' | 'regular';
   cardLineSpacing?: 'tight' | 'normal' | 'relaxed';
+  telegramEnabled?: boolean;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  telegramDeliveryMode?: 'photo_card' | 'text_html';
+  telegramStyle?: TelegramTemplateStyle;
+  telegramHeaderTitle?: string;
+  telegramShowStats?: boolean;
+  telegramShowButtons?: boolean;
 }
 
 export type DirectorPresenceMode =
