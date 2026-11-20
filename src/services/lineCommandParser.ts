@@ -2599,7 +2599,7 @@ function writeSheetTasksFromWeb(tasksList) {
         String(t.priority || 'medium'),
         String(t.status || 'pending'),
         Number(t.remindMinutesBefore || 1),
-        t.lineNotified ? 'TRUE' : 'FALSE',
+        (t.lineNotified || String(t.status || '').trim().toLowerCase() === 'completed') ? 'TRUE' : 'FALSE',
         String(t.source || 'web'),
         String(t.updatedAt || new Date().toISOString()),
         String(t.assigneeId || ''),
@@ -4757,7 +4757,7 @@ function checkTelegramTaskReminders() {
 
   for (var i = 0; i < allTasks.length; i++) {
     var task = allTasks[i];
-    if (!task || task.status === 'completed') continue;
+    if (!task || String(task.status || '').trim().toLowerCase() === 'completed') continue;
     var taskDate = String(task.date || '').slice(0, 10);
     var rawTime = String(task.time || '09:00').trim();
     if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(taskDate) || !/^\\d{1,2}:\\d{2}$/.test(rawTime)) continue;

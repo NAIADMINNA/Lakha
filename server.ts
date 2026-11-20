@@ -2114,6 +2114,7 @@ async function startServer() {
 
   let gasSyncChain: Promise<{ ok: boolean; version?: unknown; json?: Record<string, unknown> }> =
     Promise.resolve({ ok: true });
+  let gasPushInFlightCount = 0;
 
   function syncWorkspaceToGasSafely(
     targetGasUrl: string,
@@ -2124,6 +2125,7 @@ async function startServer() {
       return Promise.resolve({ ok: false });
     }
 
+    gasPushInFlightCount += 1;
     const nextOp = gasSyncChain.then(async () => {
       try {
         // 1. Pull latest tasks from GAS first so a web save NEVER wipes out a task just added in LINE Group
@@ -2248,6 +2250,8 @@ async function startServer() {
         };
       } catch {
         return { ok: false };
+      } finally {
+        gasPushInFlightCount = Math.max(0, gasPushInFlightCount - 1);
       }
     });
 
@@ -2313,8 +2317,9 @@ async function startServer() {
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
       cleanGas.startsWith('https://script.google.com/macros/s/') &&
+      gasPushInFlightCount === 0 &&
       nowMs - lastGasPullMs > 2000 &&
-      nowMs - lastWorkspacePostMs > 1800
+      nowMs - lastWorkspacePostMs > 4500
     ) {
       lastGasPullMs = nowMs;
       try {
@@ -2571,13 +2576,17 @@ async function startServer() {
         String(it.categoryId || '') !== String(prevTask.categoryId || '') ||
         String(it.priority || '') !== String(prevTask.priority || '') ||
         String(it.assigneeId || '') !== String(prevTask.assigneeId || '');
-      if (!contentChanged) return it;
+      const isCompletedIncoming = String(it.status || '').trim().toLowerCase() === 'completed';
+      if (!contentChanged) {
+        return isCompletedIncoming && !it.lineNotified ? { ...it, lineNotified: true } : it;
+      }
       const prevMs = prevTask.updatedAt ? new Date(String(prevTask.updatedAt)).getTime() : 0;
       const incMs = it.updatedAt ? new Date(String(it.updatedAt)).getTime() : 0;
       const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
       const safeIncMs = Number.isFinite(incMs) ? incMs : 0;
       return {
         ...it,
+        lineNotified: isCompletedIncoming ? true : it.lineNotified,
         updatedAt: new Date(Math.max(Date.now(), safeIncMs, safePrevMs + 1000)).toISOString(),
       };
     });
@@ -5217,7 +5226,8 @@ async function startServer() {
 
       // 2. Check Per-Task Scheduled Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนดให้ครบทุกงานในวันนั้น ๆ)
       const decodedTasks = extractGasMetadataFromTasks(ws.tasks).tasks;
-      let taskUpdated = false;
+      const notifiedTaskIds = new Set<string>();
+      const resetNotifiedTaskIds = new Set<string>();
       const sameDayTasksList = decodedTasks.filter((item) => {
         const sD = String(item.date || '').trim();
         const eD = String(item.endDate || sD).trim();
@@ -5226,13 +5236,15 @@ async function startServer() {
       const statsPool = sameDayTasksList.length > 0 ? sameDayTasksList : decodedTasks;
       const totalCount = statsPool.length;
       const completedCount = statsPool.filter(
-        (t) => String(t.status || '') === 'completed'
+        (t) => String(t.status || '').trim().toLowerCase() === 'completed'
       ).length;
       const pendingCount = totalCount - completedCount;
 
       for (const t of decodedTasks) {
         if (!t || typeof t !== 'object') continue;
-        if (String(t.status || '') === 'completed') continue;
+        const taskId = String(t.id || '').trim();
+        if (!taskId) continue;
+        if (String(t.status || '').trim().toLowerCase() === 'completed') continue;
 
         const remindMins =
           typeof t.remindMinutesBefore === 'number'
@@ -5270,9 +5282,7 @@ async function startServer() {
           const isNewDayOfMultiDay =
             tEndDate > tDate && Boolean(updatedYMD && updatedYMD < todayYMD);
           if (diffMinutes > remindMins + 1 || isNewDayOfMultiDay) {
-            t.lineNotified = false;
-            t.updatedAt = new Date().toISOString();
-            taskUpdated = true;
+            resetNotifiedTaskIds.add(taskId);
           }
           continue;
         }
@@ -5280,9 +5290,24 @@ async function startServer() {
         // Notify strictly within the task's configured reminder window [0..remindMins] before start
         // (with at most 1 minute grace [-1..0] — never fire late after the task time has already passed!)
         if (diffMinutes <= remindMins && diffMinutes >= -1) {
-          t.lineNotified = true;
-          t.updatedAt = new Date().toISOString();
-          taskUpdated = true;
+          // Re-check live workspace state right before sending so a freshly completed task NEVER fires!
+          const liveWsNow =
+            sharedWorkspaces.get('sheetcal-team-clean') ||
+            sharedWorkspaces.get('team-default');
+          const liveTaskNow = Array.isArray(liveWsNow?.tasks)
+            ? (liveWsNow.tasks as Record<string, unknown>[]).find(
+                (lt) => String(lt?.id || '').trim() === taskId
+              )
+            : undefined;
+          if (
+            liveTaskNow &&
+            (String(liveTaskNow.status || '').trim().toLowerCase() === 'completed' ||
+              Boolean(liveTaskNow.lineNotified))
+          ) {
+            continue;
+          }
+
+          notifiedTaskIds.add(taskId);
 
           const cid = String(t.categoryId || '');
           const catInfo = catById.get(cid);
@@ -5357,11 +5382,34 @@ async function startServer() {
         }
       }
 
-      if (taskUpdated) {
+      if (notifiedTaskIds.size > 0 || resetNotifiedTaskIds.size > 0) {
+        // Re-read the LATEST live workspace so we NEVER overwrite a user's concurrent "Completed" status!
+        const latestLiveWs =
+          sharedWorkspaces.get('sheetcal-team-clean') ||
+          sharedWorkspaces.get('team-default') ||
+          ws;
+        const liveTasks = extractGasMetadataFromTasks(latestLiveWs.tasks).tasks.map((lt) => {
+          const lid = String(lt.id || '').trim();
+          const isCompletedLive =
+            String(lt.status || '').trim().toLowerCase() === 'completed';
+          if (notifiedTaskIds.has(lid)) {
+            return {
+              ...lt,
+              lineNotified: true,
+            };
+          }
+          if (resetNotifiedTaskIds.has(lid) && !isCompletedLive) {
+            return {
+              ...lt,
+              lineNotified: false,
+            };
+          }
+          return lt;
+        });
         const updatedWs: CollaborativeWorkspaceState = {
-          ...ws,
+          ...latestLiveWs,
           updatedAt: new Date().toISOString(),
-          tasks: decodedTasks,
+          tasks: liveTasks,
         };
         sharedWorkspaces.set('sheetcal-team-clean', updatedWs);
         sharedWorkspaces.set('team-default', updatedWs);
@@ -5369,17 +5417,7 @@ async function startServer() {
 
         const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
         if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
-          const gasTasksWithMeta = attachGasMetadataToTasks(
-            decodedTasks,
-            ws.categories,
-            ws.teamMembers
-          );
-          postToGoogleAppsScript(cleanGas, {
-            action: 'sync_tasks',
-            tasks: gasTasksWithMeta,
-            categories: ws.categories,
-            teamMembers: ws.teamMembers,
-          }).catch(() => {});
+          syncWorkspaceToGasSafely(cleanGas, 'sheetcal-team-clean').catch(() => {});
         }
       }
     } catch {
@@ -5393,7 +5431,13 @@ async function startServer() {
     try {
       if (wsClients.size === 0) return;
       const nowMs = Date.now();
-      if (nowMs - lastWorkspacePostMs < 1800 || nowMs - lastGasPullMs < 1800) return;
+      if (
+        gasPushInFlightCount > 0 ||
+        nowMs - lastWorkspacePostMs < 4500 ||
+        nowMs - lastGasPullMs < 1800
+      ) {
+        return;
+      }
       const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
       if (!cleanGas.startsWith('https://script.google.com/macros/s/')) return;
       lastGasPullMs = nowMs;

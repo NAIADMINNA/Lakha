@@ -25,6 +25,7 @@ import {
   Plus,
   Radio,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   SlidersHorizontal,
@@ -1735,10 +1736,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
   const handleCycleTaskStatus = useCallback(
     (task: Task, isDone: boolean, isInProgress: boolean) => {
+      // Never silently revert an already-completed task back to pending/due on a casual click
+      if (isDone) return;
       if (onUpdateStatus) {
-        if (isDone) {
-          onUpdateStatus(task, TaskStatus.PENDING);
-        } else if (isInProgress) {
+        if (isInProgress) {
           onUpdateStatus(task, TaskStatus.COMPLETED);
         } else {
           onUpdateStatus(task, TaskStatus.IN_PROGRESS);
@@ -1751,6 +1752,30 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
     },
     [onUpdateStatus, onToggleStatus, directorPresence.mode, updateDirectorPresence]
+  );
+
+  const handleMarkTaskCompletedDirect = useCallback(
+    (task: Task) => {
+      if (task.status === TaskStatus.COMPLETED) return;
+      if (onUpdateStatus) {
+        onUpdateStatus(task, TaskStatus.COMPLETED);
+      } else {
+        onToggleStatus(task);
+      }
+    },
+    [onUpdateStatus, onToggleStatus]
+  );
+
+  const handleUndoTaskCompleted = useCallback(
+    (task: Task) => {
+      if (task.status !== TaskStatus.COMPLETED) return;
+      if (onUpdateStatus) {
+        onUpdateStatus(task, TaskStatus.PENDING);
+      } else {
+        onToggleStatus(task);
+      }
+    },
+    [onUpdateStatus, onToggleStatus]
   );
 
   const resolvedDirectorPresence = useMemo(() => {
@@ -2184,66 +2209,112 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
 
           {/* Right: Status & Quick Action */}
-          <div className="flex items-center justify-end gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
-                isLargeText ? 'text-base' : 'text-sm'
-              } font-bold transition-colors whitespace-nowrap shrink-0 ${
-                isDone
-                  ? isDarkDisplay
-                    ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
-                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : isInProgress
-                  ? isDarkDisplay
-                    ? 'bg-sky-950/65 border-sky-600 text-sky-300 hover:bg-sky-900/60'
-                    : isEmeraldExec
-                    ? 'bg-teal-50 border-teal-300 text-teal-900 hover:bg-teal-100/80'
-                    : 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100/80'
-                  : isCurrentDayPassed
-                  ? isDarkDisplay
-                    ? 'bg-amber-950/60 border-amber-700 text-amber-300'
-                    : 'bg-amber-50 border-amber-200 text-amber-900'
-                  : isDarkDisplay
-                  ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
-                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              {isDone ? (
-                <>
+          <div className="flex items-center justify-end gap-2 shrink-0">
+            {isDone ? (
+              <>
+                <span
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
+                    isLargeText ? 'text-base' : 'text-sm'
+                  } font-bold whitespace-nowrap shrink-0 ${
+                    isDarkDisplay
+                      ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  }`}
+                >
                   <CheckCircle2
                     className={`h-4 w-4 ${
                       isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
                     }`}
                   />
                   <span>เสร็จสิ้นแล้ว</span>
-                </>
-              ) : isInProgress ? (
-                <>
-                  <Clock
-                    className={`h-4 w-4 ${
+                </span>
+                {!isTvCleanSignage && (
+                  <button
+                    type="button"
+                    onClick={() => handleUndoTaskCompleted(task)}
+                    title="ยกเลิกสถานะเสร็จสิ้น (ย้อนกลับเป็นรอดำเนินการ)"
+                    className={`inline-flex items-center justify-center h-9 w-9 rounded-xl border transition-colors shrink-0 ${
                       isDarkDisplay
-                        ? 'text-sky-400'
-                        : isEmeraldExec
-                        ? 'text-teal-700'
-                        : 'text-indigo-600'
+                        ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
                     }`}
-                  />
-                  <span>กำลังดำเนินการ</span>
-                </>
-              ) : (
-                <>
-                  <Circle
-                    className="h-4 w-4"
-                    style={{ color: displayCatColor }}
-                  />
-                  <span>
-                    {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
-                  </span>
-                </>
-              )}
-            </button>
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
+                  title={
+                    isInProgress
+                      ? 'คลิกเพื่อทำเครื่องหมายว่าเสร็จสิ้นแล้ว'
+                      : 'คลิกเพื่อเปลี่ยนเป็นกำลังดำเนินการ'
+                  }
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl border ${
+                    isLargeText ? 'text-base' : 'text-sm'
+                  } font-bold transition-colors whitespace-nowrap shrink-0 ${
+                    isInProgress
+                      ? isDarkDisplay
+                        ? 'bg-sky-950/65 border-sky-600 text-sky-300 hover:bg-sky-900/60'
+                        : isEmeraldExec
+                        ? 'bg-teal-50 border-teal-300 text-teal-900 hover:bg-teal-100/80'
+                        : 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100/80'
+                      : isCurrentDayPassed
+                      ? isDarkDisplay
+                        ? 'bg-amber-950/60 border-amber-700 text-amber-300 hover:bg-amber-900/60'
+                        : 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                      : isDarkDisplay
+                      ? 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {isInProgress ? (
+                    <>
+                      <Clock
+                        className={`h-4 w-4 ${
+                          isDarkDisplay
+                            ? 'text-sky-400'
+                            : isEmeraldExec
+                            ? 'text-teal-700'
+                            : 'text-indigo-600'
+                        }`}
+                      />
+                      <span>กำลังดำเนินการ</span>
+                    </>
+                  ) : (
+                    <>
+                      <Circle
+                        className="h-4 w-4"
+                        style={{ color: displayCatColor }}
+                      />
+                      <span>
+                        {isCurrentDayPassed ? 'ถึงกำหนดเวลา' : 'รอดำเนินการ'}
+                      </span>
+                    </>
+                  )}
+                </button>
+                {!isTvCleanSignage && (
+                  <button
+                    type="button"
+                    onClick={() => handleMarkTaskCompletedDirect(task)}
+                    title="ทำเครื่องหมายว่าเสร็จสิ้นแล้วทันที"
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border ${
+                      isLargeText ? 'text-sm' : 'text-xs'
+                    } font-bold transition-colors whitespace-nowrap shrink-0 ${
+                      isDarkDisplay
+                        ? 'bg-emerald-950/50 border-emerald-700/80 text-emerald-300 hover:bg-emerald-900/70'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    <span>เสร็จสิ้น</span>
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       );
@@ -4152,50 +4223,87 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                         </td>
 
                         <td className="py-3.5 px-4 align-top whitespace-nowrap text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
-                            className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
-                              isDone
-                                ? isDarkDisplay
-                                  ? 'text-emerald-400'
-                                  : 'text-emerald-600'
-                                : isInProgress
-                                ? isDarkDisplay
-                                  ? 'text-sky-300'
-                                  : isEmeraldExec
-                                  ? 'text-teal-700'
-                                  : 'text-indigo-600'
-                                : displayDate === todayStr && task.time <= nowHM
-                                ? isDarkDisplay
-                                  ? 'text-amber-300'
-                                  : 'text-amber-700'
-                                : isDarkDisplay
-                                ? 'text-amber-300'
-                                : 'text-amber-600'
-                            }`}
-                          >
+                          <div className="inline-flex items-center justify-end gap-2">
                             {isDone ? (
                               <>
-                                <CheckCircle2 className="h-4 w-4" />
-                                <span>เสร็จสิ้นแล้ว</span>
-                              </>
-                            ) : isInProgress ? (
-                              <>
-                                <Clock className="h-4 w-4" />
-                                <span>กำลังดำเนินการ</span>
+                                <span
+                                  className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
+                                    isDarkDisplay ? 'text-emerald-400' : 'text-emerald-600'
+                                  }`}
+                                >
+                                  <CheckCircle2 className="h-4 w-4" />
+                                  <span>เสร็จสิ้นแล้ว</span>
+                                </span>
+                                {!isTvCleanSignage && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUndoTaskCompleted(task)}
+                                    title="ยกเลิกสถานะเสร็จสิ้น (ย้อนกลับเป็นรอดำเนินการ)"
+                                    className={`inline-flex items-center justify-center h-6 w-6 rounded-md border transition-colors shrink-0 ${
+                                      isDarkDisplay
+                                        ? 'border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800'
+                                        : 'border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                               </>
                             ) : (
                               <>
-                                <Circle className="h-4 w-4" />
-                                <span>
-                                  {displayDate === todayStr && task.time <= nowHM
-                                    ? 'ถึงกำหนดเวลา'
-                                    : 'รอดำเนินการ'}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCycleTaskStatus(task, isDone, isInProgress)}
+                                  className={`inline-flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
+                                    isInProgress
+                                      ? isDarkDisplay
+                                        ? 'text-sky-300'
+                                        : isEmeraldExec
+                                        ? 'text-teal-700'
+                                        : 'text-indigo-600'
+                                      : displayDate === todayStr && task.time <= nowHM
+                                      ? isDarkDisplay
+                                        ? 'text-amber-300'
+                                        : 'text-amber-700'
+                                      : isDarkDisplay
+                                      ? 'text-amber-300'
+                                      : 'text-amber-600'
+                                  }`}
+                                >
+                                  {isInProgress ? (
+                                    <>
+                                      <Clock className="h-4 w-4" />
+                                      <span>กำลังดำเนินการ</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Circle className="h-4 w-4" />
+                                      <span>
+                                        {displayDate === todayStr && task.time <= nowHM
+                                          ? 'ถึงกำหนดเวลา'
+                                          : 'รอดำเนินการ'}
+                                      </span>
+                                    </>
+                                  )}
+                                </button>
+                                {!isTvCleanSignage && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMarkTaskCompletedDirect(task)}
+                                    title="ทำเครื่องหมายว่าเสร็จสิ้นแล้วทันที"
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                                      isDarkDisplay
+                                        ? 'bg-emerald-950/50 border-emerald-700 text-emerald-300 hover:bg-emerald-900/70'
+                                        : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+                                    }`}
+                                  >
+                                    <Check className="h-3 w-3" />
+                                    <span>เสร็จสิ้น</span>
+                                  </button>
+                                )}
                               </>
                             )}
-                          </button>
+                          </div>
                         </td>
                       </tr>
                     );

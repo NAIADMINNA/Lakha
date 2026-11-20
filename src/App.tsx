@@ -1810,7 +1810,12 @@ export default function App() {
     async (task: Task, isManualTrigger = false) => {
       if (!isManualTrigger) {
         if (inFlightReminderIdsRef.current.has(task.id)) return;
-        const triggerCheck = doesTaskTriggerNotification(task, lineSettings);
+        const latestBeforeSend = tasksRef.current.find((t) => t.id === task.id);
+        if (latestBeforeSend?.status === TaskStatus.COMPLETED) return;
+        const triggerCheck = doesTaskTriggerNotification(
+          latestBeforeSend || task,
+          lineSettings
+        );
         if (!triggerCheck.allowed) return;
         inFlightReminderIdsRef.current.add(task.id);
       }
@@ -2134,21 +2139,19 @@ export default function App() {
         // Only mark lineNotified = true when triggered by the automatic scheduled reminder
         // (so a manual test click earlier in the day never prevents the scheduled time reminder from firing)
         if (!isManualTrigger) {
-          const nowIso = new Date().toISOString();
-          let updatedTasksList: Task[] = [];
-          setTasks((prev) => {
-            updatedTasksList = prev.map((t) =>
-              t.id === task.id ? { ...t, lineNotified: true, updatedAt: nowIso } : t
-            );
-            return updatedTasksList;
+          const updatedList = tasksRef.current.map((t) => {
+            if (t.id !== task.id) return t;
+            const prevMs = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+            const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
+            return {
+              ...t,
+              lineNotified: true,
+              updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1)).toISOString(),
+            };
           });
-          const toPush =
-            updatedTasksList.length > 0
-              ? updatedTasksList
-              : tasksRef.current.map((t) =>
-                  t.id === task.id ? { ...t, lineNotified: true, updatedAt: nowIso } : t
-                );
-          pushCollaborativeWorkspace(toPush, categoriesRef.current, teamMembersRef.current);
+          tasksRef.current = updatedList;
+          setTasks(updatedList);
+          pushCollaborativeWorkspace(updatedList, categoriesRef.current, teamMembersRef.current);
         }
 
         if (deliveryChannel === 'line_and_telegram') {
@@ -2406,7 +2409,7 @@ export default function App() {
 
       // 2. Check Per-Task Reminders (แจ้งเตือนทีละงานตามเวลาที่กำหนดให้ครบทุกงานในวันนั้น ๆ)
       const resetNotifiedTaskIds: string[] = [];
-      const sortedTasksForCheck = [...tasks].sort((a, b) =>
+      const sortedTasksForCheck = [...tasksRef.current].sort((a, b) =>
         `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
       );
 
@@ -3970,6 +3973,8 @@ export default function App() {
       const nextObj: Task = {
         ...t,
         status: nextStatus,
+        lineNotified:
+          nextStatus === TaskStatus.COMPLETED ? true : t.lineNotified,
         updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString(),
       };
       mutatedTask = nextObj;
