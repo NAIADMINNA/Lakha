@@ -4726,6 +4726,22 @@ export default function App() {
     setActiveSection('calendar');
   };
 
+  const openSchedulePresentationTab = useCallback(() => {
+    setActiveSection('schedule');
+    try {
+      const autoFs = window.localStorage.getItem('sheetcal_tv_auto_fullscreen_v1');
+      if (
+        (autoFs === '1' || autoFs === 'true') &&
+        !document.fullscreenElement &&
+        document.documentElement.requestFullscreen
+      ) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } catch {
+      // Ignore fullscreen API restrictions
+    }
+  }, []);
+
   return (
     <div
       className={`min-h-screen flex flex-col text-slate-900 ${
@@ -4794,7 +4810,7 @@ export default function App() {
             href="#schedule"
             onClick={(e) => {
               e.preventDefault();
-              setActiveSection('schedule');
+              openSchedulePresentationTab();
             }}
             className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               activeSection === 'schedule'
@@ -4915,7 +4931,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('schedule')}
+          onClick={openSchedulePresentationTab}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'schedule'
               ? 'bg-indigo-600 text-white shadow-2xs'
@@ -5344,7 +5360,7 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveSection('schedule')}
+                    onClick={openSchedulePresentationTab}
                     className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-indigo-600 text-white text-xs sm:text-sm font-bold hover:bg-indigo-700 shadow-xs transition-colors whitespace-nowrap"
                   >
                     <Tv className="h-4 w-4 shrink-0" />
@@ -6381,7 +6397,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('schedule')}
+          onClick={openSchedulePresentationTab}
           className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
             activeSection === 'schedule'
               ? 'text-indigo-700 bg-indigo-50/90'

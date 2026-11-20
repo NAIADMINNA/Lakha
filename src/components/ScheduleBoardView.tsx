@@ -512,6 +512,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     Boolean(initialBoardSettings?.expandMultiDay)
   );
   const isTvLaunchEnv = useMemo(() => detectAutoTvEnvironment(), []);
+  const [isAutoFullscreenDefault, setIsAutoFullscreenDefault] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const saved = window.localStorage.getItem('sheetcal_tv_auto_fullscreen_v1');
+      if (saved === '1' || saved === 'true') return true;
+      if (saved === '0' || saved === 'false') return false;
+    } catch {
+      // Ignore storage restrictions
+    }
+    return false;
+  });
+  const shouldStartFullscreen = isTvLaunchEnv || isAutoFullscreenDefault;
   const [boardTheme, setBoardTheme] = useState<BoardThemeMode>(
     () => initialBoardSettings?.boardTheme || 'light'
   );
@@ -519,11 +531,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     initialBoardSettings?.tvAutoFit !== undefined ? initialBoardSettings.tvAutoFit : true
   );
   const [isLargeText, setIsLargeText] = useState<boolean>(() =>
-    isTvLaunchEnv ? true : Boolean(initialBoardSettings?.isLargeText)
+    shouldStartFullscreen ? true : Boolean(initialBoardSettings?.isLargeText)
   );
-  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(() => isTvLaunchEnv);
+  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(
+    () => shouldStartFullscreen
+  );
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState<boolean>(() =>
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
+  const [dismissedTvFullscreenPrompt, setDismissedTvFullscreenPrompt] = useState<boolean>(false);
   const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
-    useState<boolean>(() => isTvLaunchEnv);
+    useState<boolean>(() => shouldStartFullscreen);
   const [isAutoHideToolbar, setIsAutoHideToolbar] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
     try {
@@ -535,7 +553,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     }
   });
   const [isAutoScroll, setIsAutoScroll] = useState<boolean>(() =>
-    isTvLaunchEnv ? true : Boolean(initialBoardSettings?.isAutoScroll)
+    shouldStartFullscreen ? true : Boolean(initialBoardSettings?.isAutoScroll)
   );
   const [tvStageMetrics, setTvStageMetrics] = useState<TvStageMetrics>(() =>
     computeTvStageMetrics()
@@ -630,7 +648,62 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     };
   }, [isAutoHideToolbar, isPresentationMode, isTvRemoteModalOpen, scheduleAutoHideCheck]);
 
+  const requestNativeFullscreen = useCallback(async () => {
+    if (typeof document === 'undefined') return false;
+    try {
+      if (document.fullscreenElement) {
+        setIsNativeFullscreen(true);
+        return true;
+      }
+      const rootEl = document.documentElement as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      };
+      if (typeof rootEl.requestFullscreen === 'function') {
+        await rootEl.requestFullscreen();
+        setIsNativeFullscreen(true);
+        return true;
+      }
+      if (typeof rootEl.webkitRequestFullscreen === 'function') {
+        await rootEl.webkitRequestFullscreen();
+        setIsNativeFullscreen(true);
+        return true;
+      }
+    } catch {
+      // Browser requires a user gesture (tap / click / remote OK press)
+    }
+    return false;
+  }, []);
+
+  const handleToggleAutoFullscreenDefault = useCallback(() => {
+    setIsAutoFullscreenDefault((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('sheetcal_tv_auto_fullscreen_v1', next ? '1' : '0');
+      } catch {
+        // Ignore storage restrictions
+      }
+      if (next) {
+        setIsPresentationMode(true);
+        setIsLargeText(true);
+        setIsToolbarCollapsedInFullscreen(true);
+        if (isTvAutoFit) {
+          setIsAutoScroll(true);
+        }
+        setDismissedTvFullscreenPrompt(false);
+        requestNativeFullscreen();
+      }
+      return next;
+    });
+  }, [isTvAutoFit, requestNativeFullscreen]);
+
+  // Attempt native browser Fullscreen immediately when launched in TV/Auto-Fullscreen mode
+  useEffect(() => {
+    if (!shouldStartFullscreen) return;
+    requestNativeFullscreen();
+  }, [shouldStartFullscreen, requestNativeFullscreen]);
+
   // Real-time TV resolution, DPI scale, orientation, Esc, and browser Fullscreen synchronization
+  const wasNativeFullscreenRef = useRef<boolean>(false);
   useEffect(() => {
     const syncViewportMetrics = () => {
       setTvStageMetrics((prev) => {
@@ -649,7 +722,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
     const handleFullscreenChange = () => {
       syncViewportMetrics();
-      if (document.fullscreenElement) {
+      const nowFull = Boolean(document.fullscreenElement);
+      setIsNativeFullscreen(nowFull);
+      if (nowFull) {
+        wasNativeFullscreenRef.current = true;
+        setDismissedTvFullscreenPrompt(true);
         setIsPresentationMode(true);
         if (isTvAutoFit) {
           isRemoteBoardApplyRef.current = true;
@@ -657,7 +734,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           setIsAutoScroll(true);
           setIsToolbarCollapsedInFullscreen(true);
         }
-      } else if (!isTvLaunchEnv) {
+      } else if (wasNativeFullscreenRef.current && !isTvLaunchEnv) {
+        wasNativeFullscreenRef.current = false;
         setIsPresentationMode(false);
         setIsToolbarCollapsedInFullscreen(false);
       }
@@ -672,7 +750,18 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         setIsPresentationMode(false);
         setIsToolbarCollapsedInFullscreen(false);
         setIsTvControlsIdle(false);
-      } else if (isAutoHideToolbar || isPresentationMode) {
+        return;
+      }
+      if (
+        isPresentationMode &&
+        !document.fullscreenElement &&
+        !isToolbarInteractionLocked() &&
+        (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'f' || ev.key === 'F')
+      ) {
+        requestNativeFullscreen();
+        return;
+      }
+      if (isAutoHideToolbar || isPresentationMode) {
         wakeTvControls();
       }
     };
@@ -699,9 +788,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   }, [
     isAutoHideToolbar,
     isPresentationMode,
+    isToolbarInteractionLocked,
     isTvAutoFit,
     isTvLaunchEnv,
     isTvRemoteModalOpen,
+    requestNativeFullscreen,
     wakeTvControls,
   ]);
 
@@ -3433,8 +3524,54 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
                 <button
                   type="button"
+                  onClick={handleToggleAutoFullscreenDefault}
+                  title="ตั้งค่าให้เปิดหน้าตารางนำเสนอเป็นโหมดเต็มจอ TV อัตโนมัติทันทีทุกครั้งที่เปิดใช้งาน"
+                  className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                    isAutoFullscreenDefault
+                      ? isNavyGold
+                        ? 'bg-amber-400/20 text-amber-200 border-amber-400/70 shadow-xs'
+                        : isDarkDisplay
+                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/70 shadow-xs'
+                        : isEmeraldExec
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                        : 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                      : isNavyGold
+                      ? 'bg-[#091526]/80 text-slate-200 border-amber-400/30 hover:border-amber-400/60'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 text-slate-200 border-slate-700 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-200/90 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <MonitorPlay className="h-3.5 w-3.5" />
+                  <span>
+                    {isAutoFullscreenDefault
+                      ? 'เปิดเต็มจออัตโนมัติ: เปิด'
+                      : 'เปิดเต็มจออัตโนมัติ'}
+                  </span>
+                </button>
+
+                {isPresentationMode && !isNativeFullscreen && (
+                  <button
+                    type="button"
+                    onClick={() => requestNativeFullscreen()}
+                    title="ซ่อนแถบ URL และแท็บของเบราว์เซอร์เพื่อแสดงผลเต็มหน้าจอทีวี 100%"
+                    className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    <span>ขยายเต็มจอทีวี (ซ่อนแถบเว็บ)</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
                   onClick={handleTogglePresentationFullscreen}
-                  className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-[#06C755] hover:bg-[#05b04b] text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0"
+                  className={`inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-bold shadow-xs transition-colors whitespace-nowrap shrink-0 ${
+                    isPresentationMode && !isNativeFullscreen
+                      ? isDarkDisplay
+                        ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                        : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                      : 'bg-[#06C755] hover:bg-[#05b04b] text-white'
+                  }`}
                 >
                   {isPresentationMode ? (
                     <>
@@ -4793,6 +4930,30 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           </div>
         </div>
       )}
+      {/* 1-Tap / Remote OK Native Fullscreen Prompt when TV browser blocks auto-fullscreen on load */}
+      {isPresentationMode &&
+        !isNativeFullscreen &&
+        !dismissedTvFullscreenPrompt &&
+        !isTvRemoteModalOpen && (
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 rounded-2xl border border-emerald-400/50 bg-slate-950/92 px-3.5 py-2 text-white shadow-2xl backdrop-blur-md">
+            <button
+              type="button"
+              onClick={() => requestNativeFullscreen()}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#06C755] hover:bg-[#05b04b] px-4 py-2 text-xs sm:text-sm font-bold text-white transition-colors whitespace-nowrap"
+            >
+              <Maximize2 className="h-4 w-4 shrink-0" />
+              <span>แตะเพื่อขยายเต็มจอทีวี (หรือกด OK / Enter บนรีโมท)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDismissedTvFullscreenPrompt(true)}
+              title="ปิดแถบแจ้งเตือนนี้"
+              className="inline-flex items-center justify-center h-8 w-8 rounded-xl text-slate-300 hover:bg-white/10 hover:text-white transition-colors shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
     </div>
   );
 };
