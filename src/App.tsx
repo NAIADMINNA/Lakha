@@ -99,6 +99,7 @@ import {
   readLocalDirectorPresence,
   subscribeRealtimeEvents,
 } from './services/realtimeSync';
+import { getInternetNowMs } from './services/internetTimeService';
 import {
   buildShortDigestPhotoCaption,
   buildShortTaskPhotoCaption,
@@ -1293,6 +1294,34 @@ export default function App() {
   // Remember when running on static hosting (e.g. GitHub Pages) so sync calls go straight to GAS without 404/405 round-trips
   const isStaticHostRef = useRef<boolean>(false);
   const sheetWriteTimerRef = useRef<number | null>(null);
+  // Local monotonic receipt timestamp (immune to Admin PC vs Smart TV clock skew!)
+  // Protects freshly created/edited or live-received tasks from being wiped by a lagging GAS poll
+  const recentLiveTaskReceiptMsRef = useRef<Map<string, number>>(new Map());
+
+  const markLiveTasksProtected = useCallback((list: Array<{ id?: string }>) => {
+    const nowLocal = Date.now();
+    for (const item of list) {
+      const tid = String(item?.id || '').trim();
+      if (tid) {
+        recentLiveTaskReceiptMsRef.current.set(tid, nowLocal);
+      }
+    }
+    // Prune entries older than 5 minutes to keep map tiny
+    if (recentLiveTaskReceiptMsRef.current.size > 200) {
+      for (const [k, ts] of recentLiveTaskReceiptMsRef.current.entries()) {
+        if (nowLocal - ts > 300000) {
+          recentLiveTaskReceiptMsRef.current.delete(k);
+        }
+      }
+    }
+  }, []);
+
+  const clearLiveTasksProtected = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      const tid = String(id || '').trim();
+      if (tid) recentLiveTaskReceiptMsRef.current.delete(tid);
+    }
+  }, []);
 
   // Push collaborative workspace state to server so shared calendar collaborators stay in sync
   const pushCollaborativeWorkspace = useCallback(
@@ -1465,22 +1494,36 @@ export default function App() {
         }
 
         if (!proxySynced && activeGasUrl.startsWith('https://script.google.com/macros/s/')) {
+          const gasBodyStr = JSON.stringify({
+            action: 'sync_tasks',
+            tasks: gasTasksWithMeta,
+            categories: nextCategories,
+            teamMembers: nextMembers,
+            deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
+            deletedCategoryIds:
+              allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
+          });
           try {
-            await fetch(activeGasUrl, {
+            const directGasRes = await fetch(activeGasUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({
-                action: 'sync_tasks',
-                tasks: gasTasksWithMeta,
-                categories: nextCategories,
-                teamMembers: nextMembers,
-                deletedTaskIds: allDeletedIds.length > 0 ? allDeletedIds : undefined,
-                deletedCategoryIds:
-                  allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
-              }),
+              body: gasBodyStr,
             });
+            if (!directGasRes.ok) {
+              throw new Error(`GAS HTTP ${directGasRes.status}`);
+            }
           } catch {
-            // Silent fallback
+            // Fallback to no-cors so Google Apps Script 302 redirect still persists tasks reliably from GitHub Pages
+            try {
+              await fetch(activeGasUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: gasBodyStr,
+              });
+            } catch {
+              // Silent fallback
+            }
           }
         }
       }
@@ -3132,18 +3175,35 @@ export default function App() {
                   workspaceHandled = true;
                   if (
                     showFeedback ||
-                    Date.now() - lastLocalMutationMsRef.current > 1500
+                    Date.now() - lastLocalMutationMsRef.current > 2000
                   ) {
                     let newlyDiscarded: string[] = [];
                     const nowCheckMs = Date.now();
+                    const internetNowCheckMs = Math.max(nowCheckMs, getInternetNowMs());
                     setTasks((prev) => {
+                      const recentlyEditedLive = prev.filter((p) => {
+                        if (delSet.has(p.id)) return false;
+                        const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                        return recMs > 0 && nowCheckMs - recMs < 30000;
+                      });
+                      const recentEditIds = new Set(recentlyEditedLive.map((t) => t.id));
+                      const filteredRemote = cleanWsTasks.filter((r) => {
+                        if (!recentEditIds.has(r.id)) return true;
+                        const localVer = recentlyEditedLive.find((l) => l.id === r.id);
+                        if (!localVer) return true;
+                        const rMs = r.updatedAt ? new Date(r.updatedAt).getTime() : 0;
+                        const lMs = localVer.updatedAt ? new Date(localVer.updatedAt).getTime() : 0;
+                        return rMs > lMs;
+                      });
                       const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
-                        cleanWsTasks,
+                        [...filteredRemote, ...recentlyEditedLive],
                         prev.filter((p) => {
                           if (delSet.has(p.id)) return false;
                           if (cleanWsTasks.some((r) => r.id === p.id)) return true;
+                          const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                          if (recMs > 0 && nowCheckMs - recMs < 180000) return true;
                           const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                          return Number.isFinite(pMs) && nowCheckMs - pMs < 25000;
+                          return Number.isFinite(pMs) && internetNowCheckMs - pMs < 60000;
                         }),
                         delSet
                       );
@@ -3461,13 +3521,30 @@ export default function App() {
                 }
 
                 const nowGasCheckMs = Date.now();
+                const internetNowGasMs = Math.max(nowGasCheckMs, getInternetNowMs());
+                const recentlyEditedLive = prev.filter((p) => {
+                  if (gasDelSet.has(p.id)) return false;
+                  const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                  return recMs > 0 && nowGasCheckMs - recMs < 30000;
+                });
+                const recentEditIds = new Set(recentlyEditedLive.map((t) => t.id));
+                const filteredGasRemote = nextRemoteTasks.filter((r) => {
+                  if (!recentEditIds.has(r.id)) return true;
+                  const localVer = recentlyEditedLive.find((l) => l.id === r.id);
+                  if (!localVer) return true;
+                  const rMs = r.updatedAt ? new Date(r.updatedAt).getTime() : 0;
+                  const lMs = localVer.updatedAt ? new Date(localVer.updatedAt).getTime() : 0;
+                  return rMs > lMs;
+                });
                 const { tasks: mergedGasTasks, discardedIds } = deduplicateAndMergeTasks(
-                  nextRemoteTasks,
+                  [...filteredGasRemote, ...recentlyEditedLive],
                   prev.filter((p) => {
                     if (gasDelSet.has(p.id)) return false;
                     if (nextRemoteTasks.some((r) => r.id === p.id)) return true;
+                    const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                    if (recMs > 0 && nowGasCheckMs - recMs < 180000) return true;
                     const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                    return Number.isFinite(pMs) && nowGasCheckMs - pMs < 25000;
+                    return Number.isFinite(pMs) && internetNowGasMs - pMs < 60000;
                   }),
                   gasDelSet
                 );
@@ -3574,6 +3651,7 @@ export default function App() {
         const delIds = Array.isArray(ev.deletedTaskIds) ? ev.deletedTaskIds : [];
         if (delIds.length > 0) {
           recordDeletedTaskIds(delIds);
+          clearLiveTasksProtected(delIds);
         }
         const delSet = new Set<string>([...delIds, ...Array.from(deletedTaskIdsRef.current)]);
         const upserts = Array.isArray(ev.upsertedTasks)
@@ -3581,6 +3659,9 @@ export default function App() {
               (t) => !isTaskPurgedOrDeleted(t, delSet)
             )
           : [];
+        if (upserts.length > 0) {
+          markLiveTasksProtected(upserts);
+        }
         if (ev.updatedAt) {
           lastSyncedTimestampRef.current = ev.updatedAt;
           setLastCollabSyncAt(ev.updatedAt);
@@ -3667,20 +3748,37 @@ export default function App() {
           emitRemoteBoardSettingsFromGas(decoded.boardSettings);
         }
         const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
+        if (delSet.size > 0) {
+          clearLiveTasksProtected(Array.from(delSet));
+        }
         let newlyDiscarded: string[] = [];
         setTasks((prev) => {
           if (ev.type === 'sync:init' && cleanRemoteTasks.length === 0 && prev.length > 0) {
             return prev;
           }
           const nowWsMs = Date.now();
+          const internetNowWsMs = Math.max(nowWsMs, getInternetNowMs());
+          const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
+          const changedIncoming = cleanRemoteTasks.filter((rt) => {
+            const old = prevById.get(rt.id);
+            if (!old) return true;
+            const rtMs = rt.updatedAt ? new Date(rt.updatedAt).getTime() : 0;
+            const oldMs = old.updatedAt ? new Date(old.updatedAt).getTime() : 0;
+            return rtMs > oldMs;
+          });
+          if (changedIncoming.length > 0) {
+            markLiveTasksProtected(changedIncoming);
+          }
           const secondaryList =
             ev.type === 'sync:init'
               ? prev.filter((p) => !delSet.has(p.id))
               : prev.filter((p) => {
                   if (delSet.has(p.id)) return false;
                   if (cleanRemoteTasks.some((r) => r.id === p.id)) return true;
+                  const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                  if (recMs > 0 && nowWsMs - recMs < 180000) return true;
                   const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                  return Number.isFinite(pMs) && nowWsMs - pMs < 25000;
+                  return Number.isFinite(pMs) && internetNowWsMs - pMs < 60000;
                 });
           const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
             cleanRemoteTasks,
@@ -3727,9 +3825,11 @@ export default function App() {
   }, [
     areTaskListsEqual,
     bumpCategoriesUpdatedAt,
+    clearLiveTasksProtected,
     deduplicateAndMergeTasks,
     extractGasMetadataFromTasks,
     isTaskPurgedOrDeleted,
+    markLiveTasksProtected,
     mergeCategoriesLists,
     recordDeletedCategoryIds,
     recordDeletedTaskIds,
@@ -3758,10 +3858,10 @@ export default function App() {
     const intervalMs = isTvScheduleBoard ? 4000 : Math.max(4000, baseSec * 1000);
     const gasTimer = setInterval(() => {
       const nowMs = Date.now();
-      // Give GAS 6s to finish writing after any local mutation or incoming live WebSocket delta so slow sheet reads never revert fresh updates
+      // Give GAS 12s to finish writing after any local mutation or incoming live WebSocket delta so slow sheet reads never revert fresh updates
       if (
-        nowMs - lastLocalMutationMsRef.current > 6000 &&
-        nowMs - lastRemoteRealtimeMsRef.current > 6000
+        nowMs - lastLocalMutationMsRef.current > 12000 &&
+        nowMs - lastRemoteRealtimeMsRef.current > 12000
       ) {
         pullLatestTeamCalendar(false);
       }
@@ -3860,13 +3960,21 @@ export default function App() {
         target.status !== taskData.status;
       const prevMs = target?.updatedAt ? new Date(target.updatedAt).getTime() : 0;
       const safePrevMs = Number.isFinite(prevMs) ? prevMs : 0;
-      const monotonicIso = new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString();
+      const monotonicIso = new Date(
+        Math.max(Date.now(), getInternetNowMs(), safePrevMs + 1000)
+      ).toISOString();
       const updatedTask: Task = {
         ...taskData,
         id: existingId,
-        lineNotified: scheduleChanged ? false : target?.lineNotified || false,
+        lineNotified:
+          taskData.status === TaskStatus.COMPLETED
+            ? true
+            : scheduleChanged
+            ? false
+            : target?.lineNotified || false,
         updatedAt: monotonicIso,
       };
+      markLiveTasksProtected([updatedTask]);
       const nextTasks = currentList.map((t) => (t.id === existingId ? updatedTask : t));
       tasksRef.current = nextTasks;
       setTasks(nextTasks);
@@ -3903,7 +4011,10 @@ export default function App() {
         ? new Date(existingSameTask.updatedAt).getTime()
         : 0;
       const safePrevSameMs = Number.isFinite(prevSameMs) ? prevSameMs : 0;
-      const newMonotonicIso = new Date(Math.max(Date.now(), safePrevSameMs + 1000)).toISOString();
+      const internetNowEpoch = Math.max(Date.now(), getInternetNowMs());
+      const newMonotonicIso = new Date(
+        Math.max(internetNowEpoch, safePrevSameMs + 1000)
+      ).toISOString();
 
       const newTask: Task = existingSameTask
         ? {
@@ -3911,17 +4022,18 @@ export default function App() {
             ...taskData,
             id: existingSameTask.id,
             endDate: taskData.endDate ?? existingSameTask.endDate,
-            lineNotified: false,
+            lineNotified: taskData.status === TaskStatus.COMPLETED ? true : false,
             updatedAt: newMonotonicIso,
           }
         : {
             ...taskData,
-            id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            lineNotified: false,
-            updatedAt: new Date().toISOString(),
+            id: `task-${internetNowEpoch}-${Math.random().toString(36).slice(2, 6)}`,
+            lineNotified: taskData.status === TaskStatus.COMPLETED ? true : false,
+            updatedAt: newMonotonicIso,
           };
 
       deletedTaskIdsRef.current.delete(newTask.id);
+      markLiveTasksProtected([newTask]);
       const nextTasks = existingSameTask
         ? currentList.map((t) => (t.id === existingSameTask.id ? newTask : t))
         : [newTask, ...currentList];
@@ -3975,12 +4087,17 @@ export default function App() {
         status: nextStatus,
         lineNotified:
           nextStatus === TaskStatus.COMPLETED ? true : t.lineNotified,
-        updatedAt: new Date(Math.max(Date.now(), safePrevMs + 1000)).toISOString(),
+        updatedAt: new Date(
+          Math.max(Date.now(), getInternetNowMs(), safePrevMs + 1000)
+        ).toISOString(),
       };
       mutatedTask = nextObj;
       return nextObj;
     });
 
+    if (mutatedTask) {
+      markLiveTasksProtected([mutatedTask]);
+    }
     tasksRef.current = nextTasks;
     setTasks(nextTasks);
     if (mutatedTask) {

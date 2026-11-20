@@ -2561,11 +2561,20 @@ async function startServer() {
     const rawIncomingTasks = Array.isArray(tasks)
       ? extractGasMetadataFromTasks(tasks).tasks
       : [];
-    // Protect explicit client edits/toggles from PC clock skew (e.g. Admin PC clock behind Cloud server clock)
+    // Protect explicit client edits/toggles and newly added tasks from PC clock skew (e.g. Admin PC clock behind Cloud server clock)
     const incomingTasks = rawIncomingTasks.map((it) => {
       const iid = String(it.id || '').trim();
       const prevTask = iid ? existingById.get(iid) : undefined;
-      if (!prevTask) return it;
+      const isCompletedIncoming = String(it.status || '').trim().toLowerCase() === 'completed';
+      if (!prevTask) {
+        const incMs = it.updatedAt ? new Date(String(it.updatedAt)).getTime() : 0;
+        const safeIncMs = Number.isFinite(incMs) ? incMs : 0;
+        return {
+          ...it,
+          lineNotified: isCompletedIncoming ? true : it.lineNotified,
+          updatedAt: new Date(Math.max(Date.now(), safeIncMs)).toISOString(),
+        };
+      }
       const contentChanged =
         String(it.status || '') !== String(prevTask.status || '') ||
         String(it.title || '') !== String(prevTask.title || '') ||
@@ -2576,7 +2585,6 @@ async function startServer() {
         String(it.categoryId || '') !== String(prevTask.categoryId || '') ||
         String(it.priority || '') !== String(prevTask.priority || '') ||
         String(it.assigneeId || '') !== String(prevTask.assigneeId || '');
-      const isCompletedIncoming = String(it.status || '').trim().toLowerCase() === 'completed';
       if (!contentChanged) {
         return isCompletedIncoming && !it.lineNotified ? { ...it, lineNotified: true } : it;
       }
