@@ -1288,17 +1288,6 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       return;
     }
 
-    // Align the top header stack cleanly below the app header once when starting auto-scroll
-    if (!isPresentationMode && topStackRef.current) {
-      const appHeader = document.querySelector('header');
-      const hdrH = appHeader instanceof HTMLElement ? appHeader.offsetHeight : 58;
-      const stackRect = topStackRef.current.getBoundingClientRect();
-      if (stackRect.top > hdrH + 4 || stackRect.top < hdrH - 4) {
-        const targetWindowY = Math.max(0, window.scrollY + stackRect.top - hdrH);
-        window.scrollTo({ top: targetWindowY, behavior: 'auto' });
-      }
-    }
-
     if (autoScrollViewportRef.current) {
       autoScrollViewportRef.current.scrollTop = 0;
     }
@@ -1970,9 +1959,8 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
 
       if (autoScrollViewportRef.current && !isPresentationMode) {
-        const rect = autoScrollViewportRef.current.getBoundingClientRect();
-        const effectiveTop = Math.max(hdrH + 16, rect.top);
-        const nextMax = Math.max(320, Math.floor(window.innerHeight - effectiveTop - 20));
+        const availableH = Math.floor(window.innerHeight - hdrH - 160);
+        const nextMax = Math.max(460, Math.min(760, availableH));
         setAutoScrollMaxHeight((prev) => (Math.abs(prev - nextMax) >= 3 ? nextMax : prev));
       }
     };
@@ -2750,21 +2738,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             : 'space-y-4'
         }`}
       >
-      {/* Unified Solid Opaque Top Header Stack (Zero Open Gaps Above or Between Sticky Headers) */}
+      {/* Unified Top Header Stack (Flex-pinned in Fullscreen TV mode; normal document flow in regular tab so cards never slide underneath or overlap) */}
       <div
         ref={topStackRef}
-        style={
-          !isPresentationMode
-            ? {
-                top: `${headerHeight}px`,
-                backgroundColor: stickyMaskColor,
-              }
-            : undefined
-        }
         className={
           isPresentationMode
             ? 'shrink-0 space-y-3'
-            : 'sticky z-30 -mx-2 px-2 pt-2 pb-3 space-y-3.5'
+            : 'relative z-10 space-y-3.5'
         }
       >
         {/* Top Executive Presentation Banner & Live Clock */}
@@ -4458,33 +4438,35 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             isPortraitTvStage
               ? 'grid-cols-1 overflow-y-auto'
               : isLandscapeTvStage
-              ? 'grid-cols-12 items-stretch'
+              ? 'grid-cols-12 items-stretch grid-rows-[minmax(0,1fr)] overflow-hidden'
+              : isPresentationMode
+              ? 'grid-cols-1 lg:grid-cols-12 items-stretch lg:grid-rows-[minmax(0,1fr)] overflow-hidden'
               : 'grid-cols-1 lg:grid-cols-12 items-start'
           } gap-6 ${isPresentationMode ? 'flex-1 min-h-0' : ''}`}
         >
           {/* Left Column: Today's Schedule */}
           <div
-            className={`${
+            className={`min-w-0 flex flex-col gap-4 ${
               isPortraitTvStage
-                ? 'space-y-4'
+                ? ''
                 : isLandscapeTvStage
-                ? 'col-span-6 h-full min-h-0 flex flex-col gap-4'
+                ? 'col-span-6 h-full min-h-0'
                 : `lg:col-span-6 ${
-                    isPresentationMode ? 'h-full min-h-0 flex flex-col gap-4' : 'space-y-4'
+                    isPresentationMode ? 'h-full min-h-0' : ''
                   }`
             }`}
           >
             <div
-              className={`shrink-0 px-4 py-2.5 rounded-xl border flex items-center justify-between ${
+              className={`shrink-0 px-4 py-2.5 rounded-xl border flex items-center justify-between gap-3 ${
                 isDarkDisplay
                   ? 'bg-slate-900 border-emerald-500/60 text-emerald-300'
                   : 'bg-emerald-50 border-emerald-200 text-emerald-950'
               }`}
             >
-              <span className="font-extrabold text-sm sm:text-base">
+              <span className="font-extrabold text-sm sm:text-base truncate min-w-0">
                 ภารกิจวันนี้ ({formatFullThaiDayHeader(todayStr)})
               </span>
-              <span className="text-xs font-bold tabular-nums">
+              <span className="text-xs font-bold tabular-nums whitespace-nowrap shrink-0">
                 {scheduleByDate.find((g) => g.date === todayStr)?.items.length || 0} รายการ
               </span>
             </div>
@@ -4522,27 +4504,27 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
           {/* Right Column: Tomorrow & Upcoming Schedule (Header fixed, list GPU-scrolled below header) */}
           <div
-            className={`${
+            className={`min-w-0 flex flex-col gap-4 ${
               isPortraitTvStage
-                ? 'flex flex-col gap-4'
+                ? ''
                 : isLandscapeTvStage
-                ? 'col-span-6 h-full min-h-0 flex flex-col gap-4'
-                : `lg:col-span-6 flex flex-col gap-4 ${
+                ? 'col-span-6 h-full min-h-0'
+                : `lg:col-span-6 ${
                     isPresentationMode ? 'h-full min-h-0' : ''
                   }`
             }`}
           >
             <div
-              className={`shrink-0 px-4 py-2.5 rounded-xl border flex items-center justify-between ${
+              className={`shrink-0 px-4 py-2.5 rounded-xl border flex items-center justify-between gap-3 ${
                 isDarkDisplay
                   ? 'bg-slate-900 border-sky-500/60 text-sky-300'
                   : 'bg-indigo-50 border-indigo-200 text-indigo-950'
               }`}
             >
-              <span className="font-extrabold text-sm sm:text-base">
+              <span className="font-extrabold text-sm sm:text-base truncate min-w-0">
                 ภารกิจวันพรุ่งนี้และล่วงหน้า
               </span>
-              <span className="text-xs font-bold tabular-nums">
+              <span className="text-xs font-bold tabular-nums whitespace-nowrap shrink-0">
                 {scheduleByDate
                   .filter((g) => g.date > todayStr)
                   .reduce((acc, g) => acc + g.items.length, 0)}{' '}

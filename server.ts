@@ -2060,11 +2060,13 @@ async function startServer() {
       const existingDone = existingDup.status === 'completed';
       const candidateDone = candidate.status === 'completed';
 
-      // Always respect newer updatedAt timestamps first so toggling Completed -> Pending/In Progress updates immediately
+      // Always respect newer updatedAt timestamps first, then completion status, then deterministic ID order so devices never disagree on which ID wins
       const preferCandidate =
         candidateTime !== existingTime
           ? candidateTime > existingTime
-          : (candidateDone && !existingDone) || candidateTime >= existingTime;
+          : candidateDone !== existingDone
+          ? candidateDone
+          : candidateId.localeCompare(existingId) < 0;
 
       const winner = preferCandidate ? candidate : existingDup;
       const loser = preferCandidate ? existingDup : candidate;
@@ -2234,7 +2236,7 @@ async function startServer() {
           latestState?.categoriesUpdatedAt,
           Array.from(deletedCategoryIds)
         );
-        const syncRes = await postToGoogleAppsScript(cleanGas, {
+        let syncRes = await postToGoogleAppsScript(cleanGas, {
           action: 'sync_tasks',
           tasks: gasTasksWithMeta,
           categories: finalCats,
@@ -2242,6 +2244,17 @@ async function startServer() {
           deletedTaskIds: Array.from(deletedTaskIds),
           deletedCategoryIds: Array.from(deletedCategoryIds),
         });
+        if (!syncRes.json.ok) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          syncRes = await postToGoogleAppsScript(cleanGas, {
+            action: 'sync_tasks',
+            tasks: gasTasksWithMeta,
+            categories: finalCats,
+            teamMembers: finalMembers,
+            deletedTaskIds: Array.from(deletedTaskIds),
+            deletedCategoryIds: Array.from(deletedCategoryIds),
+          });
+        }
         savePersistedWorkspaceCache();
         return {
           ok: Boolean(syncRes.json.ok),
@@ -2318,8 +2331,8 @@ async function startServer() {
     if (
       cleanGas.startsWith('https://script.google.com/macros/s/') &&
       gasPushInFlightCount === 0 &&
-      nowMs - lastGasPullMs > 2000 &&
-      nowMs - lastWorkspacePostMs > 4500
+      nowMs - lastGasPullMs > 2500 &&
+      nowMs - lastWorkspacePostMs > 10000
     ) {
       lastGasPullMs = nowMs;
       try {
@@ -2439,26 +2452,8 @@ async function startServer() {
             }
 
             if (hasLocalTaskMissingInGas || hasDeletedTaskStillInGas || hasCategoryDiffWithGas) {
-              const effectiveSyncCu = Math.max(
-                localCu,
-                remoteCu,
-                hasCategoryDiffWithGas ? Date.now() : 0
-              );
-              const gasTasksWithMeta = attachGasMetadataToTasks(
-                merged,
-                nextCats,
-                nextMembers,
-                effectiveSyncCu,
-                Array.from(deletedCategoryIds)
-              );
-              postToGoogleAppsScript(cleanGas, {
-                action: 'sync_tasks',
-                tasks: gasTasksWithMeta,
-                categories: nextCats,
-                teamMembers: nextMembers,
-                deletedTaskIds: Array.from(deletedTaskIds),
-                deletedCategoryIds: Array.from(deletedCategoryIds),
-              }).catch(() => {});
+              // Always serialize GAS writes through gasSyncChain so concurrent GET/POST calls never collide inside GAS
+              syncWorkspaceToGasSafely(cleanGas, workspaceId).catch(() => {});
             }
           }
         }
@@ -5441,8 +5436,8 @@ async function startServer() {
       const nowMs = Date.now();
       if (
         gasPushInFlightCount > 0 ||
-        nowMs - lastWorkspacePostMs < 4500 ||
-        nowMs - lastGasPullMs < 1800
+        nowMs - lastWorkspacePostMs < 10000 ||
+        nowMs - lastGasPullMs < 2500
       ) {
         return;
       }

@@ -1012,11 +1012,13 @@ export default function App() {
           : 0;
         const existingDone = existingDup.status === TaskStatus.COMPLETED;
         const candidateDone = candidate.status === TaskStatus.COMPLETED;
-        // Always prioritize newer updatedAt timestamps first so toggling Completed -> Pending/In Progress updates immediately
+        // Always prioritize newer updatedAt timestamps first; deterministic ID tie-break prevents cross-device divergence
         const preferCandidate =
           candidateMs !== existingMs
             ? candidateMs > existingMs
-            : (candidateDone && !existingDone) || candidateMs >= existingMs;
+            : candidateDone !== existingDone
+            ? candidateDone
+            : String(candidate.id || '').localeCompare(String(existingDup.id || '')) < 0;
 
         const winner = preferCandidate ? candidate : existingDup;
         const loser = preferCandidate ? existingDup : candidate;
@@ -1705,11 +1707,12 @@ export default function App() {
         sheetWriteTimerRef.current = null;
         const token = await getAccessToken();
         if (!token || !targetSheetId) return;
+        const latestCleanTasks = tasksRef.current.filter(
+          (t) => !isTaskPurgedOrDeleted(t, deletedSet)
+        );
+        if (latestCleanTasks.length === 0 && deletedSet.size === 0) return;
         setIsSyncing(true);
         try {
-          const latestCleanTasks = tasksRef.current.filter(
-            (t) => !isTaskPurgedOrDeleted(t, deletedSet)
-          );
           await writeDatabaseToSheet(
             token,
             targetSheetId,
@@ -1723,7 +1726,7 @@ export default function App() {
         } finally {
           setIsSyncing(false);
         }
-      }, 2200);
+      }, 6500);
     },
     [isTaskPurgedOrDeleted, pushCollaborativeWorkspace, sheetMeta, showNotice, teamMembers]
   );
@@ -2586,22 +2589,25 @@ export default function App() {
         onConfirm: async () => {
           lastLocalMutationMsRef.current = Date.now();
           recordDeletedTaskIds([task.id]);
+          clearLiveTasksProtected([task.id]);
           publishTaskDelta({ deletedTaskIds: [task.id], workspaceId });
-          const nextTasks = tasks.filter((t) => t.id !== task.id);
+          const nextTasks = tasksRef.current.filter((t) => t.id !== task.id);
+          const latestCats = categoriesRef.current;
+          const latestMembers = teamMembersRef.current;
           tasksRef.current = nextTasks;
           setTasks(nextTasks);
           if (sheetMeta && accessToken) {
             await syncAllToConnectedSheet(
               nextTasks,
-              categories,
+              latestCats,
               lineLogs,
               `ลบงาน "${task.title}" ออกจาก Google Sheets เรียบร้อยแล้ว`,
               undefined,
               task.id,
-              teamMembers
+              latestMembers
             );
           } else {
-            await pushCollaborativeWorkspace(nextTasks, categories, teamMembers, task.id);
+            await pushCollaborativeWorkspace(nextTasks, latestCats, latestMembers, task.id);
             showNotice('info', `ลบงาน "${task.title}" ออกจากตารางงานแล้ว`);
           }
           closeConfirmDialog();
@@ -2610,15 +2616,14 @@ export default function App() {
     },
     [
       accessToken,
-      categories,
+      clearLiveTasksProtected,
       lineLogs,
       pushCollaborativeWorkspace,
       recordDeletedTaskIds,
       sheetMeta,
       showNotice,
       syncAllToConnectedSheet,
-      tasks,
-      teamMembers,
+      workspaceId,
     ]
   );
 
@@ -2647,32 +2652,39 @@ export default function App() {
       isDestructive: true,
       onConfirm: async () => {
         lastLocalMutationMsRef.current = Date.now();
-        const completedIds = completedTasks.map((t) => t.id);
-        recordDeletedTaskIds(completedIds);
-        publishTaskDelta({ deletedTaskIds: completedIds, workspaceId });
-        const nextTasks = tasks.filter((t) => t.status !== TaskStatus.COMPLETED);
+        const completedIds = tasksRef.current
+          .filter((t) => t.status === TaskStatus.COMPLETED)
+          .map((t) => t.id);
+        const idsToDelete = completedIds.length > 0 ? completedIds : completedTasks.map((t) => t.id);
+        const deleteSet = new Set(idsToDelete);
+        recordDeletedTaskIds(idsToDelete);
+        clearLiveTasksProtected(idsToDelete);
+        publishTaskDelta({ deletedTaskIds: idsToDelete, workspaceId });
+        const nextTasks = tasksRef.current.filter((t) => !deleteSet.has(t.id));
+        const latestCats = categoriesRef.current;
+        const latestMembers = teamMembersRef.current;
         tasksRef.current = nextTasks;
         setTasks(nextTasks);
         if (sheetMeta && accessToken) {
           await syncAllToConnectedSheet(
             nextTasks,
-            categories,
+            latestCats,
             lineLogs,
-            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${completedTasks.length} รายการ ออกจากระบบและ Google Sheets เรียบร้อยแล้ว`,
+            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${idsToDelete.length} รายการ ออกจากระบบและ Google Sheets เรียบร้อยแล้ว`,
             undefined,
-            completedIds,
-            teamMembers
+            idsToDelete,
+            latestMembers
           );
         } else {
           await pushCollaborativeWorkspace(
             nextTasks,
-            categories,
-            teamMembers,
-            completedIds
+            latestCats,
+            latestMembers,
+            idsToDelete
           );
           showNotice(
             'success',
-            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${completedTasks.length} รายการ เรียบร้อยแล้ว`
+            `ลบงานที่ทำเสร็จแล้วทั้งหมด ${idsToDelete.length} รายการ เรียบร้อยแล้ว`
           );
         }
         closeConfirmDialog();
@@ -2680,7 +2692,7 @@ export default function App() {
     });
   }, [
     accessToken,
-    categories,
+    clearLiveTasksProtected,
     lineLogs,
     pushCollaborativeWorkspace,
     recordDeletedTaskIds,
@@ -2688,7 +2700,7 @@ export default function App() {
     showNotice,
     syncAllToConnectedSheet,
     tasks,
-    teamMembers,
+    workspaceId,
   ]);
 
   // Process Natural Language LINE Chat Command (from in-app LINE chat, quick bar, or real LINE Webhook)
@@ -3177,10 +3189,13 @@ export default function App() {
                     showFeedback ||
                     Date.now() - lastLocalMutationMsRef.current > 2000
                   ) {
-                    let newlyDiscarded: string[] = [];
                     const nowCheckMs = Date.now();
                     const internetNowCheckMs = Math.max(nowCheckMs, getInternetNowMs());
                     setTasks((prev) => {
+                      // Never wipe local tasks on a transient empty snapshot unless explicit tombstones explain it
+                      if (!showFeedback && cleanWsTasks.length === 0 && prev.length > 0 && delSet.size === 0) {
+                        return prev;
+                      }
                       const recentlyEditedLive = prev.filter((p) => {
                         if (delSet.has(p.id)) return false;
                         const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
@@ -3195,26 +3210,27 @@ export default function App() {
                         const lMs = localVer.updatedAt ? new Date(localVer.updatedAt).getTime() : 0;
                         return rMs > lMs;
                       });
-                      const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
+                      // Tombstone-authoritative: background sync NEVER deletes a task merely because it is absent from a lagging snapshot
+                      const secondaryList =
+                        !showFeedback || cleanWsTasks.length === 0
+                          ? prev.filter((p) => !delSet.has(p.id))
+                          : prev.filter((p) => {
+                              if (delSet.has(p.id)) return false;
+                              if (cleanWsTasks.some((r) => r.id === p.id)) return true;
+                              const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                              if (recMs > 0 && nowCheckMs - recMs < 180000) return true;
+                              const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+                              return Number.isFinite(pMs) && internetNowCheckMs - pMs < 60000;
+                            });
+                      const { tasks: mergedList } = deduplicateAndMergeTasks(
                         [...filteredRemote, ...recentlyEditedLive],
-                        prev.filter((p) => {
-                          if (delSet.has(p.id)) return false;
-                          if (cleanWsTasks.some((r) => r.id === p.id)) return true;
-                          const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
-                          if (recMs > 0 && nowCheckMs - recMs < 180000) return true;
-                          const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                          return Number.isFinite(pMs) && internetNowCheckMs - pMs < 60000;
-                        }),
+                        secondaryList,
                         delSet
                       );
-                      newlyDiscarded = discardedIds;
                       if (areTaskListsEqual(prev, mergedList)) return prev;
                       tasksRef.current = mergedList;
                       return mergedList;
                     });
-                    if (newlyDiscarded.length > 0) {
-                      recordDeletedTaskIds(newlyDiscarded);
-                    }
                   }
                 }
                 const remoteWsCu =
@@ -3466,7 +3482,6 @@ export default function App() {
               Array.isArray(data.tasks) &&
               (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
             ) {
-              let newlyDiscardedGas: string[] = [];
               const gasDelSet = new Set<string>(deletedTaskIdsRef.current);
               setTasks((prev) => {
                 const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
@@ -3520,6 +3535,11 @@ export default function App() {
                   });
                 }
 
+                // Never wipe local tasks on an empty GAS pull unless explicit tombstones exist
+                if (!showFeedback && nextRemoteTasks.length === 0 && prev.length > 0 && gasDelSet.size === 0) {
+                  return prev;
+                }
+
                 const nowGasCheckMs = Date.now();
                 const internetNowGasMs = Math.max(nowGasCheckMs, getInternetNowMs());
                 const recentlyEditedLive = prev.filter((p) => {
@@ -3536,26 +3556,27 @@ export default function App() {
                   const lMs = localVer.updatedAt ? new Date(localVer.updatedAt).getTime() : 0;
                   return rMs > lMs;
                 });
-                const { tasks: mergedGasTasks, discardedIds } = deduplicateAndMergeTasks(
+                // Tombstone-authoritative: background GAS polls NEVER delete a task merely absent from the sheet
+                const secondaryGasList =
+                  !showFeedback || nextRemoteTasks.length === 0
+                    ? prev.filter((p) => !gasDelSet.has(p.id))
+                    : prev.filter((p) => {
+                        if (gasDelSet.has(p.id)) return false;
+                        if (nextRemoteTasks.some((r) => r.id === p.id)) return true;
+                        const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+                        if (recMs > 0 && nowGasCheckMs - recMs < 180000) return true;
+                        const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+                        return Number.isFinite(pMs) && internetNowGasMs - pMs < 60000;
+                      });
+                const { tasks: mergedGasTasks } = deduplicateAndMergeTasks(
                   [...filteredGasRemote, ...recentlyEditedLive],
-                  prev.filter((p) => {
-                    if (gasDelSet.has(p.id)) return false;
-                    if (nextRemoteTasks.some((r) => r.id === p.id)) return true;
-                    const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
-                    if (recMs > 0 && nowGasCheckMs - recMs < 180000) return true;
-                    const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                    return Number.isFinite(pMs) && internetNowGasMs - pMs < 60000;
-                  }),
+                  secondaryGasList,
                   gasDelSet
                 );
-                newlyDiscardedGas = discardedIds;
                 if (areTaskListsEqual(prev, mergedGasTasks)) return prev;
                 tasksRef.current = mergedGasTasks;
                 return mergedGasTasks;
               });
-              if (newlyDiscardedGas.length > 0) {
-                recordDeletedTaskIds(newlyDiscardedGas);
-              }
             }
           }
         }
@@ -3666,22 +3687,17 @@ export default function App() {
           lastSyncedTimestampRef.current = ev.updatedAt;
           setLastCollabSyncAt(ev.updatedAt);
         }
-        let newlyDiscardedDelta: string[] = [];
         setTasks((prev) => {
           const basePrev = prev.filter((p) => !delSet.has(p.id));
-          const { tasks: mergedDelta, discardedIds } = deduplicateAndMergeTasks(
+          const { tasks: mergedDelta } = deduplicateAndMergeTasks(
             upserts,
             basePrev,
             delSet
           );
-          newlyDiscardedDelta = discardedIds;
           if (areTaskListsEqual(prev, mergedDelta)) return prev;
           tasksRef.current = mergedDelta;
           return mergedDelta;
         });
-        if (newlyDiscardedDelta.length > 0) {
-          recordDeletedTaskIds(newlyDiscardedDelta);
-        }
         return;
       }
 
@@ -3751,15 +3767,28 @@ export default function App() {
         if (delSet.size > 0) {
           clearLiveTasksProtected(Array.from(delSet));
         }
-        let newlyDiscarded: string[] = [];
         setTasks((prev) => {
-          if (ev.type === 'sync:init' && cleanRemoteTasks.length === 0 && prev.length > 0) {
+          // Never wipe local tasks on an empty snapshot unless explicit tombstones explain it
+          if (cleanRemoteTasks.length === 0 && prev.length > 0 && delSet.size === 0) {
             return prev;
           }
           const nowWsMs = Date.now();
-          const internetNowWsMs = Math.max(nowWsMs, getInternetNowMs());
+          const recentlyEditedLive = prev.filter((p) => {
+            if (delSet.has(p.id)) return false;
+            const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
+            return recMs > 0 && nowWsMs - recMs < 30000;
+          });
+          const recentEditIds = new Set(recentlyEditedLive.map((t) => t.id));
+          const filteredRemote = cleanRemoteTasks.filter((r) => {
+            if (!recentEditIds.has(r.id)) return true;
+            const localVer = recentlyEditedLive.find((l) => l.id === r.id);
+            if (!localVer) return true;
+            const rMs = r.updatedAt ? new Date(r.updatedAt).getTime() : 0;
+            const lMs = localVer.updatedAt ? new Date(localVer.updatedAt).getTime() : 0;
+            return rMs > lMs;
+          });
           const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
-          const changedIncoming = cleanRemoteTasks.filter((rt) => {
+          const changedIncoming = filteredRemote.filter((rt) => {
             const old = prevById.get(rt.id);
             if (!old) return true;
             const rtMs = rt.updatedAt ? new Date(rt.updatedAt).getTime() : 0;
@@ -3769,30 +3798,17 @@ export default function App() {
           if (changedIncoming.length > 0) {
             markLiveTasksProtected(changedIncoming);
           }
-          const secondaryList =
-            ev.type === 'sync:init'
-              ? prev.filter((p) => !delSet.has(p.id))
-              : prev.filter((p) => {
-                  if (delSet.has(p.id)) return false;
-                  if (cleanRemoteTasks.some((r) => r.id === p.id)) return true;
-                  const recMs = recentLiveTaskReceiptMsRef.current.get(p.id) || 0;
-                  if (recMs > 0 && nowWsMs - recMs < 180000) return true;
-                  const pMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                  return Number.isFinite(pMs) && internetNowWsMs - pMs < 60000;
-                });
-          const { tasks: mergedList, discardedIds } = deduplicateAndMergeTasks(
-            cleanRemoteTasks,
+          // Tombstone-authoritative: NEVER drop a task solely because a peer snapshot omitted it; only explicit delSet removes tasks
+          const secondaryList = prev.filter((p) => !delSet.has(p.id));
+          const { tasks: mergedList } = deduplicateAndMergeTasks(
+            [...filteredRemote, ...recentlyEditedLive],
             secondaryList,
             delSet
           );
-          newlyDiscarded = discardedIds;
           if (areTaskListsEqual(prev, mergedList)) return prev;
           tasksRef.current = mergedList;
           return mergedList;
         });
-        if (newlyDiscarded.length > 0) {
-          recordDeletedTaskIds(newlyDiscarded);
-        }
       }
 
       if (Array.isArray(incomingWs.categories) && incomingWs.categories.length > 0) {
@@ -4032,7 +4048,16 @@ export default function App() {
             updatedAt: newMonotonicIso,
           };
 
-      deletedTaskIdsRef.current.delete(newTask.id);
+      if (deletedTaskIdsRef.current.delete(newTask.id)) {
+        try {
+          localStorage.setItem(
+            'sheetcal_deleted_task_ids_v1',
+            JSON.stringify(Array.from(deletedTaskIdsRef.current))
+          );
+        } catch {
+          // Ignore storage error
+        }
+      }
       markLiveTasksProtected([newTask]);
       const nextTasks = existingSameTask
         ? currentList.map((t) => (t.id === existingSameTask.id ? newTask : t))

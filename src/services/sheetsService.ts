@@ -437,6 +437,26 @@ async function pushToGasBridgeFallback(
   teamMembers: TeamMember[]
 ): Promise<boolean> {
   const gasUrl = getActiveGasBridgeUrl();
+  let deletedTaskIds: string[] = [];
+  let deletedCategoryIds: string[] = [];
+  if (typeof window !== 'undefined') {
+    try {
+      const rawDt = JSON.parse(
+        window.localStorage.getItem('sheetcal_deleted_task_ids_v1') || '[]'
+      );
+      if (Array.isArray(rawDt)) {
+        deletedTaskIds = rawDt.map((x) => String(x || '').trim()).filter(Boolean).slice(-120);
+      }
+      const rawDc = JSON.parse(
+        window.localStorage.getItem('sheetcal_deleted_category_ids_v1') || '[]'
+      );
+      if (Array.isArray(rawDc)) {
+        deletedCategoryIds = rawDc.map((x) => String(x || '').trim()).filter(Boolean).slice(-60);
+      }
+    } catch {
+      // Ignore storage read error
+    }
+  }
   try {
     const res = await fetch('/api/line/gas-bridge-sync', {
       method: 'POST',
@@ -447,6 +467,8 @@ async function pushToGasBridgeFallback(
         tasks,
         categories,
         teamMembers,
+        deletedTaskIds: deletedTaskIds.length > 0 ? deletedTaskIds : undefined,
+        deletedCategoryIds: deletedCategoryIds.length > 0 ? deletedCategoryIds : undefined,
       }),
     });
     const ct = res.headers.get('content-type') || '';
@@ -459,20 +481,33 @@ async function pushToGasBridgeFallback(
   }
 
   if (gasUrl.startsWith('https://script.google.com/macros/s/')) {
+    const bodyStr = JSON.stringify({
+      action: 'sync_tasks',
+      tasks,
+      categories,
+      teamMembers,
+      deletedTaskIds: deletedTaskIds.length > 0 ? deletedTaskIds : undefined,
+      deletedCategoryIds: deletedCategoryIds.length > 0 ? deletedCategoryIds : undefined,
+    });
     try {
       const directRes = await fetch(gasUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'sync_tasks',
-          tasks,
-          categories,
-          teamMembers,
-        }),
+        body: bodyStr,
       });
       if (directRes.ok) return true;
     } catch {
-      // Ignore direct error
+      try {
+        await fetch(gasUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: bodyStr,
+        });
+        return true;
+      } catch {
+        // Ignore direct error
+      }
     }
   }
   return false;
@@ -730,22 +765,6 @@ export async function writeDatabaseToSheet(
     try {
       await ensureRequiredTabs(accessToken, spreadsheetId);
 
-      await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchClear`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ranges: [
-            'Tasks!A1:Z1000',
-            'Categories!A1:Z200',
-            'LineLogs!A1:Z1000',
-            'TeamMembers!A1:Z200',
-          ],
-        }),
-      });
-
       const taskRows = [
         TASKS_HEADERS,
         ...tasks.map((t, idx) => taskToRow(t, idx, categories, teamMembers)),
@@ -754,6 +773,7 @@ export async function writeDatabaseToSheet(
       const logRows = [LINE_LOGS_HEADERS, ...logs.slice(0, 200).map(logToRow)];
       const memberRows = [TEAM_MEMBERS_HEADERS, ...teamMembers.map(teamMemberToRow)];
 
+      // Write rows FIRST (never batchClear active rows beforehand!) so TV/GAS polls never read an empty sheet mid-write
       const updateRes = await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchUpdate`, {
         method: 'POST',
         headers: {
@@ -784,6 +804,24 @@ export async function writeDatabaseToSheet(
       });
 
       if (updateRes.ok) {
+        // Clear strictly leftover trailing rows below the written range after update succeeds
+        const clearRanges: string[] = [];
+        if (taskRows.length < 1000) clearRanges.push(`Tasks!A${taskRows.length + 1}:Z1000`);
+        if (categoryRows.length < 200)
+          clearRanges.push(`Categories!A${categoryRows.length + 1}:Z200`);
+        if (logRows.length < 1000) clearRanges.push(`LineLogs!A${logRows.length + 1}:Z1000`);
+        if (memberRows.length < 200)
+          clearRanges.push(`TeamMembers!A${memberRows.length + 1}:Z200`);
+        if (clearRanges.length > 0) {
+          await fetch(`${SHEETS_BASE_URL}/${spreadsheetId}/values:batchClear`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ranges: clearRanges }),
+          }).catch(() => {});
+        }
         return;
       }
     } catch {
