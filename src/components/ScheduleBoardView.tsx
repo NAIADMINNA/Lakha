@@ -39,10 +39,15 @@ import {
   Category,
   DirectorPresenceMode,
   DirectorPresenceState,
+  OrganizationSettings,
   Task,
   TaskPriority,
   TaskStatus,
 } from '../types';
+import {
+  DEFAULT_ORG_SETTINGS,
+  formatOrgSubtitle,
+} from '../services/orgSettings';
 import {
   formatLocalDateYMD,
   formatLocalTimeHM,
@@ -81,6 +86,7 @@ import {
 interface ScheduleBoardViewProps {
   tasks: Task[];
   categories: Category[];
+  orgSettings?: OrganizationSettings;
   onAddTaskForDate: (dateStr: string) => void;
   onEditTask: (task: Task) => void;
   onToggleStatus: (task: Task) => void;
@@ -434,6 +440,7 @@ const LiveBangkokClockDisplay: React.FC<{
 export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   tasks,
   categories,
+  orgSettings = DEFAULT_ORG_SETTINGS,
   onAddTaskForDate,
   onEditTask,
   onToggleStatus,
@@ -2836,7 +2843,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       : 'text-slate-900'
                   }`}
                 >
-                  กำหนดการภารกิจของผู้อำนวยการ
+                  {orgSettings.boardTitle}
                 </h1>
                 <div
                   className={`font-semibold tracking-wide ${
@@ -2857,7 +2864,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       : 'text-indigo-700'
                   }`}
                 >
-                  สำนักบริหารแรงงานต่างด้าว · กรมการจัดหางาน
+                  {formatOrgSubtitle(orgSettings)}
                 </div>
               </div>
             </div>
@@ -3016,7 +3023,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       : 'text-slate-600'
                   }`}
                 >
-                  สถานะผู้อำนวยการ:
+                  สถานะ{orgSettings.directorLabel}:
                 </span>
 
                 <span

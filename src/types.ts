@@ -159,6 +159,16 @@ export interface DirectorPresenceState {
   updatedAt: string;
 }
 
+export interface OrganizationSettings {
+  appName: string;
+  boardTitle: string;
+  agencyName: string;
+  departmentName: string;
+  directorLabel: string;
+  footerDescription: string;
+  updatedAt: string;
+}
+
 export interface ConfirmationDialogRequest {
   isOpen: boolean;
   title: string;

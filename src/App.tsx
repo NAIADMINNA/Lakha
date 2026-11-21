@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Settings,
   Trash2,
   Tv,
   Unlock,
@@ -32,6 +33,7 @@ import {
   DirectorPresenceState,
   LineMessageLog,
   LineSettings,
+  OrganizationSettings,
   Task,
   TaskPriority,
   TaskStatus,
@@ -80,12 +82,20 @@ import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { TaskFormModal } from './components/TaskFormModal';
 import { CalendarView, buildGoogleCalendarTemplateUrl } from './components/CalendarView';
-import { LineCenterView } from './components/LineCenterView';
 import { CategoryManagerView } from './components/CategoryManagerView';
-import { SheetsDatabaseView, SheetAutoSyncConfig } from './components/SheetsDatabaseView';
+import { SheetAutoSyncConfig } from './components/SheetsDatabaseView';
 import { TeamCollaborationView } from './components/TeamCollaborationView';
 import { ScheduleBoardView } from './components/ScheduleBoardView';
+import { SystemSettingsSubTab, SystemSettingsView } from './components/SystemSettingsView';
 import { ROBOT_MASCOT_DATA_URI } from './assets/robotMascotDataUri';
+import {
+  buildDefaultTelegramHeader,
+  formatOrgSubtitle,
+  normalizeOrgSettings,
+  readLocalOrgSettings,
+  subscribeOrgSettingsBroadcast,
+  writeLocalOrgSettings,
+} from './services/orgSettings';
 import {
   BoardRemoteSettings,
   broadcastLocalWorkspaceChange,
@@ -123,7 +133,8 @@ type ActiveSection =
   | 'team'
   | 'line'
   | 'categories'
-  | 'database';
+  | 'database'
+  | 'settings';
 type TaskFilterTab = 'all' | 'today' | 'pending' | 'high' | 'completed';
 
 const STORAGE_KEYS = {
@@ -141,6 +152,73 @@ const STORAGE_KEYS = {
 export default function App() {
   const todayStr = formatLocalDateYMD();
 
+  const [orgSettings, setOrgSettings] = useState<OrganizationSettings>(() =>
+    readLocalOrgSettings()
+  );
+  const orgSettingsRef = useRef<OrganizationSettings>(orgSettings);
+
+  useEffect(() => {
+    orgSettingsRef.current = orgSettings;
+    try {
+      document.title = `${orgSettings.appName} — ${formatOrgSubtitle(orgSettings)}`;
+    } catch {
+      // Ignore
+    }
+  }, [orgSettings]);
+
+  const applyRemoteOrgSettingsIfNewer = useCallback(
+    (incoming?: OrganizationSettings | null) => {
+      if (!incoming || typeof incoming !== 'object' || !incoming.updatedAt) return;
+      const incomingMs = new Date(incoming.updatedAt).getTime();
+      if (!Number.isFinite(incomingMs) || incomingMs <= 0) return;
+      const currentMs = orgSettingsRef.current.updatedAt
+        ? new Date(orgSettingsRef.current.updatedAt).getTime()
+        : 0;
+      if (incomingMs > (Number.isFinite(currentMs) ? currentMs : 0)) {
+        const saved = writeLocalOrgSettings(incoming, true);
+        orgSettingsRef.current = saved;
+        setOrgSettings(saved);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    return subscribeOrgSettingsBroadcast((incoming) => {
+      applyRemoteOrgSettingsIfNewer(incoming);
+    });
+  }, [applyRemoteOrgSettingsIfNewer]);
+
+  const [settingsSubTab, setSettingsSubTab] = useState<SystemSettingsSubTab>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
+      if (sec === 'line') return 'line';
+      if (sec === 'telegram') return 'telegram';
+      if (sec === 'database') return 'database';
+      const saved = (localStorage.getItem('sheetcal_settings_subtab_v1') || '').trim();
+      if (
+        saved === 'organization' ||
+        saved === 'line' ||
+        saved === 'telegram' ||
+        saved === 'database'
+      ) {
+        return saved;
+      }
+    } catch {
+      // Ignore
+    }
+    return 'organization';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sheetcal_settings_subtab_v1', settingsSubTab);
+    } catch {
+      // Ignore
+    }
+  }, [settingsSubTab]);
+
   // Navigation state (supports ?section=calendar or ?view=calendar deep-links from LINE Flex Cards, and remembers last active tab)
   const [activeSection, setActiveSection] = useState<ActiveSection>(() => {
     try {
@@ -157,14 +235,15 @@ export default function App() {
         return 'schedule';
       }
       const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
+      if (sec === 'line' || sec === 'telegram' || sec === 'database' || sec === 'settings') {
+        return 'settings';
+      }
       if (
         sec === 'calendar' ||
         sec === 'schedule' ||
         sec === 'dashboard' ||
         sec === 'team' ||
-        sec === 'line' ||
-        sec === 'categories' ||
-        sec === 'database'
+        sec === 'categories'
       ) {
         return sec as ActiveSection;
       }
@@ -174,14 +253,15 @@ export default function App() {
       const savedSec = (localStorage.getItem('sheetcal_active_section_v1') || '')
         .trim()
         .toLowerCase();
+      if (savedSec === 'line' || savedSec === 'database' || savedSec === 'settings') {
+        return 'settings';
+      }
       if (
         savedSec === 'calendar' ||
         savedSec === 'schedule' ||
         savedSec === 'dashboard' ||
         savedSec === 'team' ||
-        savedSec === 'line' ||
-        savedSec === 'categories' ||
-        savedSec === 'database'
+        savedSec === 'categories'
       ) {
         return savedSec as ActiveSection;
       }
@@ -199,7 +279,7 @@ export default function App() {
     }
   }, [activeSection]);
 
-  // Passcode Protection for Admin Sections: ทีมที่ใช้ปฏิทินร่วมกัน ('team'), แจ้งเตือน & สั่งงาน LINE ('line'), ฐานข้อมูล Google Sheets ('database')
+  // Passcode Protection for Admin Sections: ทีมที่ใช้ปฏิทินร่วมกัน ('team') และศูนย์ตั้งค่าระบบ ('settings')
   const ADMIN_PASSCODE = '0841543524';
   const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(false);
   const [adminPasscodeInput, setAdminPasscodeInput] = useState<string>('');
@@ -1101,6 +1181,12 @@ export default function App() {
           if (localBoardCfg && localBoardCfg.updatedAt && bsMs > 0) {
             metaObj.bs = localBoardCfg;
           }
+          const localOrg = orgSettingsRef.current;
+          const rawOrgMs = localOrg?.updatedAt ? new Date(localOrg.updatedAt).getTime() : 0;
+          const orgMs = Number.isFinite(rawOrgMs) ? rawOrgMs : 0;
+          if (localOrg && localOrg.updatedAt && orgMs > 0) {
+            metaObj.org = localOrg;
+          }
           const recentDelTaskArr = Array.from(deletedTaskIdsRef.current).slice(-120);
           if (recentDelTaskArr.length > 0) {
             metaObj.dt = recentDelTaskArr;
@@ -1116,7 +1202,8 @@ export default function App() {
             curMs + 1,
             Array.isArray(categoriesList) && categoriesList.length > 0 ? effectiveCu : 0,
             dpMs,
-            bsMs
+            bsMs,
+            orgMs
           );
           nextUpdatedAt = new Date(maxMetaMs).toISOString();
           if (delCatArr.length > 0) {
@@ -1151,6 +1238,7 @@ export default function App() {
       deletedTaskIds?: string[];
       directorPresence?: DirectorPresenceState;
       boardSettings?: BoardRemoteSettings;
+      orgSettings?: OrganizationSettings;
       teamMembers?: TeamMember[];
     } => {
       let extractedCategories: Category[] | undefined;
@@ -1161,6 +1249,8 @@ export default function App() {
       let bestDpMs = -1;
       let extractedBoardSettings: BoardRemoteSettings | undefined;
       let bestBsMs = -1;
+      let extractedOrgSettings: OrganizationSettings | undefined;
+      let bestOrgMs = -1;
       let extractedMembers: TeamMember[] | undefined;
       const cleaned: Task[] = [];
 
@@ -1183,6 +1273,7 @@ export default function App() {
                 dt?: string[];
                 dp?: DirectorPresenceState;
                 bs?: BoardRemoteSettings;
+                org?: OrganizationSettings;
                 m?: TeamMember[];
               };
               if (
@@ -1232,6 +1323,13 @@ export default function App() {
                 if (Number.isFinite(bsMs) && bsMs > bestBsMs) {
                   bestBsMs = bsMs;
                   extractedBoardSettings = parsedMeta.bs;
+                }
+              }
+              if (parsedMeta.org && typeof parsedMeta.org === 'object' && parsedMeta.org.updatedAt) {
+                const orgMs = new Date(parsedMeta.org.updatedAt).getTime();
+                if (Number.isFinite(orgMs) && orgMs > bestOrgMs) {
+                  bestOrgMs = orgMs;
+                  extractedOrgSettings = normalizeOrgSettings(parsedMeta.org);
                 }
               }
               if (
@@ -1287,6 +1385,7 @@ export default function App() {
         deletedTaskIds: extractedDeletedTaskIds,
         directorPresence: extractedDirectorPresence,
         boardSettings: extractedBoardSettings,
+        orgSettings: extractedOrgSettings,
         teamMembers: extractedMembers,
       };
     },
@@ -3180,6 +3279,9 @@ export default function App() {
                   if (decodedWs.boardSettings) {
                     emitRemoteBoardSettingsFromGas(decodedWs.boardSettings);
                   }
+                  if (decodedWs.orgSettings) {
+                    applyRemoteOrgSettingsIfNewer(decodedWs.orgSettings);
+                  }
                   cleanWsTasks = decodedWs.tasks.filter(
                     (t) => !isTaskPurgedOrDeleted(t, delSet)
                   );
@@ -3417,6 +3519,9 @@ export default function App() {
             }
             if (decodedGas.boardSettings) {
               emitRemoteBoardSettingsFromGas(decodedGas.boardSettings);
+            }
+            if (decodedGas.orgSettings) {
+              applyRemoteOrgSettingsIfNewer(decodedGas.orgSettings);
             }
 
             const remoteGasCats =
@@ -3762,6 +3867,9 @@ export default function App() {
         }
         if (decoded.boardSettings) {
           emitRemoteBoardSettingsFromGas(decoded.boardSettings);
+        }
+        if (decoded.orgSettings) {
+          applyRemoteOrgSettingsIfNewer(decoded.orgSettings);
         }
         const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
         if (delSet.size > 0) {
@@ -4923,15 +5031,23 @@ export default function App() {
           </span>
           <div className="flex flex-col leading-tight">
             <span className="text-base sm:text-lg font-extrabold tracking-tight text-indigo-950 group-hover:text-indigo-700 transition-colors">
-              ระบบ<span className="text-[#06C755]">น้องเลขา</span>
+              {orgSettings.appName.includes('น้องเลขา') ? (
+                <>
+                  {orgSettings.appName.split('น้องเลขา')[0]}
+                  <span className="text-[#06C755]">น้องเลขา</span>
+                  {orgSettings.appName.split('น้องเลขา').slice(1).join('น้องเลขา')}
+                </>
+              ) : (
+                orgSettings.appName
+              )}
             </span>
-            <span className="hidden xl:inline text-[10px] font-semibold text-slate-500">
-              สำนักบริหารแรงงานต่างด้าว
+            <span className="hidden xl:inline text-[10px] font-semibold text-slate-500 max-w-[180px] truncate">
+              {orgSettings.agencyName}
             </span>
           </div>
         </a>
 
-        {/* Zone 2: Executive Segmented Navigation Links */}
+        {/* Zone 2: Executive Segmented Navigation Links (5 clean single-line links) */}
         <nav className="hidden md:flex items-center gap-1 p-1 rounded-xl bg-slate-100/85 border border-slate-200/75 text-xs lg:text-sm font-medium text-slate-600 overflow-x-auto">
           <a
             href="#dashboard"
@@ -4999,44 +5115,27 @@ export default function App() {
             <span>ทีมร่วม ({teamMembers.length})</span>
           </a>
           <a
-            href="#line"
+            href="#settings"
             onClick={(e) => {
               e.preventDefault();
               setAdminPasscodeError('');
-              setActiveSection('line');
+              setActiveSection('settings');
             }}
             className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
-              activeSection === 'line'
-                ? 'bg-white text-[#06C755] font-bold shadow-2xs ring-1 ring-slate-200/80'
-                : 'text-slate-600 hover:text-[#06C755] hover:bg-white/60'
+              activeSection === 'settings' ||
+              activeSection === 'line' ||
+              activeSection === 'database' ||
+              activeSection === 'categories'
+                ? 'bg-white text-indigo-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-indigo-700 hover:bg-white/60'
             }`}
           >
             {isAdminUnlocked ? (
-              <Unlock className="h-3.5 w-3.5 text-[#06C755] shrink-0" />
+              <Settings className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
             ) : (
               <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
             )}
-            <span>แจ้งเตือน LINE</span>
-          </a>
-          <a
-            href="#database"
-            onClick={(e) => {
-              e.preventDefault();
-              setAdminPasscodeError('');
-              setActiveSection('database');
-            }}
-            className={`px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
-              activeSection === 'database' || activeSection === 'categories'
-                ? 'bg-white text-violet-700 font-bold shadow-2xs ring-1 ring-slate-200/80'
-                : 'text-slate-600 hover:text-violet-700 hover:bg-white/60'
-            }`}
-          >
-            {isAdminUnlocked ? (
-              <Unlock className="h-3.5 w-3.5 text-violet-600 shrink-0" />
-            ) : (
-              <Lock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-            )}
-            <span>ฐานข้อมูล Sheets</span>
+            <span>ตั้งค่าระบบ</span>
           </a>
         </nav>
 
@@ -5116,25 +5215,6 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            setAdminPasscodeError('');
-            setActiveSection('line');
-          }}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
-            activeSection === 'line'
-              ? 'bg-[#06C755] text-white shadow-2xs'
-              : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
-          }`}
-        >
-          {isAdminUnlocked ? (
-            <MessageSquareText className="h-3.5 w-3.5" />
-          ) : (
-            <Lock className="h-3.5 w-3.5" />
-          )}
-          <span>สั่งงาน LINE OA</span>
-        </button>
-        <button
-          type="button"
           onClick={() => setActiveSection('categories')}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
             activeSection === 'categories'
@@ -5149,25 +5229,29 @@ export default function App() {
           type="button"
           onClick={() => {
             setAdminPasscodeError('');
-            setActiveSection('database');
+            setActiveSection('settings');
           }}
           className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl whitespace-nowrap shrink-0 transition-all ${
+            activeSection === 'settings' ||
+            activeSection === 'line' ||
             activeSection === 'database'
-              ? 'bg-violet-600 text-white shadow-2xs'
+              ? 'bg-indigo-600 text-white shadow-2xs'
               : 'text-slate-600 bg-slate-100/90 hover:bg-slate-200/70'
           }`}
         >
           {isAdminUnlocked ? (
-            <Cloud className="h-3.5 w-3.5" />
+            <Settings className="h-3.5 w-3.5" />
           ) : (
             <Lock className="h-3.5 w-3.5" />
           )}
-          <span>Google Sheets</span>
+          <span>ตั้งค่าระบบ</span>
         </button>
       </div>
 
       {/* In-App Browser (LINE WebView) Banner — Only shown if admin opens Database OAuth tab */}
-      {isInAppWebView() && activeSection === 'database' && (
+      {isInAppWebView() &&
+        (activeSection === 'database' ||
+          (activeSection === 'settings' && settingsSubTab === 'database')) && (
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5">
           <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs text-amber-950">
             <div>
@@ -5212,7 +5296,10 @@ export default function App() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setActiveSection('database')}
+                    onClick={() => {
+                      setSettingsSubTab('database');
+                      setActiveSection('settings');
+                    }}
                     className="text-emerald-700 font-semibold hover:underline"
                   >
                     + สร้างไฟล์ Google Sheets เก็บตารางงาน
@@ -5267,7 +5354,8 @@ export default function App() {
 
           <div className="flex items-center gap-2 shrink-0">
             {needsAuth ? (
-              activeSection === 'database' ? (
+              activeSection === 'database' ||
+              (activeSection === 'settings' && settingsSubTab === 'database') ? (
                 <GoogleSignInButton
                   onClick={handleGoogleLogin}
                   disabled={isLoggingIn}
@@ -5446,10 +5534,10 @@ export default function App() {
                   </div>
                   <div className="min-w-0 space-y-1">
                     <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-tight">
-                      กำหนดการภารกิจของผู้อำนวยการ
+                      {orgSettings.boardTitle}
                     </h1>
                     <div className="text-xs sm:text-sm font-semibold tracking-wide text-indigo-700">
-                      สำนักบริหารแรงงานต่างด้าว · กรมการจัดหางาน
+                      {formatOrgSubtitle(orgSettings)}
                     </div>
                     <div className="pt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-slate-600">
                       <span className="inline-flex items-baseline gap-1.5">
@@ -5727,7 +5815,8 @@ export default function App() {
                     disabled={isSendingPush}
                     onClick={async () => {
                       await handleTestLinePush();
-                      setActiveSection('line');
+                      setSettingsSubTab('line');
+                      setActiveSection('settings');
                     }}
                     className="inline-flex items-center justify-center gap-1.5 h-10 px-4 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/90 rounded-xl hover:bg-indigo-100 transition-all whitespace-nowrap shrink-0"
                   >
@@ -6233,6 +6322,7 @@ export default function App() {
           <ScheduleBoardView
             tasks={tasks}
             categories={categories}
+            orgSettings={orgSettings}
             onAddTaskForDate={(date) => {
               setEditingTask(null);
               setModalInitialDate(date);
@@ -6271,6 +6361,7 @@ export default function App() {
         )}
 
         {(activeSection === 'team' ||
+          activeSection === 'settings' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           !isAdminUnlocked && (
@@ -6292,9 +6383,7 @@ export default function App() {
                     <strong className="text-indigo-700">
                       {activeSection === 'team'
                         ? 'ทีมที่ใช้ปฏิทินร่วมกัน'
-                        : activeSection === 'line'
-                        ? 'แจ้งเตือน & สั่งงาน LINE'
-                        : 'ฐานข้อมูล Google Sheets'}
+                        : 'ศูนย์ตั้งค่าระบบ (หน่วยงาน / LINE / Telegram / Google Sheets)'}
                     </strong>{' '}
                     กรุณากรอกรหัสผ่านเพื่อเข้าจัดการตั้งค่าระบบ
                   </p>
@@ -6354,6 +6443,7 @@ export default function App() {
           )}
 
         {(activeSection === 'team' ||
+          activeSection === 'settings' ||
           activeSection === 'line' ||
           activeSection === 'database') &&
           isAdminUnlocked && (
@@ -6361,7 +6451,7 @@ export default function App() {
               <div className="inline-flex items-center gap-2 font-semibold">
                 <Unlock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
                 <span>
-                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถตั้งค่าทีม, LINE OA และฐานข้อมูล Google Sheets ได้
+                  ปลดล็อกโหมดผู้ดูแลระบบแล้ว — คุณสามารถตั้งค่าชื่อหน่วยงาน, ทีม, LINE OA, Telegram และฐานข้อมูล Google Sheets ได้ครบในที่เดียว
                 </span>
               </div>
               <button
@@ -6394,36 +6484,146 @@ export default function App() {
             onUpdateLineSettings={handleUpdateLineSettings}
             onTestPushNotification={handleTestLinePush}
             onDetectGroupId={handleDetectLineGroupId}
-            onOpenLineCenter={() => setActiveSection('line')}
+            onOpenLineCenter={() => {
+              setSettingsSubTab('line');
+              setActiveSection('settings');
+            }}
             onInviteMember={handleInviteMember}
             onUpdateMemberRole={handleUpdateMemberRole}
             onRemoveMember={handleRemoveMember}
           />
         )}
 
-        {activeSection === 'line' && isAdminUnlocked && (
-          <LineCenterView
-            logs={lineLogs}
-            categories={categories}
-            tasks={tasks}
-            lineSettings={lineSettings}
-            spreadsheetId={sheetMeta?.spreadsheetId || ''}
-            spreadsheetUrl={sheetMeta?.spreadsheetUrl}
-            onUpdateSettings={handleUpdateLineSettings}
-            onSendChatCommand={handleSendLineChatCommand}
-            onTestPushNotification={handleTestLinePush}
-            onTestSingleTaskNotification={(sampleTask) =>
-              dispatchLineReminder(sampleTask, true)
-            }
-            onOpenDateInCalendar={handleOpenDateInCalendar}
-            onPullFromSheets={handlePullFromSheets}
-            onCreateSpreadsheet={() =>
-              handleCreateNewSpreadsheet('ระบบน้องเลขา — ฐานข้อมูลตารางงานและแจ้งเตือน')
-            }
-            isSendingPush={isSendingPush}
-            isSyncing={isSyncing}
-          />
-        )}
+        {(activeSection === 'settings' ||
+          activeSection === 'line' ||
+          activeSection === 'database') &&
+          isAdminUnlocked && (
+            <SystemSettingsView
+              activeSubTab={
+                activeSection === 'line'
+                  ? 'line'
+                  : activeSection === 'database'
+                  ? 'database'
+                  : settingsSubTab
+              }
+              onChangeSubTab={(tab) => {
+                setSettingsSubTab(tab);
+                if (activeSection !== 'settings') {
+                  setActiveSection('settings');
+                }
+              }}
+              orgSettings={orgSettings}
+              onSaveOrgSettings={async (nextOrg, syncTelegramHeader) => {
+                const savedOrg = writeLocalOrgSettings(nextOrg);
+                orgSettingsRef.current = savedOrg;
+                setOrgSettings(savedOrg);
+                if (syncTelegramHeader) {
+                  handleUpdateLineSettings({
+                    ...lineSettings,
+                    telegramHeaderTitle: buildDefaultTelegramHeader(savedOrg),
+                  });
+                }
+                await pushCollaborativeWorkspace(
+                  tasksRef.current,
+                  categoriesRef.current,
+                  teamMembersRef.current
+                );
+                showNotice(
+                  'success',
+                  `บันทึกชื่อหน่วยงาน "${formatOrgSubtitle(savedOrg)}" และซิงค์ไปยังทุกหน้าจอเรียบร้อยแล้ว`
+                );
+              }}
+              onImportBundleSettings={async (bundle) => {
+                if (bundle.orgSettings) {
+                  const savedOrg = writeLocalOrgSettings({
+                    ...bundle.orgSettings,
+                    updatedAt: new Date().toISOString(),
+                  });
+                  orgSettingsRef.current = savedOrg;
+                  setOrgSettings(savedOrg);
+                }
+                if (bundle.lineSettings) {
+                  handleUpdateLineSettings({
+                    ...lineSettings,
+                    ...bundle.lineSettings,
+                  });
+                }
+                if (
+                  bundle.gasUrl &&
+                  bundle.gasUrl.startsWith('https://script.google.com/macros/s/')
+                ) {
+                  try {
+                    localStorage.setItem('sheetcal_gas_webapp_url_v1', bundle.gasUrl);
+                    localStorage.setItem('sheetcal_gas_url_v1', bundle.gasUrl);
+                  } catch {
+                    // Ignore
+                  }
+                }
+                if (bundle.spreadsheetId) {
+                  setSpreadsheetInput(bundle.spreadsheetId);
+                }
+                await pushCollaborativeWorkspace(
+                  tasksRef.current,
+                  categoriesRef.current,
+                  teamMembersRef.current
+                );
+                showNotice(
+                  'success',
+                  'นำเข้าการตั้งค่าระบบจากไฟล์ JSON และซิงค์เรียบร้อยแล้ว'
+                );
+              }}
+              logs={lineLogs}
+              categories={categories}
+              tasks={tasks}
+              lineSettings={lineSettings}
+              onUpdateLineSettings={handleUpdateLineSettings}
+              onSendChatCommand={handleSendLineChatCommand}
+              onTestPushNotification={handleTestLinePush}
+              onTestSingleTaskNotification={(sampleTask) =>
+                dispatchLineReminder(sampleTask, true)
+              }
+              onOpenDateInCalendar={handleOpenDateInCalendar}
+              isSendingPush={isSendingPush}
+              user={user}
+              accessToken={accessToken}
+              isLoggingIn={isLoggingIn}
+              isSyncing={isSyncing}
+              sheetMeta={sheetMeta}
+              spreadsheetInput={spreadsheetInput}
+              onChangeSpreadsheetInput={setSpreadsheetInput}
+              onLogin={handleGoogleLogin}
+              onLogout={handleGoogleLogout}
+              onCreateNewSpreadsheet={handleCreateNewSpreadsheet}
+              onConnectExistingSpreadsheet={handleConnectExistingSpreadsheet}
+              onPushToSheets={handlePushToSheetsWithConfirm}
+              onPullFromSheets={handlePullFromSheets}
+              autoSyncConfig={sheetAutoSyncConfig}
+              onUpdateAutoSyncConfig={handleUpdateSheetAutoSyncConfig}
+              lastSyncedAt={lastCollabSyncAt}
+              onSaveAndSyncNow={async (sheetIdOrUrl, gasUrl) => {
+                if (gasUrl && gasUrl.startsWith('https://script.google.com/macros/s/')) {
+                  try {
+                    localStorage.setItem('sheetcal_gas_webapp_url_v1', gasUrl);
+                    localStorage.setItem('sheetcal_gas_url_v1', gasUrl);
+                  } catch {
+                    // Ignore
+                  }
+                }
+                await pushCollaborativeWorkspace(tasks, categories, teamMembers);
+                if (sheetIdOrUrl) {
+                  const cleanId = extractSpreadsheetId(sheetIdOrUrl);
+                  if (cleanId) {
+                    await handleConnectExistingSpreadsheet(cleanId);
+                    return;
+                  }
+                }
+                showNotice(
+                  'success',
+                  'บันทึกการตั้งค่าและซิงค์ฐานข้อมูล Google Sheets อัตโนมัติเรียบร้อยแล้ว!'
+                );
+              }}
+            />
+          )}
 
         {activeSection === 'categories' && (
           <CategoryManagerView
@@ -6440,59 +6640,14 @@ export default function App() {
             }}
           />
         )}
-
-        {activeSection === 'database' && isAdminUnlocked && (
-          <SheetsDatabaseView
-            user={user}
-            accessToken={accessToken}
-            isLoggingIn={isLoggingIn}
-            isSyncing={isSyncing}
-            sheetMeta={sheetMeta}
-            spreadsheetInput={spreadsheetInput}
-            onChangeSpreadsheetInput={setSpreadsheetInput}
-            onLogin={handleGoogleLogin}
-            onLogout={handleGoogleLogout}
-            onCreateNewSpreadsheet={handleCreateNewSpreadsheet}
-            onConnectExistingSpreadsheet={handleConnectExistingSpreadsheet}
-            onPushToSheets={handlePushToSheetsWithConfirm}
-            onPullFromSheets={handlePullFromSheets}
-            tasks={tasks}
-            categories={categories}
-            logs={lineLogs}
-            autoSyncConfig={sheetAutoSyncConfig}
-            onUpdateAutoSyncConfig={handleUpdateSheetAutoSyncConfig}
-            lastSyncedAt={lastCollabSyncAt}
-            onSaveAndSyncNow={async (sheetIdOrUrl, gasUrl) => {
-              if (gasUrl && gasUrl.startsWith('https://script.google.com/macros/s/')) {
-                try {
-                  localStorage.setItem('sheetcal_gas_webapp_url_v1', gasUrl);
-                  localStorage.setItem('sheetcal_gas_url_v1', gasUrl);
-                } catch {
-                  // Ignore
-                }
-              }
-              await pushCollaborativeWorkspace(tasks, categories, teamMembers);
-              if (sheetIdOrUrl) {
-                const cleanId = extractSpreadsheetId(sheetIdOrUrl);
-                if (cleanId) {
-                  await handleConnectExistingSpreadsheet(cleanId);
-                  return;
-                }
-              }
-              showNotice(
-                'success',
-                'บันทึกการตั้งค่าและซิงค์ฐานข้อมูล Google Sheets อัตโนมัติเรียบร้อยแล้ว!'
-              );
-            }}
-          />
-        )}
       </main>
 
       {/* Quiet Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 sm:px-6 pt-4 pb-20 md:pb-4 mt-12">
         <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
           <span>
-            ระบบน้องเลขา — ระบบปฏิทินตารางงานร่วมกันของทีม แจ้งเตือนผ่าน LINE OA และฐานข้อมูล Google Sheets
+            {orgSettings.appName} ({formatOrgSubtitle(orgSettings)}) —{' '}
+            {orgSettings.footerDescription}
           </span>
           <div className="flex flex-wrap items-center gap-4">
             <button
@@ -6511,17 +6666,13 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveSection('database')}
+              onClick={() => {
+                setSettingsSubTab('organization');
+                setActiveSection('settings');
+              }}
               className="hover:text-slate-900 transition-colors"
             >
-              ฐานข้อมูล Google Sheets
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSection('line')}
-              className="hover:text-slate-900 transition-colors"
-            >
-              ตั้งค่าแจ้งเตือน LINE OA
+              ตั้งค่าระบบ (หน่วยงาน / LINE / Telegram / Sheets)
             </button>
           </div>
         </div>
@@ -6530,7 +6681,7 @@ export default function App() {
       {/* Thumb-Friendly Mobile Bottom Navigation Bar (< 768px) */}
       <nav
         aria-label="เมนูหลักบนมือถือ"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] grid grid-cols-6 gap-1 shadow-lg"
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] grid grid-cols-5 gap-1 shadow-lg"
       >
         <button
           type="button"
@@ -6582,27 +6733,21 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveSection('line')}
+          onClick={() => {
+            setAdminPasscodeError('');
+            setActiveSection('settings');
+          }}
           className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
-            activeSection === 'line'
-              ? 'text-[#06C755] bg-emerald-50/90'
+            activeSection === 'settings' ||
+            activeSection === 'line' ||
+            activeSection === 'database' ||
+            activeSection === 'categories'
+              ? 'text-indigo-700 bg-indigo-50/90'
               : 'text-slate-500 hover:text-slate-900'
           }`}
         >
-          <MessageSquareText className="h-4 w-4 mb-0.5" />
-          <span>LINE OA</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveSection('database')}
-          className={`relative flex flex-col items-center justify-center py-1 rounded-xl text-[10px] font-bold transition-all ${
-            activeSection === 'database' || activeSection === 'categories'
-              ? 'text-violet-700 bg-violet-50/90'
-              : 'text-slate-500 hover:text-slate-900'
-          }`}
-        >
-          <Cloud className="h-4 w-4 mb-0.5" />
-          <span>Google ชีต</span>
+          <Settings className="h-4 w-4 mb-0.5" />
+          <span>ตั้งค่าระบบ</span>
         </button>
       </nav>
 

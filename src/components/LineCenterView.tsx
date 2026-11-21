@@ -68,11 +68,16 @@ import {
 } from '../services/telegramCardRenderer';
 import { DEFAULT_GAS_WEB_APP_URL } from '../data/initialData';
 
+import { OrganizationSettings } from '../types';
+import { DEFAULT_ORG_SETTINGS } from '../services/orgSettings';
+
 interface LineCenterViewProps {
   logs: LineMessageLog[];
   categories: Category[];
   tasks: Task[];
   lineSettings: LineSettings;
+  orgSettings?: OrganizationSettings;
+  initialSettingsTab?: 'timing' | 'format' | 'triggers' | 'api' | 'telegram';
   spreadsheetId: string;
   spreadsheetUrl?: string;
   onUpdateSettings: (newSettings: LineSettings) => void;
@@ -248,6 +253,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   categories,
   tasks,
   lineSettings,
+  orgSettings = DEFAULT_ORG_SETTINGS,
+  initialSettingsTab,
   spreadsheetId,
   spreadsheetUrl,
   onUpdateSettings,
@@ -265,7 +272,13 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   const [showScriptPanel, setShowScriptPanel] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<
     'timing' | 'format' | 'triggers' | 'api' | 'telegram'
-  >('format');
+  >(initialSettingsTab || 'format');
+
+  useEffect(() => {
+    if (initialSettingsTab) {
+      setActiveSettingsTab(initialSettingsTab);
+    }
+  }, [initialSettingsTab]);
   const [isDetectingTelegram, setIsDetectingTelegram] = useState(false);
   const [telegramDetectResult, setTelegramDetectResult] = useState<{
     ok: boolean;
@@ -2062,7 +2075,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                         {formatSummaryCardHeaderDate(selectedPreviewDate, previewDigestTasks)}
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5">
-                        สำนักบริหารแรงงานต่างด้าว
+                        {orgSettings.agencyName}
                       </div>
 
                       {/* 3-Column Executive KPI Strip */}
@@ -2643,7 +2656,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                                   )}
                             </div>
                             <div className="text-[11px] text-slate-400 mt-0.5">
-                              สำนักบริหารแรงงานต่างด้าว
+                              {orgSettings.agencyName}
                             </div>
 
                             {/* 3-Column Executive KPI Strip */}
