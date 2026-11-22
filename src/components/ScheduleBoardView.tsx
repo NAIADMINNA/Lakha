@@ -5148,12 +5148,29 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                       </div>
                     </div>
 
+                    <div className="rounded-lg border border-amber-300 bg-amber-50/90 px-3 py-2 text-[11px] text-amber-950 leading-relaxed space-y-1">
+                      <p className="font-extrabold text-amber-900">
+                        ข้อควรระวังเมื่อพิมพ์บน Smart TV (ไม่งั้นจะขึ้นว่าไม่พบหน้าเว็บ):
+                      </p>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        <li>
+                          <strong>ต้องพิมพ์ในช่อง URL (Address Bar) ด้านบนสุดของเบราว์เซอร์</strong>{' '}
+                          ห้ามพิมพ์ในช่องค้นหา Google / Bing ตรงกลางจอ เพราะระบบจะเอาไปค้นหาแทนแล้วไม่เจอครับ
+                        </li>
+                        <li>
+                          <strong>ตัว L ในคำว่า <code className="px-1 rounded bg-white border border-amber-300 font-mono font-extrabold text-red-700">/Lakha/</code> ต้องเป็นตัวพิมพ์ใหญ่</strong>{' '}
+                          (หากพิมพ์ตัวเล็ก <code className="font-mono">/lakha/</code> เซิร์ฟเวอร์จะแจ้ง 404 ไม่พบหน้าเว็บ)
+                        </li>
+                      </ul>
+                    </div>
+
                     <ol className="text-[11px] text-slate-700 space-y-1 list-decimal list-inside leading-relaxed">
                       <li>
                         เปิดแอป <strong>Browser / Internet</strong> บน Smart TV (ต่อ Wi-Fi หรือสาย LAN ของสำนักงาน)
                       </li>
                       <li>
-                        พิมพ์ลิงก์สั้นด้านบน (หรือสแกน QR ด้วยมือถือแล้วส่งผ่านแอป SmartThings / LG ThinQ / Google TV)
+                        เลื่อนเคอร์เซอร์ไปที่ <strong>ช่องใส่ URL ด้านบนสุด</strong> พิมพ์ลิงก์สั้นด้านบน (ตรวจตัว{' '}
+                        <strong>L พิมพ์ใหญ่</strong>) หรือสแกน QR ด้วยมือถือแล้วส่งผ่านแอป SmartThings / LG ThinQ / Google TV
                       </li>
                       <li>
                         กดปุ่ม <strong>OK / Enter</strong> บนรีโมทเพื่อขยายเต็มจอ แล้วกด{' '}
