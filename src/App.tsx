@@ -234,7 +234,15 @@ export default function App() {
       if (tvParam === '1' || tvParam === 'true' || tvParam === 'tv') {
         return 'schedule';
       }
+      const ua = String(window.navigator?.userAgent || '');
+      const isSmartTvBrowser =
+        /SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|AFTB|AFTT|AFTS|AFTM|AFTR|AFTN|AFTK|Android TV|GoogleTV|Viera|CrKey|MiBOX|Hisense|VIDAA|TCL|Philips|Opera TV|CE-HTML|HbbTV|Large Screen/i.test(
+          ua
+        );
       const sec = (params.get('section') || params.get('view') || '').trim().toLowerCase();
+      if (!sec && isSmartTvBrowser) {
+        return 'schedule';
+      }
       if (sec === 'line' || sec === 'telegram' || sec === 'database' || sec === 'settings') {
         return 'settings';
       }
@@ -6356,6 +6364,9 @@ export default function App() {
                 categoriesRef.current,
                 teamMembersRef.current
               );
+            }}
+            onForceRefreshFromCloud={() => {
+              void pullLatestTeamCalendar(true);
             }}
           />
         )}

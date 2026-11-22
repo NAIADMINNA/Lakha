@@ -1520,6 +1520,91 @@ export function resolvePublicTvShareUrl(options?: {
   }
 }
 
+export function resolveShortTvBrowserUrl(options?: { customPublicUrl?: string }): string {
+  const isLoginGatedOrInvalidForTv = (u: string) =>
+    !u ||
+    !/^https?:\/\//i.test(u) ||
+    /^https:\/\/ais-(dev|pre)-/i.test(u) ||
+    u.includes('docs.google.com/spreadsheets') ||
+    u.includes('calendar.google.com') ||
+    u.includes('script.google.com/macros/s/') ||
+    u.includes('AKfycby0gvQ') ||
+    u.includes('AKfycbxIf9k');
+
+  let savedTvBase = '';
+  let savedLinePublicUrl = '';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      savedTvBase = (localStorage.getItem('sheetcal_public_tv_base_url_v1') || '').trim();
+      const rawLineCfg = localStorage.getItem('sheetcal_line_settings_v2');
+      if (rawLineCfg) {
+        const parsedCfg = JSON.parse(rawLineCfg);
+        if (typeof parsedCfg?.publicCalendarUrl === 'string') {
+          savedLinePublicUrl = parsedCfg.publicCalendarUrl.trim();
+        }
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+
+  const explicitCustom = (options?.customPublicUrl || '').trim();
+  const currentBrowserUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+
+  let rawBase = 'https://naiadminna.github.io/Lakha/';
+  if (!isLoginGatedOrInvalidForTv(explicitCustom)) {
+    rawBase = explicitCustom;
+  } else if (!isLoginGatedOrInvalidForTv(savedTvBase)) {
+    rawBase = savedTvBase;
+  } else if (!isLoginGatedOrInvalidForTv(currentBrowserUrl)) {
+    rawBase = currentBrowserUrl;
+  } else if (!isLoginGatedOrInvalidForTv(savedLinePublicUrl)) {
+    rawBase = savedLinePublicUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(rawBase);
+    parsedUrl.search = '';
+    parsedUrl.hash = '';
+    parsedUrl.searchParams.set('tv', '1');
+    return parsedUrl.toString();
+  } catch {
+    return 'https://naiadminna.github.io/Lakha/?tv=1';
+  }
+}
+
+export function hasCustomAgencyTvConfig(): boolean {
+  const defaultWorkspace = 'sheetcal-team-clean';
+  const defaultSheet = '1Jjg5fqaul_Q3VFQQRY0H02JltmfhL0_kNe4TmiwufWc';
+  const defaultGas =
+    'https://script.google.com/macros/s/AKfycbxPgbnfAD8aJLzG9Vy8mybzN6dSBJRADHnKHf_J2L2hTtZqUhqW2ERjp01d8IIIk-r_Vg/exec';
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    const ws = (localStorage.getItem('sheetcal_workspace_id_v3_clean') || '').trim();
+    if (ws && ws !== defaultWorkspace) return true;
+    const rawMeta = localStorage.getItem('sheetcal_sheet_meta_v1');
+    if (rawMeta) {
+      const parsed = JSON.parse(rawMeta);
+      const sheetId = typeof parsed?.spreadsheetId === 'string' ? parsed.spreadsheetId.trim() : '';
+      if (sheetId && sheetId !== defaultSheet) return true;
+    }
+    const savedGas = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+    if (
+      savedGas &&
+      savedGas.startsWith('https://script.google.com/macros/s/') &&
+      savedGas !== defaultGas &&
+      !savedGas.includes('AKfycby0gvQ') &&
+      !savedGas.includes('AKfycbxIf9k')
+    ) {
+      return true;
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return false;
+}
+
 export function isLineQuotaLimitError(rawError: unknown): boolean {
   const text = String(rawError || '').toLowerCase();
   return (

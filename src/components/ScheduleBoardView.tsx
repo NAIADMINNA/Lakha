@@ -23,18 +23,22 @@ import {
   Pause,
   Play,
   Plus,
+  QrCode,
   Radio,
   RefreshCw,
   RotateCcw,
   Search,
   Send,
   SlidersHorizontal,
+  Smartphone,
   Sun,
   Sunset,
   Tv,
   Users,
+  Wifi,
   X,
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import {
   Category,
   DirectorPresenceMode,
@@ -55,9 +59,11 @@ import {
   formatTaskDateRangeLabel,
   formatThaiDateDisplay,
   getTaskDurationDays,
+  hasCustomAgencyTvConfig,
   inferTaskEndDate,
   isTaskActiveOnDate,
   resolvePublicTvShareUrl,
+  resolveShortTvBrowserUrl,
 } from '../services/lineCommandParser';
 import { ROBOT_MASCOT_DATA_URI } from '../assets/robotMascotDataUri';
 import {
@@ -94,6 +100,7 @@ interface ScheduleBoardViewProps {
   onOpenCalendarDate: (dateStr: string) => void;
   onPresenceStaticSync?: () => void;
   onForcePushRealtimeToTv?: (currentBoardSettings: BoardRemoteSettings) => void;
+  onForceRefreshFromCloud?: () => void;
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
@@ -259,6 +266,22 @@ interface TvStageMetrics {
   isLandscape: boolean;
 }
 
+function getNativeFullscreenElement(): Element | null {
+  if (typeof document === 'undefined') return null;
+  const doc = document as Document & {
+    webkitFullscreenElement?: Element | null;
+    mozFullScreenElement?: Element | null;
+    msFullscreenElement?: Element | null;
+  };
+  return (
+    doc.fullscreenElement ||
+    doc.webkitFullscreenElement ||
+    doc.mozFullScreenElement ||
+    doc.msFullscreenElement ||
+    null
+  );
+}
+
 function detectAutoTvEnvironment(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -276,7 +299,7 @@ function detectAutoTvEnvironment(): boolean {
     }
     const ua = String(window.navigator?.userAgent || '');
     if (
-      /SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|AFTB|AFTT|AFTS|AFTM|AFTR|Android TV|GoogleTV|Viera|CrKey|MiBOX/i.test(
+      /SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|AFTB|AFTT|AFTS|AFTM|AFTR|AFTN|AFTK|Android TV|GoogleTV|Viera|CrKey|MiBOX|Hisense|VIDAA|TCL|Philips|Opera TV|CE-HTML|HbbTV|Large Screen/i.test(
         ua
       )
     ) {
@@ -448,6 +471,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onOpenCalendarDate,
   onPresenceStaticSync,
   onForcePushRealtimeToTv,
+  onForceRefreshFromCloud,
 }) => {
   // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
   const [nowDate, setNowDate] = useState<Date>(() => getInternetNow());
@@ -544,7 +568,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     () => shouldStartFullscreen
   );
   const [isNativeFullscreen, setIsNativeFullscreen] = useState<boolean>(() =>
-    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+    Boolean(getNativeFullscreenElement())
   );
   const [dismissedTvFullscreenPrompt, setDismissedTvFullscreenPrompt] = useState<boolean>(false);
   const [isToolbarCollapsedInFullscreen, setIsToolbarCollapsedInFullscreen] =
@@ -567,6 +591,10 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   );
   const [isTvControlsIdle, setIsTvControlsIdle] = useState<boolean>(false);
   const [copiedTvLink, setCopiedTvLink] = useState<boolean>(false);
+  const [copiedShortTvLink, setCopiedShortTvLink] = useState<boolean>(false);
+  const [tvQrDataUrl, setTvQrDataUrl] = useState<string>('');
+  const [tvRemoteToast, setTvRemoteToast] = useState<string>('');
+  const [burnInOffset, setBurnInOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isTvRemoteModalOpen, setIsTvRemoteModalOpen] = useState<boolean>(false);
   const [connectedTvScreens, setConnectedTvScreens] = useState<
     Record<string, TvScreenHeartbeat>
@@ -578,8 +606,20 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     isRealtimeWebSocketConnected()
   );
   const tvIdleTimerRef = useRef<number | null>(null);
+  const tvRemoteToastTimerRef = useRef<number | null>(null);
   const boardStaticSyncTimerRef = useRef<number | null>(null);
   const loadedScriptHashRef = useRef<string>('');
+
+  const showTvRemoteToast = useCallback((message: string) => {
+    setTvRemoteToast(message);
+    if (tvRemoteToastTimerRef.current !== null) {
+      window.clearTimeout(tvRemoteToastTimerRef.current);
+    }
+    tvRemoteToastTimerRef.current = window.setTimeout(() => {
+      setTvRemoteToast('');
+      tvRemoteToastTimerRef.current = null;
+    }, 2400);
+  }, []);
 
   const isToolbarInteractionLocked = useCallback(() => {
     if (isTvRemoteModalOpen) return true;
@@ -658,12 +698,14 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   const requestNativeFullscreen = useCallback(async () => {
     if (typeof document === 'undefined') return false;
     try {
-      if (document.fullscreenElement) {
+      if (getNativeFullscreenElement()) {
         setIsNativeFullscreen(true);
         return true;
       }
       const rootEl = document.documentElement as HTMLElement & {
         webkitRequestFullscreen?: () => Promise<void> | void;
+        mozRequestFullScreen?: () => Promise<void> | void;
+        msRequestFullscreen?: () => Promise<void> | void;
       };
       if (typeof rootEl.requestFullscreen === 'function') {
         await rootEl.requestFullscreen();
@@ -672,6 +714,16 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
       if (typeof rootEl.webkitRequestFullscreen === 'function') {
         await rootEl.webkitRequestFullscreen();
+        setIsNativeFullscreen(true);
+        return true;
+      }
+      if (typeof rootEl.mozRequestFullScreen === 'function') {
+        await rootEl.mozRequestFullScreen();
+        setIsNativeFullscreen(true);
+        return true;
+      }
+      if (typeof rootEl.msRequestFullscreen === 'function') {
+        await rootEl.msRequestFullscreen();
         setIsNativeFullscreen(true);
         return true;
       }
@@ -709,7 +761,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     requestNativeFullscreen();
   }, [shouldStartFullscreen, requestNativeFullscreen]);
 
-  // Real-time TV resolution, DPI scale, orientation, Esc, and browser Fullscreen synchronization
+  // Real-time TV resolution, DPI scale, orientation, Esc, Smart TV remote keys, and browser Fullscreen synchronization
   const wasNativeFullscreenRef = useRef<boolean>(false);
   useEffect(() => {
     const syncViewportMetrics = () => {
@@ -729,7 +781,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
 
     const handleFullscreenChange = () => {
       syncViewportMetrics();
-      const nowFull = Boolean(document.fullscreenElement);
+      const nowFull = Boolean(getNativeFullscreenElement());
       setIsNativeFullscreen(nowFull);
       if (nowFull) {
         wasNativeFullscreenRef.current = true;
@@ -748,26 +800,137 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       }
     };
 
+    const scrollActiveSchedulePanels = (deltaY: number) => {
+      const root = containerRef.current;
+      let scrolledAny = false;
+      if (root) {
+        const panels = Array.from(root.querySelectorAll<HTMLElement>('[class*="overflow-y-auto"]'));
+        panels.forEach((panel) => {
+          if (panel.scrollHeight > panel.clientHeight + 8) {
+            panel.scrollBy({ top: deltaY, behavior: 'smooth' });
+            scrolledAny = true;
+          }
+        });
+      }
+      if (!scrolledAny && typeof window !== 'undefined') {
+        window.scrollBy({ top: deltaY, behavior: 'smooth' });
+      }
+    };
+
     const handleKeyDown = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape' && isTvRemoteModalOpen) {
         setIsTvRemoteModalOpen(false);
         return;
       }
+      if (isToolbarInteractionLocked()) {
+        return;
+      }
+
       if (ev.key === 'Escape' && isPresentationMode) {
         setIsPresentationMode(false);
         setIsToolbarCollapsedInFullscreen(false);
         setIsTvControlsIdle(false);
         return;
       }
+
+      const key = ev.key;
+      const keyCode = ev.keyCode;
+
+      // Smart TV Remote OK / Enter / F key: enter native fullscreen when available
       if (
         isPresentationMode &&
-        !document.fullscreenElement &&
-        !isToolbarInteractionLocked() &&
-        (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'f' || ev.key === 'F')
+        !getNativeFullscreenElement() &&
+        (key === 'Enter' || key === 'NumpadEnter' || key === 'f' || key === 'F')
       ) {
         requestNativeFullscreen();
+        showTvRemoteToast('ขยายเต็มจอทีวีแล้ว');
         return;
       }
+
+      // Smart TV Remote Play/Pause or Spacebar: toggle auto-scroll
+      if (
+        (isPresentationMode || isTvLaunchEnv) &&
+        (key === ' ' || key === 'MediaPlayPause' || key === 'Play' || key === 'Pause')
+      ) {
+        ev.preventDefault();
+        if (!getNativeFullscreenElement() && !dismissedTvFullscreenPrompt && key === ' ') {
+          requestNativeFullscreen();
+          return;
+        }
+        setIsAutoScroll((prev) => {
+          const next = !prev;
+          showTvRemoteToast(next ? 'เริ่มเลื่อนรายการอัตโนมัติ' : 'หยุดเลื่อนชั่วคราว');
+          return next;
+        });
+        return;
+      }
+
+      // Smart TV Remote D-Pad Up/Down & Channel/Page Up/Down: manual scroll
+      if (
+        (isPresentationMode || isTvLaunchEnv) &&
+        (key === 'ArrowDown' || key === 'PageDown' || key === 'ChannelDown')
+      ) {
+        ev.preventDefault();
+        scrollActiveSchedulePanels(key === 'ArrowDown' ? 220 : 420);
+        return;
+      }
+      if (
+        (isPresentationMode || isTvLaunchEnv) &&
+        (key === 'ArrowUp' || key === 'PageUp' || key === 'ChannelUp')
+      ) {
+        ev.preventDefault();
+        scrollActiveSchedulePanels(key === 'ArrowUp' ? -220 : -420);
+        return;
+      }
+
+      // Smart TV Remote Number Keys (0 = Toolbar, 1-4 = Themes, 5/Red = Sync Now, 9 = Auto-Fit)
+      if (isPresentationMode || isTvLaunchEnv) {
+        if (key === '0' || key === 'ContextMenu') {
+          ev.preventDefault();
+          setIsToolbarCollapsedInFullscreen((prev) => {
+            const next = !prev;
+            setIsTvControlsIdle(next);
+            showTvRemoteToast(next ? 'ซ่อนแถบเครื่องมือแล้ว' : 'แสดงแถบเครื่องมือ');
+            return next;
+          });
+          return;
+        }
+        if (key === '1') {
+          setBoardTheme('navy_gold');
+          showTvRemoteToast('โทนสี: กรมท่า-ทอง (ผู้บริหาร)');
+          return;
+        }
+        if (key === '2') {
+          setBoardTheme('dark');
+          showTvRemoteToast('โทนสี: มืด (กลางคืน)');
+          return;
+        }
+        if (key === '3') {
+          setBoardTheme('light');
+          showTvRemoteToast('โทนสี: สว่าง');
+          return;
+        }
+        if (key === '4') {
+          setBoardTheme('emerald_exec');
+          showTvRemoteToast('โทนสี: เขียวมรกต');
+          return;
+        }
+        if (key === '5' || key === 'r' || key === 'R' || key === 'ColorF0Red' || keyCode === 403) {
+          ev.preventDefault();
+          onForceRefreshFromCloud?.();
+          showTvRemoteToast('กำลังดึงข้อมูลล่าสุดจากฐานข้อมูล...');
+          return;
+        }
+        if (key === '9') {
+          setIsTvAutoFit((prev) => {
+            const next = !prev;
+            showTvRemoteToast(next ? 'ปรับพอดีจอ TV อัตโนมัติ' : 'สัดส่วนปกติ (1:1)');
+            return next;
+          });
+          return;
+        }
+      }
+
       if (isAutoHideToolbar || isPresentationMode) {
         wakeTvControls();
       }
@@ -777,6 +940,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
     window.addEventListener('resize', syncViewportMetrics);
     window.addEventListener('orientationchange', syncViewportMetrics);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange as EventListener);
     window.addEventListener('keydown', handleKeyDown);
     const vv = window.visualViewport;
     if (vv) {
@@ -787,21 +951,47 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       window.removeEventListener('resize', syncViewportMetrics);
       window.removeEventListener('orientationchange', syncViewportMetrics);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange as EventListener);
       window.removeEventListener('keydown', handleKeyDown);
       if (vv) {
         vv.removeEventListener('resize', syncViewportMetrics);
       }
     };
   }, [
+    dismissedTvFullscreenPrompt,
     isAutoHideToolbar,
     isPresentationMode,
     isToolbarInteractionLocked,
     isTvAutoFit,
     isTvLaunchEnv,
     isTvRemoteModalOpen,
+    onForceRefreshFromCloud,
     requestNativeFullscreen,
+    showTvRemoteToast,
     wakeTvControls,
   ]);
+
+  // Subtle OLED Anti-Burn-In pixel micro-shift every 3 minutes when running all-day on Smart TV
+  useEffect(() => {
+    if (!isPresentationMode && !isTvLaunchEnv) {
+      setBurnInOffset({ x: 0, y: 0 });
+      return;
+    }
+    const offsets = [
+      { x: 0, y: 0 },
+      { x: 2, y: 0 },
+      { x: 2, y: 2 },
+      { x: 0, y: 2 },
+      { x: -2, y: 1 },
+      { x: -1, y: -1 },
+    ];
+    let step = 0;
+    const shiftTimer = window.setInterval(() => {
+      step = (step + 1) % offsets.length;
+      setBurnInOffset(offsets[step]);
+    }, 180000);
+    return () => window.clearInterval(shiftTimer);
+  }, [isPresentationMode, isTvLaunchEnv]);
 
   // Broadcast board display controls to TV screens whenever Admin clicks any toolbar control
   useEffect(() => {
@@ -964,6 +1154,45 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       customPublicUrl: customPublicTvBaseUrl,
     });
   }, [customPublicTvBaseUrl]);
+
+  const tvShortBrowserUrl = useMemo(() => {
+    return resolveShortTvBrowserUrl({
+      customPublicUrl: customPublicTvBaseUrl,
+    });
+  }, [customPublicTvBaseUrl]);
+
+  const isCustomAgencyDb = useMemo(() => hasCustomAgencyTvConfig(), [isTvRemoteModalOpen]);
+  const tvQrTargetUrl = isCustomAgencyDb ? tvDirectShareUrl : tvShortBrowserUrl;
+
+  useEffect(() => {
+    if (!isTvRemoteModalOpen) return;
+    let cancelled = false;
+    QRCode.toDataURL(tvQrTargetUrl, {
+      width: 220,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#0F172A', light: '#FFFFFF' },
+    })
+      .then((dataUrl) => {
+        if (!cancelled) setTvQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setTvQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isTvRemoteModalOpen, tvQrTargetUrl]);
+
+  const handleCopyShortTvLink = async () => {
+    try {
+      await navigator.clipboard.writeText(tvShortBrowserUrl);
+      setCopiedShortTvLink(true);
+      window.setTimeout(() => setCopiedShortTvLink(false), 2600);
+    } catch {
+      // Ignore clipboard restriction
+    }
+  };
 
   const handleCopyTvLink = async () => {
     try {
@@ -2727,9 +2956,17 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
             ? {
                 width: `${tvStageMetrics.stageW}px`,
                 height: `${tvStageMetrics.stageH}px`,
-                transform:
-                  tvStageMetrics.scale !== 1 ? `scale(${tvStageMetrics.scale})` : undefined,
+                transform: `${
+                  burnInOffset.x !== 0 || burnInOffset.y !== 0
+                    ? `translate3d(${burnInOffset.x}px, ${burnInOffset.y}px, 0) `
+                    : ''
+                }${tvStageMetrics.scale !== 1 ? `scale(${tvStageMetrics.scale})` : ''}`.trim() ||
+                  undefined,
                 transformOrigin: 'top left',
+              }
+            : isPresentationMode && (burnInOffset.x !== 0 || burnInOffset.y !== 0)
+            ? {
+                transform: `translate3d(${burnInOffset.x}px, ${burnInOffset.y}px, 0)`,
               }
             : undefined
         }
@@ -4845,25 +5082,175 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 </div>
               </div>
 
-              {/* Channel 1: Separate PC / Notebook+HDMI over Internet / Office Wi-Fi */}
+              {/* Channel 1 (Recommended): Direct Smart TV Built-in Browser — No PC / No HDMI needed */}
+              <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50/50 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Wifi className="h-4 w-4 text-emerald-700 shrink-0" />
+                    <span className="text-xs font-extrabold uppercase tracking-wide text-emerald-900">
+                      ช่องทางที่ 1 (แนะนำ) · เปิดบนเบราว์เซอร์ของ Smart TV โดยตรง (ไม่ต้องต่อคอม)
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                    ไม่ต้องต่อสาย HDMI · ไม่ต้องล็อกอิน
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3.5 items-start">
+                  <div className="space-y-2.5 min-w-0">
+                    <p className="text-xs text-slate-700 leading-relaxed">
+                      รองรับ <strong>Samsung (Tizen Internet)</strong>,{' '}
+                      <strong>LG (webOS Browser)</strong>,{' '}
+                      <strong>Android TV / Google TV / Sony / TCL / Hisense</strong>{' '}
+                      เปิดเว็บเบราว์เซอร์ในตัวทีวีแล้วพิมพ์ลิงก์สั้นด้านล่าง หรือสแกน QR Code ส่งเข้าทีวีได้ทันที ระบบจะปรับเป็นโหมดเต็มจอและซิงก์ข้อมูลจากเครื่องแอดมินผ่านอินเทอร์เน็ตอัตโนมัติ
+                    </p>
+
+                    <div className="rounded-lg border border-emerald-200 bg-white p-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-emerald-800">
+                          ลิงก์สั้นพิมพ์ง่ายด้วยรีโมท TV:
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-500">
+                          {isCustomAgencyDb
+                            ? 'ใช้ฐานข้อมูลที่ตั้งค่าไว้ (แนะนำสแกน QR)'
+                            : 'เปิดได้ทันที ไม่ต้องพิมพ์พารามิเตอร์ยาว'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={tvShortBrowserUrl}
+                          onFocus={(e) => e.currentTarget.select()}
+                          className="flex-1 h-9 px-3 rounded-lg border border-emerald-200 bg-emerald-50/40 text-xs sm:text-sm font-mono font-bold text-slate-900 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCopyShortTvLink}
+                          className={`inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-lg text-xs font-bold transition-colors shrink-0 ${
+                            copiedShortTvLink
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                          }`}
+                        >
+                          {copiedShortTvLink ? (
+                            <>
+                              <Check className="h-3.5 w-3.5" />
+                              <span>คัดลอกลิงก์สั้นแล้ว</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" />
+                              <span>คัดลอกลิงก์สั้น</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <ol className="text-[11px] text-slate-700 space-y-1 list-decimal list-inside leading-relaxed">
+                      <li>
+                        เปิดแอป <strong>Browser / Internet</strong> บน Smart TV (ต่อ Wi-Fi หรือสาย LAN ของสำนักงาน)
+                      </li>
+                      <li>
+                        พิมพ์ลิงก์สั้นด้านบน (หรือสแกน QR ด้วยมือถือแล้วส่งผ่านแอป SmartThings / LG ThinQ / Google TV)
+                      </li>
+                      <li>
+                        กดปุ่ม <strong>OK / Enter</strong> บนรีโมทเพื่อขยายเต็มจอ แล้วกด{' '}
+                        <strong>เพิ่มบุ๊กมาร์ก (Bookmark)</strong> ไว้เปิดรอบหน้าในคลิกเดียว
+                      </li>
+                    </ol>
+                  </div>
+
+                  {/* Offline QR Code for Phone-to-TV Push */}
+                  <div className="flex flex-col items-center justify-center rounded-xl border border-emerald-200 bg-white p-3 shrink-0 sm:w-[148px]">
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-800 mb-1.5">
+                      <QrCode className="h-3.5 w-3.5" />
+                      <span>สแกนเปิดบน TV</span>
+                    </div>
+                    {tvQrDataUrl ? (
+                      <img
+                        src={tvQrDataUrl}
+                        alt="QR Code สำหรับเปิดบน Smart TV"
+                        className="w-28 h-28 rounded-md border border-slate-100"
+                      />
+                    ) : (
+                      <div className="w-28 h-28 rounded-md bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">
+                        กำลังสร้าง QR...
+                      </div>
+                    )}
+                    <div className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-500 text-center leading-tight">
+                      <Smartphone className="h-3 w-3 shrink-0 text-slate-400" />
+                      <span>ส่งลิงก์จากมือถือเข้าทีวี</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Smart TV Remote Shortcut Cheat-Sheet */}
+                <div className="rounded-lg border border-emerald-200/80 bg-white/90 px-3 py-2">
+                  <p className="text-[11px] font-bold text-slate-800 mb-1.5">
+                    ปุ่มลัดบนรีโมท Smart TV (ใช้งานได้ทันทีโดยไม่ต้องต่อเมาส์/คีย์บอร์ด):
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1 text-[11px] text-slate-700">
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        OK / Enter
+                      </kbd>{' '}
+                      ขยายเต็มจอ
+                    </div>
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        0
+                      </kbd>{' '}
+                      ซ่อน/แสดงแถบเมนู
+                    </div>
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        1–4
+                      </kbd>{' '}
+                      เปลี่ยนโทนสีจอ
+                    </div>
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        5 / ปุ่มแดง
+                      </kbd>{' '}
+                      ดึงข้อมูลทันที
+                    </div>
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        ▲ / ▼
+                      </kbd>{' '}
+                      เลื่อนดูตารางงาน
+                    </div>
+                    <div>
+                      <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[10px] font-bold">
+                        Play / Pause
+                      </kbd>{' '}
+                      หยุด/เลื่อนอัตโนมัติ
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Channel 2: Full parameterized link (Custom Agency Database or Notebook+HDMI) */}
               <div className="rounded-xl border border-indigo-200/90 bg-indigo-50/40 p-4 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-extrabold uppercase tracking-wide text-indigo-700">
-                    ช่องทางที่ 1 · คอมแอดมิน + โน้ตบุ๊กอีกเครื่องต่อสาย HDMI เข้าทีวี (ผ่านเน็ต/Wi-Fi)
+                    ช่องทางที่ 2 · ลิงก์เต็มพร้อมรหัสฐานข้อมูลหน่วยงาน / เปิดผ่านโน้ตบุ๊กต่อสาย HDMI
                   </span>
                   <span className="text-[11px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-md">
-                    ไม่ต้องล็อกอินบนโน้ตบุ๊ก
+                    ใช้เมื่อเปลี่ยนฐานข้อมูลเอง
                   </span>
                 </div>
                 <p className="text-xs text-slate-700 leading-relaxed">
-                  เสียบสาย HDMI จากโน้ตบุ๊กเข้าทีวี (แนะนำกด <strong>Windows + P → เฉพาะหน้าจอที่สอง / Second screen only</strong> หรือ <strong>Extend</strong> เพื่อให้ภาพออกเต็มความละเอียดทีวีและไม่ติดขอบดำ) จากนั้นเปิดลิงก์ด้านล่างบนเบราว์เซอร์ของโน้ตบุ๊กและกด <strong>F11</strong> ระบบจะกันพักหน้าจออัตโนมัติและซิงก์กับคอมแอดมินผ่าน <strong>HTTPS (Port 443)</strong> ภายใน ~0.5–1.5 วินาที
+                  หากเปลี่ยนไปใช้ Google Sheets / Apps Script ของหน่วยงานอื่น หรือเปิดผ่านโน้ตบุ๊กต่อสาย HDMI (กด <strong>Windows + P → Second screen only / Extend</strong> แล้วกด <strong>F11</strong>) ให้ใช้ลิงก์เต็มด้านล่างนี้เพื่อให้จอ TV ผูกฐานข้อมูลตรงกับเครื่องแอดมินอัตโนมัติ
                 </p>
                 {isAiStudioLoginGatedOrigin && (
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-[11px] text-emerald-950 leading-relaxed">
-                    <strong>ไม่ต้องล็อกอิน Google บนโน้ตบุ๊ก:</strong> ขณะนี้เครื่องแอดมินเปิดผ่านลิงก์ภายใน AI Studio (
+                    <strong>ไม่ต้องล็อกอิน Google บนจอ TV:</strong> ขณะนี้เครื่องแอดมินเปิดผ่านลิงก์ภายใน AI Studio (
                     <code className="bg-white px-1 rounded font-mono">ais-dev / ais-pre</code>{' '}
                     ซึ่งบังคับล็อกอิน Google) ระบบจึงสร้าง <strong>ลิงก์เว็บสาธารณะ</strong>{' '}
-                    ด้านล่างให้โดยอัตโนมัติ สามารถคัดลอกไปวางบน Chrome / Edge ของโน้ตบุ๊กที่ต่อทีวีได้ทันทีโดยไม่ต้องล็อกอินใดๆ ครับ
+                    ด้านล่างให้โดยอัตโนมัติ สามารถเปิดบน Smart TV หรือโน้ตบุ๊กได้ทันทีโดยไม่ต้องล็อกอินครับ
                   </div>
                 )}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
@@ -4886,12 +5273,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     {copiedTvLink ? (
                       <>
                         <Check className="h-3.5 w-3.5" />
-                        <span>คัดลอกลิงก์แล้ว</span>
+                        <span>คัดลอกลิงก์เต็มแล้ว</span>
                       </>
                     ) : (
                       <>
                         <Copy className="h-3.5 w-3.5" />
-                        <span>คัดลอกลิงก์สำหรับจอ TV</span>
+                        <span>คัดลอกลิงก์เต็ม</span>
                       </>
                     )}
                   </button>
@@ -4915,11 +5302,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                 </div>
               </div>
 
-              {/* Channel 2: Dual-Monitor HDMI / Wireless Display from Admin PC */}
+              {/* Channel 3: Dual-Monitor HDMI / Wireless Display from Admin PC */}
               <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
-                    ช่องทางที่ 2 · ต่อสาย HDMI / Wireless Display แยก 2 จอจากเครื่องแอดมิน
+                    ช่องทางที่ 3 · ต่อสาย HDMI / Wireless Display แยก 2 จอจากเครื่องแอดมิน
                   </span>
                   <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
                     เร็ว 0.00 วินาที · ไม่พึ่งเน็ต
@@ -4931,6 +5318,12 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+      {/* Brief feedback toast when using Smart TV remote shortcut keys */}
+      {tvRemoteToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[70] pointer-events-none rounded-xl border border-emerald-400/50 bg-slate-950/92 px-4 py-2 text-xs sm:text-sm font-bold text-white shadow-2xl backdrop-blur-md">
+          {tvRemoteToast}
         </div>
       )}
       {/* 1-Tap / Remote OK Native Fullscreen Prompt when TV browser blocks auto-fullscreen on load */}

@@ -7,6 +7,10 @@ export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     base: process.env.GITHUB_ACTIONS ? '/Lakha/' : '/',
+    build: {
+      // Support Smart TV built-in browsers (Samsung Tizen, LG webOS, Android TV, Hisense VIDAA)
+      target: ['es2019', 'chrome79', 'safari13'],
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),
