@@ -624,7 +624,8 @@ export async function sendTelegramPhotoCard(params: {
   chatId: string;
   photoDataUrl: string | null;
   captionHtml: string;
-  fallbackHtmlText: string;
+  fallbackHtmlText?: string;
+  allowTextFallback?: boolean;
   buttons?: TelegramInlineButton[][];
   gasUrl?: string;
   dedupKey?: string;
@@ -644,14 +645,23 @@ export async function sendTelegramPhotoCard(params: {
 
   const parsedPhoto = params.photoDataUrl ? dataUrlToPngBlob(params.photoDataUrl) : null;
   if (!parsedPhoto || !params.photoDataUrl) {
-    return sendTelegramNotification({
-      botToken: cleanToken,
-      chatId: params.chatId,
-      htmlText: params.fallbackHtmlText,
-      buttons: params.buttons,
-      gasUrl: params.gasUrl,
-      dedupKey: params.dedupKey,
-    });
+    if (params.allowTextFallback && params.fallbackHtmlText) {
+      return sendTelegramNotification({
+        botToken: cleanToken,
+        chatId: params.chatId,
+        htmlText: params.fallbackHtmlText,
+        buttons: params.buttons,
+        gasUrl: params.gasUrl,
+        dedupKey: params.dedupKey,
+      });
+    }
+    return {
+      ok: false,
+      deliveredCount: 0,
+      failedCount: chatIds.length,
+      transport: 'none',
+      message: 'ไม่สามารถสร้างภาพการ์ด Telegram ได้ (ระบบงดส่งแบบข้อความเพราะตั้งค่าเป็นการ์ดเท่านั้น)',
+    };
   }
 
   const safeCaption = String(params.captionHtml || '').slice(0, 1000);
@@ -793,15 +803,46 @@ export async function sendTelegramPhotoCard(params: {
     }
   }
 
-  // 4. Final graceful fallback to rich HTML text message so notification is never lost
-  return sendTelegramNotification({
-    botToken: cleanToken,
-    chatId: params.chatId,
-    htmlText: params.fallbackHtmlText,
-    buttons: params.buttons,
-    gasUrl: params.gasUrl,
-    dedupKey: params.dedupKey,
-  });
+  // 4. Strict Card-Only mode: NEVER silently downgrade to plain text unless allowTextFallback is explicitly true
+  if (params.allowTextFallback && params.fallbackHtmlText) {
+    return sendTelegramNotification({
+      botToken: cleanToken,
+      chatId: params.chatId,
+      htmlText: params.fallbackHtmlText,
+      buttons: params.buttons,
+      gasUrl: params.gasUrl,
+      dedupKey: params.dedupKey,
+    });
+  }
+
+  return {
+    ok: false,
+    deliveredCount: 0,
+    failedCount: chatIds.length,
+    transport: 'none',
+    message: lastError
+      ? `ส่งการ์ดภาพเข้า Telegram ไม่สำเร็จ (${formatTelegramErrorThai(lastError)}) — งดส่งเป็นข้อความตามการตั้งค่าการ์ดเท่านั้น`
+      : 'ส่งการ์ดภาพเข้า Telegram ไม่สำเร็จ — งดส่งเป็นข้อความตามการตั้งค่าการ์ดเท่านั้น',
+  };
+}
+
+export function markGasTelegramAlreadySent(params: {
+  reminderKey?: string;
+  digestDate?: string;
+  gasUrl?: string;
+}): void {
+  const effectiveGasUrl = (params.gasUrl || getEffectiveGasUrl() || '').trim();
+  if (!effectiveGasUrl.startsWith('https://script.google.com/macros/s/')) return;
+  if (!params.reminderKey && !params.digestDate) return;
+  fetch(effectiveGasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'mark_tg_sent',
+      reminderKey: params.reminderKey || '',
+      digestDate: params.digestDate || '',
+    }),
+  }).catch(() => {});
 }
 
 export async function detectTelegramChats(

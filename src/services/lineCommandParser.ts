@@ -3349,6 +3349,19 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
+    // บันทึกว่าฝั่งเว็บ/เซิร์ฟเวอร์ส่งแจ้งเตือน Telegram แล้ว เพื่อไม่ให้ Trigger ส่งซ้ำ
+    if (payload.action === 'mark_tg_sent') {
+      if (payload.reminderKey) {
+        markTelegramReminderSentInGas(String(payload.reminderKey).trim());
+      }
+      if (payload.digestDate && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(payload.digestDate).trim())) {
+        try {
+          PropertiesService.getScriptProperties().setProperty('LAST_TG_DIGEST_DATE', String(payload.digestDate).trim());
+        } catch (e) {}
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: 'ok', mode: 'gas_mark_tg_sent' })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // ส่งแจ้งเตือนผ่าน Telegram Bot API (ฟรีไม่จำกัดข้อความ)
     if (payload.action === 'push_telegram') {
       var tgRes = sendTelegramMessageInGas({
@@ -5087,15 +5100,17 @@ function sendDailyTelegramDigest() {
         '📅 ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(todayYMD)) + ' · อัปเดต <code>' + nowHM + ' น.</code>',
         '📊 ทั้งหมด <b>' + todayTasks.length + '</b> งาน · รอทำ <b>' + pendingCnt + '</b> · เสร็จแล้ว <b>' + doneCnt + '</b>'
       ];
-      var photoRes = sendTelegramPhotoBlobInGas({
+      sendTelegramPhotoBlobInGas({
         botToken: token,
         chatId: chatId,
         photoBlob: digestBlob,
         captionHtml: captionLines.join('\\n'),
         dedupKey: dedupKey
       });
-      if (photoRes.ok) return;
+    } else {
+      Logger.log('งดส่งข้อความธรรมดาเนื่องจากตั้งค่าโหมดการ์ดภาพเท่านั้น — กรุณารัน testSendTelegramReminderNow เพื่ออนุญาตสิทธิ์ Google Slides/Drive');
     }
+    return;
   }
 
   var rows = [];
@@ -5218,10 +5233,10 @@ function checkTelegramTaskReminders() {
               captionHtml: photoCaption,
               dedupKey: 'gas-tg-rem-' + dedupKey
             });
+          } else {
+            Logger.log('งดส่งแบบข้อความเนื่องจากตั้งค่าโหมดการ์ดภาพเท่านั้น — กรุณารัน testSendTelegramReminderNow เพื่ออนุญาตสิทธิ์ Slides/Drive');
           }
-        }
-
-        if (!sendRes.ok) {
+        } else {
           var prioBadge = task.priority === 'high'
             ? '🔴 ด่วนมาก'
             : (task.priority === 'low' ? '🟢 ทั่วไป' : '🟡 สำคัญปานกลาง');
@@ -5296,15 +5311,19 @@ function testSendTelegramReminderNow() {
   };
   if (cfg.deliveryMode !== 'text_html') {
     var testBlob = renderSingleTaskCardBlobInGas(sampleTask, 'ทดสอบระบบการ์ดภาพ', cfg, null);
-    if (testBlob) {
-      var pRes = sendTelegramPhotoBlobInGas({
-        botToken: token,
-        chatId: chatId,
-        photoBlob: testBlob,
-        captionHtml: '✅ <b>ระบบส่งการ์ดภาพ Telegram อัตโนมัติ 24 ชม. พร้อมทำงานแล้ว!</b>'
-      });
-      if (pRes.ok) return;
+    if (!testBlob) {
+      throw new Error('ไม่สามารถสร้างการ์ดภาพได้ กรุณาตรวจสอบสิทธิ์ Google Slides / Drive ใน Apps Script แล้วกด Run อีกครั้ง');
     }
+    var pRes = sendTelegramPhotoBlobInGas({
+      botToken: token,
+      chatId: chatId,
+      photoBlob: testBlob,
+      captionHtml: '✅ <b>ระบบส่งการ์ดภาพ Telegram อัตโนมัติ 24 ชม. พร้อมทำงานแล้ว!</b>'
+    });
+    if (!pRes.ok) {
+      throw new Error('ส่งการ์ดภาพเข้า Telegram ไม่สำเร็จ: ' + (pRes.error || 'Unknown error'));
+    }
+    return;
   }
   sendTelegramMessageInGas({
     botToken: token,

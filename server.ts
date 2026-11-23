@@ -5282,7 +5282,6 @@ async function startServer() {
                 const tgDone = digestItems.filter((i) => i.status === 'completed').length;
                 const tgPending = digestItems.length - tgDone;
                 const dedupKey = `tg-morning-digest-${todayYMD}`;
-                let sentPhotoCard = false;
 
                 if (runtimeScheduleConfig.telegramDeliveryMode !== 'text_html') {
                   const pngBuf = renderServerDailyDigestCardPng({
@@ -5301,11 +5300,18 @@ async function startServer() {
                       ].join('\n'),
                       dedupKey,
                     });
-                    sentPhotoCard = photoRes.ok;
+                    if (photoRes.ok) {
+                      const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+                      if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+                        fetch(cleanGas, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                          body: JSON.stringify({ action: 'mark_tg_sent', digestDate: todayYMD }),
+                        }).catch(() => {});
+                      }
+                    }
                   }
-                }
-
-                if (!sentPhotoCard) {
+                } else {
                   const tgRows = digestItems.slice(0, 15).map((item, idx) => {
                     const icon =
                       item.status === 'completed'
@@ -5469,7 +5475,6 @@ async function startServer() {
                 : remindMins === 60
                 ? 'ล่วงหน้า 1 ชั่วโมง'
                 : `ล่วงหน้า ${Math.round(remindMins / 60)} ชั่วโมง`;
-            let sentPhotoCard = false;
 
             if (runtimeScheduleConfig.telegramDeliveryMode !== 'text_html') {
               const pngBuf = renderServerSingleTaskCardPng({
@@ -5499,11 +5504,19 @@ async function startServer() {
                   ].join('\n'),
                   dedupKey,
                 });
-                sentPhotoCard = photoRes.ok;
+                if (photoRes.ok) {
+                  const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
+                  if (cleanGas.startsWith('https://script.google.com/macros/s/')) {
+                    const gasKey = `${String(t.id || t.title).slice(0, 28)}_${effectiveDate}_${cleanTime}_${remindMins}`;
+                    fetch(cleanGas, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                      body: JSON.stringify({ action: 'mark_tg_sent', reminderKey: gasKey }),
+                    }).catch(() => {});
+                  }
+                }
               }
-            }
-
-            if (!sentPhotoCard) {
+            } else {
               const prioStr =
                 String(t.priority || '') === 'high'
                   ? '🔴 ด่วนมาก'

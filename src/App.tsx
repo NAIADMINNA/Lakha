@@ -118,6 +118,7 @@ import {
   formatDailyDigestTelegramHtml,
   formatSingleTaskTelegramHtml,
   isTelegramConfigured,
+  markGasTelegramAlreadySent,
   sendTelegramNotification,
   sendTelegramPhotoCard,
 } from './services/telegramService';
@@ -2239,6 +2240,10 @@ export default function App() {
         telegramDelivered = tgRes.ok;
         telegramNotice = tgRes.message;
         if (tgRes.ok) {
+          if (!isManualTrigger) {
+            const remKey = `${String(task.id || task.title).slice(0, 28)}_${formatLocalDateYMD()}_${(task.time || '09:00').padStart(5, '0')}_${task.remindMinutesBefore ?? lineSettings.defaultRemindMinutes ?? 0}`;
+            markGasTelegramAlreadySent({ reminderKey: remKey });
+          }
           deliveryChannel =
             deliveryChannel === 'line_messaging_api' ? 'line_and_telegram' : 'telegram_bot';
           deliveryStatus = 'delivered';
@@ -2524,6 +2529,9 @@ export default function App() {
                     });
                   }
                   tgMorningDelivered = tgRes.ok;
+                  if (tgRes.ok) {
+                    markGasTelegramAlreadySent({ digestDate: currentBangkokYMD });
+                  }
                 }
 
                 const lineSentMorning = Boolean(lineSettings.channelAccessToken.trim());
@@ -4436,16 +4444,64 @@ export default function App() {
       ]
         .filter(Boolean)
         .join('\n');
-      const tgRes = await sendTelegramNotification({
-        botToken: lineSettings.telegramBotToken || '',
-        chatId: lineSettings.telegramChatId || '',
-        htmlText: tgMemberHtml,
-        buttons: buildTelegramActionButtons({
-          calendarUrl: calendarDeepLinkUrl,
-          includeCalendarButton: true,
-          includeTvButton: false,
-        }),
-      });
+      let tgRes;
+      if (lineSettings.telegramDeliveryMode !== 'text_html') {
+        const memberTaskCard: Task = {
+          id: `member-${Date.now()}`,
+          title: `สมาชิกใหม่เข้าร่วมทีม: ${newMember.name}`,
+          description: [
+            `อีเมล: ${newMember.email}`,
+            newMember.department ? `ฝ่าย/ทีม: ${newMember.department}` : '',
+            `สิทธิ์: ${roleLabel} · สมาชิกรวม ${nextMembers.length} คน`,
+          ]
+            .filter(Boolean)
+            .join(' | '),
+          date: todayStr,
+          time: nowTimeStr,
+          categoryId: 'cat-team',
+          priority: TaskPriority.LOW,
+          status: TaskStatus.COMPLETED,
+          remindMinutesBefore: 0,
+          lineNotified: true,
+          source: 'web',
+          updatedAt: new Date().toISOString(),
+        };
+        const memberPhoto = await renderSingleTaskTelegramCardPng({
+          task: memberTaskCard,
+          categoryName: 'ปฏิทินทีมร่วมกัน',
+          categoryColor: newMember.avatarColor || '#06C755',
+          remindLabel: 'อัปเดตสมาชิกทีม',
+          includeDescription: true,
+          isManualTrigger: true,
+          format: {
+            style: lineSettings.telegramStyle || 'executive_card',
+            headerTitle: lineSettings.telegramHeaderTitle,
+            showStats: false,
+            cardFontSize: lineSettings.cardFontSize,
+            cardTitleWeight: lineSettings.cardTitleWeight,
+            cardLineSpacing: lineSettings.cardLineSpacing,
+          },
+        });
+        tgRes = await sendTelegramPhotoCard({
+          botToken: lineSettings.telegramBotToken || '',
+          chatId: lineSettings.telegramChatId || '',
+          photoDataUrl: memberPhoto,
+          captionHtml: `👥 <b>สมาชิกใหม่เข้าร่วมทีม:</b> ${escapeTelegramHtml(newMember.name)}`,
+          buttons: [],
+        });
+      } else {
+        tgRes = await sendTelegramNotification({
+          botToken: lineSettings.telegramBotToken || '',
+          chatId: lineSettings.telegramChatId || '',
+          htmlText: tgMemberHtml,
+          buttons: buildTelegramActionButtons({
+            calendarUrl: calendarDeepLinkUrl,
+            includeCalendarButton: true,
+            includeTvButton: false,
+            showButtons: Boolean(lineSettings.telegramShowButtons),
+          }),
+        });
+      }
       if (tgRes.ok) {
         deliveryChannel =
           deliveryChannel === 'line_messaging_api' ? 'line_and_telegram' : 'telegram_bot';
