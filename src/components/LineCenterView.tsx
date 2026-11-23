@@ -5064,17 +5064,22 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
 
                     <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 leading-relaxed">
                       <li>
-                        กดปุ่ม <strong>คัดลอกโค้ด Apps Script</strong> ด้านล่าง แล้วนำไปวางทับใน Google Sheets &gt;{' '}
-                        <code className="font-mono text-slate-800">Extensions &gt; Apps Script</code> กด Save
+                        กดปุ่ม <strong>คัดลอกโค้ด Apps Script</strong> ด้านล่าง แล้วนำไป <strong>ลบโค้ดเดิมทั้งหมดและวางทับ</strong> ใน Google Sheets &gt;{' '}
+                        <code className="font-mono text-slate-800">Extensions &gt; Apps Script</code> แล้วกด <strong>Save</strong>
                       </li>
                       <li>
-                        กด <strong>Deploy &gt; Manage deployments &gt; แก้ไข (ดินสอ) &gt; เลือก New version &gt; Deploy</strong>
+                        กด <strong>Deploy &gt; Manage deployments &gt; แก้ไข (ดินสอ) &gt; ช่อง Version เลือก New version &gt; กด Deploy</strong>
                       </li>
                       <li>
-                        เลือกฟังก์ชัน <code className="font-mono font-semibold text-[#006699]">setupTelegramAutoTriggers</code>{' '}
-                        ที่แถบด้านบนแล้วกด <strong>Run</strong> เพียงครั้งเดียว — ระบบจะเช็กเตือนงานล่วงหน้าและส่งสรุปเช้าเข้า Telegram ทุก 5 นาทีตลอด 24 ชม.
+                        เลือกฟังก์ชัน <code className="font-mono font-semibold text-[#006699]">testSendTelegramReminderNow</code> กด <strong>Run</strong> (กดอนุญาตสิทธิ์ Google Slides/Drive เพื่อส่งเป็นการ์ดภาพ) จากนั้นเลือก{' '}
+                        <code className="font-mono font-semibold text-[#006699]">setupTelegramAutoTriggers</code> กด <strong>Run</strong> 1 ครั้ง
                       </li>
                     </ol>
+
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 leading-relaxed">
+                      <strong>หมายเหตุสำคัญ:</strong> หากยังได้รับแจ้งเตือนเป็น <strong>ข้อความ</strong> หรือยังมีปุ่ม{' '}
+                      <strong>เปิดปฏิทินทีม / เปิดหน้าจอ TV</strong> ติดมา แสดงว่าในบัญชี Google Apps Script ของคุณยังรันโค้ดเวอร์ชันเก่าอยู่ (เว็บไม่สามารถเข้าไปแก้โค้ดใน Google Apps Script แทนคุณได้) กรุณาวางทับโค้ดใหม่ตามขั้นตอน 1–3 หรือลบ Trigger เก่าในเมนูนาฬิกา (Triggers) ของ Apps Script ครับ
+                    </div>
 
                     <div className="flex flex-wrap gap-2">
                       <button
