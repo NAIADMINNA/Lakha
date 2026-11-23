@@ -14,6 +14,10 @@ import {
   getPriorityHeaderTheme,
   inferTaskEndDate,
 } from './src/services/lineCommandParser';
+import {
+  renderServerDailyDigestCardPng,
+  renderServerSingleTaskCardPng,
+} from './src/server/telegramCardSvg';
 
 dotenv.config();
 process.env.DISABLE_HMR = 'true';
@@ -1134,6 +1138,7 @@ let runtimeScheduleConfig: {
   cardLineSpacing: 'tight' | 'normal' | 'relaxed';
   allowAddTaskFromLine: boolean;
   allowAddTaskFromLineUpdatedAt: string;
+  telegramDeliveryMode: 'photo_card' | 'text_html';
   telegramStyle: 'executive_card' | 'compact_brief' | 'timeline_digest';
   telegramHeaderTitle: string;
   telegramShowStats: boolean;
@@ -1155,10 +1160,11 @@ let runtimeScheduleConfig: {
   cardLineSpacing: 'relaxed',
   allowAddTaskFromLine: true,
   allowAddTaskFromLineUpdatedAt: '',
+  telegramDeliveryMode: 'photo_card',
   telegramStyle: 'executive_card',
   telegramHeaderTitle: 'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา',
   telegramShowStats: true,
-  telegramShowButtons: true,
+  telegramShowButtons: false,
 };
 let runtimeDirectorPresence: {
   mode: 'auto' | 'in_office' | 'in_meeting' | 'offsite' | 'unavailable';
@@ -2875,6 +2881,7 @@ async function startServer() {
       telegramEnabled,
       telegramBotToken,
       telegramChatId,
+      telegramDeliveryMode,
       telegramStyle,
       telegramHeaderTitle,
       telegramShowStats,
@@ -2893,6 +2900,9 @@ async function startServer() {
       if (telegramEnabled || (typeof telegramBotToken === 'string' && telegramBotToken.trim())) {
         runtimeTelegramEnabled = telegramEnabled;
       }
+    }
+    if (telegramDeliveryMode === 'photo_card' || telegramDeliveryMode === 'text_html') {
+      runtimeScheduleConfig.telegramDeliveryMode = telegramDeliveryMode;
     }
     if (
       telegramStyle === 'executive_card' ||
@@ -3087,6 +3097,82 @@ async function startServer() {
       }
     }
 
+    return {
+      ok: deliveredCount > 0,
+      deliveredCount,
+      failedCount,
+      error: lastError || undefined,
+    };
+  };
+
+  const sendServerTelegramPhoto = async (opts: {
+    botToken?: string;
+    chatId?: string;
+    pngBuffer: Buffer;
+    captionHtml?: string;
+    buttons?: Array<Array<{ text: string; url: string }>>;
+    dedupKey?: string;
+  }): Promise<{ ok: boolean; deliveredCount: number; failedCount: number; error?: string }> => {
+    const token = String(opts.botToken || runtimeTelegramBotToken || '').trim();
+    const chatIds = parseServerTelegramChatIds(String(opts.chatId || runtimeTelegramChatId || ''));
+    if (!token || !/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(token)) {
+      return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Invalid Telegram Bot Token' };
+    }
+    if (chatIds.length === 0) {
+      return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Missing Telegram Chat ID' };
+    }
+    if (opts.dedupKey) {
+      const nowMs = Date.now();
+      for (const [k, exp] of telegramDedupCache.entries()) {
+        if (exp <= nowMs) telegramDedupCache.delete(k);
+      }
+      const prevExp = telegramDedupCache.get(opts.dedupKey) || 0;
+      if (prevExp > nowMs) {
+        return { ok: true, deliveredCount: chatIds.length, failedCount: 0 };
+      }
+      telegramDedupCache.set(opts.dedupKey, nowMs + 45 * 60 * 1000);
+    }
+
+    const safeCaption = typeof opts.captionHtml === 'string' ? opts.captionHtml.slice(0, 1000) : '';
+    const replyMarkup =
+      Array.isArray(opts.buttons) && opts.buttons.length > 0
+        ? JSON.stringify({ inline_keyboard: opts.buttons })
+        : undefined;
+
+    let deliveredCount = 0;
+    let failedCount = 0;
+    let lastError = '';
+    for (const cid of chatIds) {
+      try {
+        const form = new FormData();
+        form.append('chat_id', cid);
+        form.append('photo', new Blob([new Uint8Array(opts.pngBuffer)], { type: 'image/png' }), 'lakha-schedule-card.png');
+        if (safeCaption) {
+          form.append('caption', safeCaption);
+          form.append('parse_mode', 'HTML');
+        }
+        if (replyMarkup) {
+          form.append('reply_markup', replyMarkup);
+        }
+        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: 'POST',
+          body: form,
+        });
+        const tgJson = (await tgRes.json().catch(() => ({}))) as {
+          ok?: boolean;
+          description?: string;
+        };
+        if (tgRes.ok && tgJson.ok) {
+          deliveredCount += 1;
+        } else {
+          failedCount += 1;
+          lastError = String(tgJson.description || `HTTP ${tgRes.status}`);
+        }
+      } catch (err) {
+        failedCount += 1;
+        lastError = err instanceof Error ? err.message : 'Network error';
+      }
+    }
     return {
       ok: deliveredCount > 0,
       deliveredCount,
@@ -5189,38 +5275,64 @@ async function startServer() {
                 );
               }
               if (hasTelegramScheduler) {
-                const tgHeader = escapeServerTelegramHtml(
+                const rawTgHeader =
                   runtimeScheduleConfig.telegramHeaderTitle ||
-                    'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'
-                );
+                  'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา';
+                const tgHeader = escapeServerTelegramHtml(rawTgHeader);
                 const tgDone = digestItems.filter((i) => i.status === 'completed').length;
                 const tgPending = digestItems.length - tgDone;
-                const tgRows = digestItems.slice(0, 15).map((item, idx) => {
-                  const icon =
-                    item.status === 'completed'
-                      ? '✅'
-                      : item.priority === 'high'
-                      ? '🔴'
-                      : '▪️';
-                  return `${idx + 1}. ${icon} <code>${escapeServerTelegramHtml(
-                    item.time
-                  )} น.</code> <b>${escapeServerTelegramHtml(item.title)}</b>`;
-                });
-                const tgDigestLines = [
-                  `🏛 <b>${tgHeader}</b>`,
-                  `☀️ <b>สรุปตารางงานประจำวัน</b>`,
-                  `📅 ${escapeServerTelegramHtml(formatThaiDateReadable(todayYMD))} · ณ <code>${nowHM} น.</code>`,
-                  runtimeScheduleConfig.telegramShowStats !== false
-                    ? `📊 ทั้งหมด <b>${digestItems.length}</b> · รอทำ <b>${tgPending}</b> · เสร็จแล้ว <b>${tgDone}</b>`
-                    : '',
-                  `<blockquote><b>📌 กำหนดการวันนี้ (${digestItems.length} รายการ)</b>\n${tgRows.join(
-                    '\n'
-                  )}</blockquote>`,
-                ].filter(Boolean);
-                await sendServerTelegramHtml({
-                  htmlText: tgDigestLines.join('\n'),
-                  dedupKey: `tg-morning-digest-${todayYMD}`,
-                });
+                const dedupKey = `tg-morning-digest-${todayYMD}`;
+                let sentPhotoCard = false;
+
+                if (runtimeScheduleConfig.telegramDeliveryMode !== 'text_html') {
+                  const pngBuf = renderServerDailyDigestCardPng({
+                    headerTitle: rawTgHeader,
+                    dateDisplay: formatThaiDateReadable(todayYMD),
+                    nowHM,
+                    items: digestItems,
+                  });
+                  if (pngBuf) {
+                    const photoRes = await sendServerTelegramPhoto({
+                      pngBuffer: pngBuf,
+                      captionHtml: [
+                        '📋 <b>สรุปตารางงานประจำวัน</b>',
+                        `📅 ${escapeServerTelegramHtml(formatThaiDateReadable(todayYMD))} · อัปเดต <code>${nowHM} น.</code>`,
+                        `📊 ทั้งหมด <b>${digestItems.length}</b> งาน · รอทำ <b>${tgPending}</b> · เสร็จแล้ว <b>${tgDone}</b>`,
+                      ].join('\n'),
+                      dedupKey,
+                    });
+                    sentPhotoCard = photoRes.ok;
+                  }
+                }
+
+                if (!sentPhotoCard) {
+                  const tgRows = digestItems.slice(0, 15).map((item, idx) => {
+                    const icon =
+                      item.status === 'completed'
+                        ? '✅'
+                        : item.priority === 'high'
+                        ? '🔴'
+                        : '▪️';
+                    return `${idx + 1}. ${icon} <code>${escapeServerTelegramHtml(
+                      item.time
+                    )} น.</code> <b>${escapeServerTelegramHtml(item.title)}</b>`;
+                  });
+                  const tgDigestLines = [
+                    `🏛 <b>${tgHeader}</b>`,
+                    `☀️ <b>สรุปตารางงานประจำวัน</b>`,
+                    `📅 ${escapeServerTelegramHtml(formatThaiDateReadable(todayYMD))} · ณ <code>${nowHM} น.</code>`,
+                    runtimeScheduleConfig.telegramShowStats !== false
+                      ? `📊 ทั้งหมด <b>${digestItems.length}</b> · รอทำ <b>${tgPending}</b> · เสร็จแล้ว <b>${tgDone}</b>`
+                      : '',
+                    `<blockquote><b>📌 กำหนดการวันนี้ (${digestItems.length} รายการ)</b>\n${tgRows.join(
+                      '\n'
+                    )}</blockquote>`,
+                  ].filter(Boolean);
+                  await sendServerTelegramHtml({
+                    htmlText: tgDigestLines.join('\n'),
+                    dedupKey,
+                  });
+                }
               }
             }
           }
@@ -5344,43 +5456,88 @@ async function startServer() {
             );
           }
           if (hasTelegramScheduler) {
-            const tgHeader = escapeServerTelegramHtml(
+            const rawTgHeader =
               runtimeScheduleConfig.telegramHeaderTitle ||
-                'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา'
-            );
-            const prioStr =
-              String(t.priority || '') === 'high'
-                ? '🔴 ด่วนมาก'
-                : String(t.priority || '') === 'low'
-                ? '🟢 ทั่วไป'
-                : '🟡 สำคัญปานกลาง';
-            const cardBody = [
-              `<b>${escapeServerTelegramHtml(String(t.title || 'รายการงาน'))}</b>`,
-              '',
-              `📅 <b>วันที่:</b> ${escapeServerTelegramHtml(formatThaiDateReadable(effectiveDate))}`,
-              `🕐 <b>เวลา:</b> <code>${escapeServerTelegramHtml(cleanTime)} น.</code>`,
-              `🗂 <b>หมวดหมู่:</b> ${escapeServerTelegramHtml(catInfo?.name || 'ทั่วไป')}`,
-              `⚡ <b>ความสำคัญ:</b> ${prioStr}`,
-            ];
-            const tgLines = [
-              `🏛 <b>${tgHeader}</b>`,
-              String(t.priority || '') === 'high'
-                ? '<b>🚨 แจ้งเตือนภารกิจด่วนมาก</b>'
-                : '<b>⏰ แจ้งเตือนกำหนดการตามเวลา</b>',
-              `<blockquote>${cardBody.join('\n')}</blockquote>`,
-              t.description
-                ? `<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\n${escapeServerTelegramHtml(
-                    String(t.description)
-                  )}</blockquote>`
-                : '',
-              runtimeScheduleConfig.telegramShowStats !== false
-                ? `📊 <i>สรุปงาน: ทั้งหมด <b>${totalCount}</b> · รอทำ <b>${pendingCount}</b> · เสร็จแล้ว <b>${completedCount}</b></i>`
-                : '',
-            ].filter(Boolean);
-            await sendServerTelegramHtml({
-              htmlText: tgLines.join('\n'),
-              dedupKey: `tg-task-remind-${String(t.id || '')}-${effectiveDate}-${cleanTime}`,
-            });
+              'สำนักบริหารแรงงานต่างด้าว · ระบบน้องเลขา';
+            const tgHeader = escapeServerTelegramHtml(rawTgHeader);
+            const dedupKey = `tg-task-remind-${String(t.id || '')}-${effectiveDate}-${cleanTime}`;
+            const remindLabel =
+              remindMins <= 0
+                ? 'ตรงเวลาที่กำหนด'
+                : remindMins < 60
+                ? `ล่วงหน้า ${remindMins} นาที`
+                : remindMins === 60
+                ? 'ล่วงหน้า 1 ชั่วโมง'
+                : `ล่วงหน้า ${Math.round(remindMins / 60)} ชั่วโมง`;
+            let sentPhotoCard = false;
+
+            if (runtimeScheduleConfig.telegramDeliveryMode !== 'text_html') {
+              const pngBuf = renderServerSingleTaskCardPng({
+                headerTitle: rawTgHeader,
+                taskTitle: String(t.title || 'รายการงาน'),
+                description: String(t.description || ''),
+                dateDisplay: formatThaiDateReadable(effectiveDate),
+                timeDisplay: cleanTime,
+                remindLabel,
+                categoryName: catInfo?.name || 'ทั่วไป',
+                priority: String(t.priority || 'medium'),
+                showStats: runtimeScheduleConfig.telegramShowStats !== false,
+                stats: {
+                  total: totalCount,
+                  pending: pendingCount,
+                  completed: completedCount,
+                },
+              });
+              if (pngBuf) {
+                const photoRes = await sendServerTelegramPhoto({
+                  pngBuffer: pngBuf,
+                  captionHtml: [
+                    String(t.priority || '') === 'high'
+                      ? `🚨 <b>${escapeServerTelegramHtml(String(t.title || 'รายการงาน'))}</b>`
+                      : `🔔 <b>${escapeServerTelegramHtml(String(t.title || 'รายการงาน'))}</b>`,
+                    `📅 ${escapeServerTelegramHtml(formatThaiDateReadable(effectiveDate))} · ⏰ <code>${escapeServerTelegramHtml(cleanTime)} น.</code> (${escapeServerTelegramHtml(remindLabel)})`,
+                  ].join('\n'),
+                  dedupKey,
+                });
+                sentPhotoCard = photoRes.ok;
+              }
+            }
+
+            if (!sentPhotoCard) {
+              const prioStr =
+                String(t.priority || '') === 'high'
+                  ? '🔴 ด่วนมาก'
+                  : String(t.priority || '') === 'low'
+                  ? '🟢 ทั่วไป'
+                  : '🟡 สำคัญปานกลาง';
+              const cardBody = [
+                `<b>${escapeServerTelegramHtml(String(t.title || 'รายการงาน'))}</b>`,
+                '',
+                `📅 <b>วันที่:</b> ${escapeServerTelegramHtml(formatThaiDateReadable(effectiveDate))}`,
+                `🕐 <b>เวลา:</b> <code>${escapeServerTelegramHtml(cleanTime)} น.</code>`,
+                `🗂 <b>หมวดหมู่:</b> ${escapeServerTelegramHtml(catInfo?.name || 'ทั่วไป')}`,
+                `⚡ <b>ความสำคัญ:</b> ${prioStr}`,
+              ];
+              const tgLines = [
+                `🏛 <b>${tgHeader}</b>`,
+                String(t.priority || '') === 'high'
+                  ? '<b>🚨 แจ้งเตือนภารกิจด่วนมาก</b>'
+                  : '<b>⏰ แจ้งเตือนกำหนดการตามเวลา</b>',
+                `<blockquote>${cardBody.join('\n')}</blockquote>`,
+                t.description
+                  ? `<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\n${escapeServerTelegramHtml(
+                      String(t.description)
+                    )}</blockquote>`
+                  : '',
+                runtimeScheduleConfig.telegramShowStats !== false
+                  ? `📊 <i>สรุปงาน: ทั้งหมด <b>${totalCount}</b> · รอทำ <b>${pendingCount}</b> · เสร็จแล้ว <b>${completedCount}</b></i>`
+                  : '',
+              ].filter(Boolean);
+              await sendServerTelegramHtml({
+                htmlText: tgLines.join('\n'),
+                dedupKey,
+              });
+            }
           }
         }
       }

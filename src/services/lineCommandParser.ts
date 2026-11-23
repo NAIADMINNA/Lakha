@@ -1642,6 +1642,7 @@ export function generateGoogleAppsScriptCode(
     dailyDigestTime?: string;
     showStats?: boolean;
     showButtons?: boolean;
+    deliveryMode?: 'photo_card' | 'text_html';
   }
 ): string {
   let effectiveSheetId = (spreadsheetId || '').trim();
@@ -1659,6 +1660,8 @@ export function generateGoogleAppsScriptCode(
   let effectiveDailyDigestTime = (telegramOptions?.dailyDigestTime || '08:00').trim();
   let effectiveShowStats = telegramOptions?.showStats !== false;
   const effectiveShowButtons = false;
+  let effectiveDeliveryMode: 'photo_card' | 'text_html' =
+    telegramOptions?.deliveryMode === 'text_html' ? 'text_html' : 'photo_card';
   let initialTasksJson = '[]';
   try {
     if (typeof localStorage !== 'undefined') {
@@ -1712,6 +1715,13 @@ export function generateGoogleAppsScriptCode(
           typeof parsedSettings?.dailyDigestEnabled === 'boolean'
         ) {
           effectiveDailyDigestEnabled = parsedSettings.dailyDigestEnabled;
+        }
+        if (
+          telegramOptions?.deliveryMode === undefined &&
+          (parsedSettings?.telegramDeliveryMode === 'photo_card' ||
+            parsedSettings?.telegramDeliveryMode === 'text_html')
+        ) {
+          effectiveDeliveryMode = parsedSettings.telegramDeliveryMode;
         }
       }
       const rawTasks = localStorage.getItem('sheetcal_tasks_v3_clean');
@@ -1798,6 +1808,7 @@ const TELEGRAM_DAILY_DIGEST_ENABLED = ${effectiveDailyDigestEnabled ? 'true' : '
 const TELEGRAM_DAILY_DIGEST_TIME = '${effectiveDailyDigestTime.replace(/[\r\n']/g, '')}';
 const TELEGRAM_SHOW_STATS = ${effectiveShowStats ? 'true' : 'false'};
 const TELEGRAM_SHOW_BUTTONS = ${effectiveShowButtons ? 'true' : 'false'};
+const TELEGRAM_DELIVERY_MODE = '${effectiveDeliveryMode}';
 const MAIN_SERVER_URL = '${mainServerOrigin}';
 const WEB_APP_URL = '${webAppUrl}';
 const INITIAL_GROUP_ID = '${groupIdDisplay}';
@@ -3328,12 +3339,13 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_set_config',
-        version: '3.3-telegram-24x7-reminders',
+        version: '3.4-telegram-photo-cards-24x7',
         allowAddTaskFromLine: getAllowAddTaskFromLine(),
         hasTelegram: Boolean(getSavedTelegramToken() && getSavedTelegramChatId()),
         reminderTimings: savedSched.reminderTimings,
         dailyDigestEnabled: savedSched.dailyDigestEnabled,
-        dailyDigestTime: savedSched.dailyDigestTime
+        dailyDigestTime: savedSched.dailyDigestTime,
+        deliveryMode: savedSched.deliveryMode
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -4562,6 +4574,9 @@ function setSavedTelegramScheduleConfig(payload) {
     if (typeof payload.telegramShowButtons === 'boolean') {
       props.setProperty('SAVED_TG_SHOW_BUTTONS', payload.telegramShowButtons ? 'true' : 'false');
     }
+    if (payload.telegramDeliveryMode === 'photo_card' || payload.telegramDeliveryMode === 'text_html') {
+      props.setProperty('SAVED_TG_DELIVERY_MODE', payload.telegramDeliveryMode);
+    }
   } catch (err) {}
 }
 
@@ -4572,7 +4587,8 @@ function getSavedTelegramScheduleConfig() {
     dailyDigestEnabled: Boolean(TELEGRAM_DAILY_DIGEST_ENABLED),
     dailyDigestTime: String(TELEGRAM_DAILY_DIGEST_TIME || '08:00'),
     showStats: Boolean(TELEGRAM_SHOW_STATS),
-    showButtons: Boolean(TELEGRAM_SHOW_BUTTONS)
+    showButtons: false,
+    deliveryMode: String(TELEGRAM_DELIVERY_MODE || 'photo_card')
   };
   try {
     var props = PropertiesService.getScriptProperties();
@@ -4589,8 +4605,8 @@ function getSavedTelegramScheduleConfig() {
     if (dt && /^\\d{1,2}:\\d{2}$/.test(String(dt).trim())) cfg.dailyDigestTime = String(dt).trim();
     var ss = props.getProperty('SAVED_TG_SHOW_STATS');
     if (ss === 'true' || ss === 'false') cfg.showStats = (ss === 'true');
-    var sb = props.getProperty('SAVED_TG_SHOW_BUTTONS');
-    if (sb === 'true' || sb === 'false') cfg.showButtons = (sb === 'true');
+    var dm = props.getProperty('SAVED_TG_DELIVERY_MODE');
+    if (dm === 'photo_card' || dm === 'text_html') cfg.deliveryMode = dm;
   } catch (err) {}
   return cfg;
 }
@@ -4703,6 +4719,292 @@ function sendTelegramMessageInGas(opts) {
   return { ok: delivered > 0, deliveredCount: delivered, failedCount: failed, error: lastErr };
 }
 
+function sendTelegramPhotoBlobInGas(opts) {
+  var token = String((opts && opts.botToken) || getSavedTelegramToken() || '').trim();
+  var rawChatIds = String((opts && opts.chatId) || getSavedTelegramChatId() || '').trim();
+  var photoBlob = opts && opts.photoBlob;
+  if (!token || !rawChatIds || !photoBlob) {
+    return { ok: false, deliveredCount: 0, failedCount: 1, error: 'Missing Telegram photo parameters' };
+  }
+  if (opts && opts.dedupKey) {
+    try {
+      var cache = CacheService.getScriptCache();
+      if (cache.get('tg_dedup_' + opts.dedupKey)) {
+        return { ok: true, deliveredCount: 1, failedCount: 0, deduplicated: true };
+      }
+      cache.put('tg_dedup_' + opts.dedupKey, '1', 2700);
+    } catch (e) {}
+  }
+
+  var chatIds = parseTelegramChatIdsInGas(rawChatIds);
+  var caption = String((opts && opts.captionHtml) || '').slice(0, 1000);
+  var delivered = 0;
+  var failed = 0;
+  var lastErr = '';
+
+  for (var i = 0; i < chatIds.length; i++) {
+    try {
+      var formPayload = {
+        chat_id: chatIds[i],
+        photo: photoBlob
+      };
+      if (caption) {
+        formPayload.caption = caption;
+        formPayload.parse_mode = 'HTML';
+      }
+      var resp = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
+        method: 'post',
+        payload: formPayload,
+        muteHttpExceptions: true
+      });
+      var parsed = {};
+      try { parsed = JSON.parse(resp.getContentText() || '{}'); } catch (e) {}
+      if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300 && parsed.ok) {
+        delivered++;
+      } else {
+        failed++;
+        lastErr = String(parsed.description || ('HTTP ' + resp.getResponseCode()));
+      }
+    } catch (err) {
+      failed++;
+      lastErr = String(err);
+    }
+  }
+  return { ok: delivered > 0, deliveredCount: delivered, failedCount: failed, error: lastErr };
+}
+
+function styleSlideTextInGas(shape, text, fontSize, colorHex, isBold, align) {
+  var tf = shape.getText();
+  tf.setText(String(text || ''));
+  var style = tf.getTextStyle();
+  style.setFontFamily('Sarabun');
+  style.setFontSize(fontSize);
+  style.setForegroundColor(colorHex);
+  style.setBold(Boolean(isBold));
+  if (align) {
+    tf.getParagraphStyle().setParagraphAlignment(align);
+  }
+}
+
+// สร้างการ์ดภาพ PNG คมชัด (1600x900) ด้วย Google Slides ภายใน Google Cloud ฟรี 100% แล้วลบไฟล์ชั่วคราวทันที
+function renderSingleTaskCardBlobInGas(task, remindText, cfg, stats) {
+  var presId = '';
+  try {
+    var pres = SlidesApp.create('Lakha_TaskCard_Temp_' + Date.now());
+    presId = pres.getId();
+    var slide = pres.getSlides()[0];
+    var pageId = slide.getObjectId();
+    var existing = slide.getPageElements();
+    for (var ei = 0; ei < existing.length; ei++) {
+      existing[ei].remove();
+    }
+
+    var isHigh = String(task.priority || '') === 'high';
+    var isLow = String(task.priority || '') === 'low';
+    var prioLabel = isHigh ? 'ด่วนมาก' : (isLow ? 'ทั่วไป' : 'สำคัญปานกลาง');
+    var prioBg = isHigh ? '#DC2626' : (isLow ? '#059669' : '#D97706');
+    var accentHex = isHigh ? '#EF4444' : '#F59E0B';
+    var heading = isHigh ? 'แจ้งเตือนภารกิจด่วนมาก' : 'แจ้งเตือนกำหนดการตามเวลา';
+    var taskDate = String(task.date || '').slice(0, 10);
+    var taskHM = String(task.time || '09:00').trim();
+    var cleanTitle = String(task.title || 'รายการงาน').trim();
+    var cleanDesc = String(task.description || '').trim();
+
+    slide.getBackground().setSolidFill('#E2E8F0');
+
+    // แถบหัวการ์ด Royal Navy
+    var headerRect = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 0, 720, 96);
+    headerRect.getFill().setSolidFill('#0F172A');
+    headerRect.getBorder().setTransparent();
+
+    var accentBar = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 92, 720, 5);
+    accentBar.getFill().setSolidFill(accentHex);
+    accentBar.getBorder().setTransparent();
+
+    var agencyBox = slide.insertTextBox('', 24, 14, 520, 26);
+    styleSlideTextInGas(agencyBox, cfg.headerTitle, 13, '#FCD34D', true);
+
+    var titleHeaderBox = slide.insertTextBox('', 24, 38, 520, 44);
+    styleSlideTextInGas(titleHeaderBox, heading, 24, '#FFFFFF', true);
+
+    var badgeShape = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 566, 28, 128, 36);
+    badgeShape.getFill().setSolidFill(prioBg);
+    badgeShape.getBorder().setTransparent();
+    styleSlideTextInGas(badgeShape, prioLabel, 14, '#FFFFFF', true, SlidesApp.ParagraphAlignment.CENTER);
+
+    // การ์ดขาวหลักตรงกลาง
+    var cardHeight = (cfg.showStats && stats) ? 218 : 268;
+    var cardBox = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 24, 112, 672, cardHeight);
+    cardBox.getFill().setSolidFill('#FFFFFF');
+    cardBox.getBorder().getLineFill().setSolidFill('#CBD5E1');
+
+    var leftStripe = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 24, 124, 6, 62);
+    leftStripe.getFill().setSolidFill(prioBg);
+    leftStripe.getBorder().setTransparent();
+
+    var taskTitleBox = slide.insertTextBox('', 44, 120, 636, 56);
+    styleSlideTextInGas(taskTitleBox, cleanTitle.length > 90 ? (cleanTitle.slice(0, 89) + '…') : cleanTitle, 21, '#0F172A', true);
+
+    // กล่องวันเวลา
+    var metaBox = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 44, 180, 632, 62);
+    metaBox.getFill().setSolidFill('#F8FAFC');
+    metaBox.getBorder().getLineFill().setSolidFill('#E2E8F0');
+    var dateLine = 'วันที่: ' + formatThaiFullDateInGas(taskDate);
+    var timeLine = 'เวลา: ' + taskHM + ' น.  (' + remindText + ')';
+    styleSlideTextInGas(metaBox, dateLine + '\\n' + timeLine, 14, '#0369A1', true);
+
+    // กล่องรายละเอียดเพิ่มเติม (ถ้ามี)
+    if (cleanDesc) {
+      var descBox = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 44, 250, 632, (cfg.showStats && stats) ? 68 : 112);
+      descBox.getFill().setSolidFill('#F8FAFC');
+      descBox.getBorder().getLineFill().setSolidFill('#E2E8F0');
+      var clippedDesc = cleanDesc.length > 150 ? (cleanDesc.slice(0, 149) + '…') : cleanDesc;
+      styleSlideTextInGas(descBox, 'รายละเอียด: ' + clippedDesc, 13, '#334155', false);
+    }
+
+    // แถบสรุป KPI ด้านล่าง
+    if (cfg.showStats && stats) {
+      var kpiBar = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 24, 342, 672, 46);
+      kpiBar.getFill().setSolidFill('#0F172A');
+      kpiBar.getBorder().setTransparent();
+      var kpiText = 'สรุปงานทั้งหมด: ' + stats.total + ' งาน   |   รอดำเนินการ: ' + stats.pending + ' งาน   |   เสร็จสิ้นแล้ว: ' + stats.completed + ' งาน';
+      styleSlideTextInGas(kpiBar, kpiText, 13, '#E2E8F0', true, SlidesApp.ParagraphAlignment.CENTER);
+    }
+
+    pres.saveAndClose();
+
+    var pngUrl = 'https://docs.google.com/presentation/d/' + presId + '/export/png?id=' + presId + '&pageid=' + pageId;
+    var pngResp = UrlFetchApp.fetch(pngUrl, {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    var ct = String(pngResp.getHeaders()['Content-Type'] || pngResp.getHeaders()['content-type'] || '').toLowerCase();
+    if (pngResp.getResponseCode() === 200 && ct.indexOf('image/') === 0) {
+      return pngResp.getBlob().setName('lakha-task-card.png');
+    }
+    return null;
+  } catch (err) {
+    Logger.log('Single task card PNG render fallback: ' + err);
+    return null;
+  } finally {
+    if (presId) {
+      try { DriveApp.getFileById(presId).setTrashed(true); } catch (e) {}
+    }
+  }
+}
+
+function renderDailyDigestCardBlobInGas(todayYMD, nowHM, todayTasks, cfg) {
+  var presId = '';
+  try {
+    var pres = SlidesApp.create('Lakha_DigestCard_Temp_' + Date.now());
+    presId = pres.getId();
+    var slide = pres.getSlides()[0];
+    var pageId = slide.getObjectId();
+    var existing = slide.getPageElements();
+    for (var ei = 0; ei < existing.length; ei++) {
+      existing[ei].remove();
+    }
+
+    var doneCnt = todayTasks.filter(function(t) { return t.status === 'completed'; }).length;
+    var pendingCnt = todayTasks.length - doneCnt;
+
+    slide.getBackground().setSolidFill('#E2E8F0');
+
+    var headerRect = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 0, 720, 108);
+    headerRect.getFill().setSolidFill('#0F172A');
+    headerRect.getBorder().setTransparent();
+
+    var accentBar = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, 0, 104, 720, 4);
+    accentBar.getFill().setSolidFill('#F59E0B');
+    accentBar.getBorder().setTransparent();
+
+    var agencyBox = slide.insertTextBox('', 24, 10, 460, 24);
+    styleSlideTextInGas(agencyBox, cfg.headerTitle, 12, '#FCD34D', true);
+
+    var headBox = slide.insertTextBox('', 24, 34, 430, 36);
+    styleSlideTextInGas(headBox, 'สรุปตารางงานประจำวัน', 22, '#FFFFFF', true);
+
+    var dateBox = slide.insertTextBox('', 24, 72, 430, 26);
+    styleSlideTextInGas(dateBox, formatThaiFullDateInGas(todayYMD) + ' · อัปเดต ' + nowHM + ' น.', 12, '#CBD5E1', false);
+
+    // 3 กล่อง KPI ขวาบน
+    var kpi1 = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 466, 22, 74, 64);
+    kpi1.getFill().setSolidFill('#1E293B');
+    kpi1.getBorder().setTransparent();
+    styleSlideTextInGas(kpi1, todayTasks.length + '\\nทั้งหมด', 13, '#FFFFFF', true, SlidesApp.ParagraphAlignment.CENTER);
+
+    var kpi2 = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 548, 22, 74, 64);
+    kpi2.getFill().setSolidFill('#1E293B');
+    kpi2.getBorder().setTransparent();
+    styleSlideTextInGas(kpi2, pendingCnt + '\\nรอทำ', 13, '#FDE68A', true, SlidesApp.ParagraphAlignment.CENTER);
+
+    var kpi3 = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 630, 22, 74, 64);
+    kpi3.getFill().setSolidFill('#1E293B');
+    kpi3.getBorder().setTransparent();
+    styleSlideTextInGas(kpi3, doneCnt + '\\nเสร็จแล้ว', 13, '#6EE7B7', true, SlidesApp.ParagraphAlignment.CENTER);
+
+    var visible = todayTasks.slice(0, 5);
+    var rowTop = 120;
+    var rowH = 48;
+    var rowGap = 7;
+
+    for (var i = 0; i < visible.length; i++) {
+      var item = visible[i];
+      var y = rowTop + i * (rowH + rowGap);
+      var isDone = item.status === 'completed';
+      var isHigh = !isDone && item.priority === 'high';
+      var barHex = isDone ? '#10B981' : (isHigh ? '#DC2626' : '#0284C7');
+      var statusHex = isDone ? '#15803D' : (isHigh ? '#B91C1C' : '#0369A1');
+      var statusBg = isDone ? '#DCFCE7' : (isHigh ? '#FEE2E2' : '#E0F2FE');
+      var statusTxt = isDone ? 'เสร็จแล้ว' : (isHigh ? 'ด่วนมาก' : 'รอทำ');
+
+      var rowCard = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 24, y, 672, rowH);
+      rowCard.getFill().setSolidFill('#FFFFFF');
+      rowCard.getBorder().getLineFill().setSolidFill('#CBD5E1');
+
+      var bar = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 24, y + 6, 5, rowH - 12);
+      bar.getFill().setSolidFill(barHex);
+      bar.getBorder().setTransparent();
+
+      var titleStr = String(item.title || '').trim();
+      if (titleStr.length > 52) titleStr = titleStr.slice(0, 51) + '…';
+      var rowLabel = (i + 1) + '. ' + String(item.time || '09:00') + ' น.  —  ' + titleStr;
+      var txtBox = slide.insertTextBox('', 38, y + 7, 560, 34);
+      styleSlideTextInGas(txtBox, rowLabel, 14, isDone ? '#64748B' : '#0F172A', true);
+
+      var pill = slide.insertShape(SlidesApp.ShapeType.ROUND_RECTANGLE, 606, y + 11, 78, 26);
+      pill.getFill().setSolidFill(statusBg);
+      pill.getBorder().setTransparent();
+      styleSlideTextInGas(pill, statusTxt, 11, statusHex, true, SlidesApp.ParagraphAlignment.CENTER);
+    }
+
+    if (todayTasks.length > visible.length) {
+      var moreBox = slide.insertTextBox('', 24, 382, 672, 20);
+      styleSlideTextInGas(moreBox, 'และอีก ' + (todayTasks.length - visible.length) + ' รายการในปฏิทินทีม · ระบบน้องเลขา', 11, '#475569', true, SlidesApp.ParagraphAlignment.CENTER);
+    }
+
+    pres.saveAndClose();
+
+    var pngUrl = 'https://docs.google.com/presentation/d/' + presId + '/export/png?id=' + presId + '&pageid=' + pageId;
+    var pngResp = UrlFetchApp.fetch(pngUrl, {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    var ct = String(pngResp.getHeaders()['Content-Type'] || pngResp.getHeaders()['content-type'] || '').toLowerCase();
+    if (pngResp.getResponseCode() === 200 && ct.indexOf('image/') === 0) {
+      return pngResp.getBlob().setName('lakha-daily-digest.png');
+    }
+    return null;
+  } catch (err) {
+    Logger.log('Daily digest card PNG render fallback: ' + err);
+    return null;
+  } finally {
+    if (presId) {
+      try { DriveApp.getFileById(presId).setTrashed(true); } catch (e) {}
+    }
+  }
+}
+
 function detectTelegramChatsInGas(botToken) {
   var token = String(botToken || getSavedTelegramToken() || '').trim();
   if (!token) {
@@ -4754,7 +5056,7 @@ function detectTelegramChatsInGas(botToken) {
   }
 }
 
-// ฟังก์ชัน 1: สรุปงานประจำวันตอนเช้าผ่าน Telegram ฟรี 24 ชม.
+// ฟังก์ชัน 1: สรุปงานประจำวันตอนเช้าผ่าน Telegram ฟรี 24 ชม. (รองรับทั้งการ์ดภาพ PNG และข้อความ HTML)
 function sendDailyTelegramDigest() {
   var token = getSavedTelegramToken();
   var chatId = getSavedTelegramChatId();
@@ -4775,6 +5077,27 @@ function sendDailyTelegramDigest() {
 
   var doneCnt = todayTasks.filter(function(t) { return t.status === 'completed'; }).length;
   var pendingCnt = todayTasks.length - doneCnt;
+  var dedupKey = 'gas-tg-morning-' + todayYMD;
+
+  if (cfg.deliveryMode !== 'text_html') {
+    var digestBlob = renderDailyDigestCardBlobInGas(todayYMD, nowHM, todayTasks, cfg);
+    if (digestBlob) {
+      var captionLines = [
+        '📋 <b>สรุปตารางงานประจำวัน</b>',
+        '📅 ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(todayYMD)) + ' · อัปเดต <code>' + nowHM + ' น.</code>',
+        '📊 ทั้งหมด <b>' + todayTasks.length + '</b> งาน · รอทำ <b>' + pendingCnt + '</b> · เสร็จแล้ว <b>' + doneCnt + '</b>'
+      ];
+      var photoRes = sendTelegramPhotoBlobInGas({
+        botToken: token,
+        chatId: chatId,
+        photoBlob: digestBlob,
+        captionHtml: captionLines.join('\\n'),
+        dedupKey: dedupKey
+      });
+      if (photoRes.ok) return;
+    }
+  }
+
   var rows = [];
   for (var i = 0; i < Math.min(todayTasks.length, 15); i++) {
     var item = todayTasks[i];
@@ -4798,8 +5121,8 @@ function sendDailyTelegramDigest() {
     botToken: token,
     chatId: chatId,
     htmlText: lines.join('\\n'),
-    buttons: buildTelegramButtonsInGas(todayYMD, cfg.showButtons),
-    dedupKey: 'gas-tg-morning-' + todayYMD
+    buttons: [],
+    dedupKey: dedupKey
   });
 }
 
@@ -4873,39 +5196,66 @@ function checkTelegramTaskReminders() {
         var dedupKey = String(task.id || task.title).slice(0, 28) + '_' + taskDate + '_' + taskHM + '_' + rm;
         if (hasTelegramReminderBeenSentInGas(dedupKey)) continue;
 
-        var prioBadge = task.priority === 'high'
-          ? '🔴 ด่วนมาก'
-          : (task.priority === 'low' ? '🟢 ทั่วไป' : '🟡 สำคัญปานกลาง');
-        var alertHeading = task.priority === 'high'
-          ? '🚨 แจ้งเตือนภารกิจด่วนมาก'
-          : '⏰ แจ้งเตือนกำหนดการตามเวลา';
         var remindText = formatRemindMinutesInGas(rm);
-        var cardLines = [
-          '<b>' + escapeTelegramHtmlInGas(task.title) + '</b>',
-          '',
-          '📅 <b>วันที่:</b> ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(taskDate)),
-          '🕐 <b>เวลา:</b> <code>' + escapeTelegramHtmlInGas(taskHM) + ' น.</code> <i>(' + escapeTelegramHtmlInGas(remindText) + ')</i>',
-          '⚡ <b>ระดับ:</b> ' + prioBadge
-        ];
-        var msgLines = [
-          '🏛 <b>' + escapeTelegramHtmlInGas(cfg.headerTitle) + '</b>',
-          '<b>' + alertHeading + '</b>',
-          '<blockquote>' + cardLines.join('\\n') + '</blockquote>'
-        ];
-        if (task.description && String(task.description).trim()) {
-          msgLines.push('<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\\n' + escapeTelegramHtmlInGas(String(task.description).trim()) + '</blockquote>');
-        }
-        if (cfg.showStats) {
-          msgLines.push('📊 <i>สรุปงาน: ทั้งหมด ' + totalCount + ' · รอทำ ' + pendingCount + ' · เสร็จแล้ว ' + completedCount + '</i>');
+        var sendRes = { ok: false };
+
+        if (cfg.deliveryMode !== 'text_html') {
+          var cardBlob = renderSingleTaskCardBlobInGas(task, remindText, cfg, {
+            total: totalCount,
+            pending: pendingCount,
+            completed: completedCount
+          });
+          if (cardBlob) {
+            var capIcon = task.priority === 'high' ? '🚨' : '🔔';
+            var photoCaption = [
+              capIcon + ' <b>' + escapeTelegramHtmlInGas(task.title) + '</b>',
+              '📅 ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(taskDate)) + ' · ⏰ <code>' + escapeTelegramHtmlInGas(taskHM) + ' น.</code> (' + escapeTelegramHtmlInGas(remindText) + ')'
+            ].join('\\n');
+            sendRes = sendTelegramPhotoBlobInGas({
+              botToken: token,
+              chatId: chatId,
+              photoBlob: cardBlob,
+              captionHtml: photoCaption,
+              dedupKey: 'gas-tg-rem-' + dedupKey
+            });
+          }
         }
 
-        var sendRes = sendTelegramMessageInGas({
-          botToken: token,
-          chatId: chatId,
-          htmlText: msgLines.join('\\n'),
-          buttons: buildTelegramButtonsInGas(taskDate, cfg.showButtons),
-          dedupKey: 'gas-tg-rem-' + dedupKey
-        });
+        if (!sendRes.ok) {
+          var prioBadge = task.priority === 'high'
+            ? '🔴 ด่วนมาก'
+            : (task.priority === 'low' ? '🟢 ทั่วไป' : '🟡 สำคัญปานกลาง');
+          var alertHeading = task.priority === 'high'
+            ? '🚨 แจ้งเตือนภารกิจด่วนมาก'
+            : '⏰ แจ้งเตือนกำหนดการตามเวลา';
+          var cardLines = [
+            '<b>' + escapeTelegramHtmlInGas(task.title) + '</b>',
+            '',
+            '📅 <b>วันที่:</b> ' + escapeTelegramHtmlInGas(formatThaiFullDateInGas(taskDate)),
+            '🕐 <b>เวลา:</b> <code>' + escapeTelegramHtmlInGas(taskHM) + ' น.</code> <i>(' + escapeTelegramHtmlInGas(remindText) + ')</i>',
+            '⚡ <b>ระดับ:</b> ' + prioBadge
+          ];
+          var msgLines = [
+            '🏛 <b>' + escapeTelegramHtmlInGas(cfg.headerTitle) + '</b>',
+            '<b>' + alertHeading + '</b>',
+            '<blockquote>' + cardLines.join('\\n') + '</blockquote>'
+          ];
+          if (task.description && String(task.description).trim()) {
+            msgLines.push('<blockquote expandable>📝 <b>รายละเอียดเพิ่มเติม</b>\\n' + escapeTelegramHtmlInGas(String(task.description).trim()) + '</blockquote>');
+          }
+          if (cfg.showStats) {
+            msgLines.push('📊 <i>สรุปงาน: ทั้งหมด ' + totalCount + ' · รอทำ ' + pendingCount + ' · เสร็จแล้ว ' + completedCount + '</i>');
+          }
+
+          sendRes = sendTelegramMessageInGas({
+            botToken: token,
+            chatId: chatId,
+            htmlText: msgLines.join('\\n'),
+            buttons: [],
+            dedupKey: 'gas-tg-rem-' + dedupKey
+          });
+        }
+
         if (sendRes.ok) {
           markTelegramReminderSentInGas(dedupKey);
         }
@@ -4927,16 +5277,35 @@ function setupTelegramAutoTriggers() {
     .timeBased()
     .everyMinutes(5)
     .create();
-  Logger.log('✅ ตั้งค่าแจ้งเตือน Telegram อัตโนมัติ 24 ชม. สำเร็จ! (เช็กแจ้งเตือนงานล่วงหน้าและสรุปงานเช้าทุก 5 นาที แม้ปิดคอมพิวเตอร์)');
+  Logger.log('✅ ตั้งค่าแจ้งเตือน Telegram แบบการ์ดภาพอัตโนมัติ 24 ชม. สำเร็จ! (เช็กแจ้งเตือนงานล่วงหน้าและสรุปงานเช้าทุก 5 นาที แม้ปิดคอมพิวเตอร์)');
 }
 
-// ฟังก์ชันทดสอบส่งจากหน้า Apps Script โดยตรง
+// ฟังก์ชันทดสอบส่งการ์ดภาพจากหน้า Apps Script โดยตรง (และใช้กดอนุญาตสิทธิ์ Slides/Drive ครั้งแรก)
 function testSendTelegramReminderNow() {
   var token = getSavedTelegramToken();
   var chatId = getSavedTelegramChatId();
   var cfg = getSavedTelegramScheduleConfig();
   var nowHM = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'HH:mm');
   var todayYMD = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  var sampleTask = {
+    title: 'ทดสอบส่งการ์ดภาพแจ้งเตือนอัตโนมัติ 24 ชม. (Apps Script)',
+    description: 'ช่วงเตือนล่วงหน้า: ' + cfg.reminderTimings.map(formatRemindMinutesInGas).join(', ') + ' | สรุปงานเช้า: ' + cfg.dailyDigestTime + ' น.',
+    date: todayYMD,
+    time: nowHM,
+    priority: 'medium'
+  };
+  if (cfg.deliveryMode !== 'text_html') {
+    var testBlob = renderSingleTaskCardBlobInGas(sampleTask, 'ทดสอบระบบการ์ดภาพ', cfg, null);
+    if (testBlob) {
+      var pRes = sendTelegramPhotoBlobInGas({
+        botToken: token,
+        chatId: chatId,
+        photoBlob: testBlob,
+        captionHtml: '✅ <b>ระบบส่งการ์ดภาพ Telegram อัตโนมัติ 24 ชม. พร้อมทำงานแล้ว!</b>'
+      });
+      if (pRes.ok) return;
+    }
+  }
   sendTelegramMessageInGas({
     botToken: token,
     chatId: chatId,
@@ -4945,7 +5314,7 @@ function testSendTelegramReminderNow() {
       '✅ <b>ระบบแจ้งเตือนอัตโนมัติ 24 ชม. (Apps Script) พร้อมทำงานแล้ว!</b>',
       '<blockquote>⏰ ช่วงแจ้งเตือนล่วงหน้า: <code>' + escapeTelegramHtmlInGas(cfg.reminderTimings.map(formatRemindMinutesInGas).join(', ')) + '</code>\\n☀️ สรุปงานประจำวัน: <code>' + escapeTelegramHtmlInGas(cfg.dailyDigestTime) + ' น.</code>\\n🕒 ทดสอบเมื่อ: <code>' + nowHM + ' น.</code></blockquote>'
     ].join('\\n'),
-    buttons: buildTelegramButtonsInGas(todayYMD, cfg.showButtons)
+    buttons: []
   });
 }`;
 }

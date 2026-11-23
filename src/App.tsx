@@ -769,10 +769,11 @@ export default function App() {
         telegramEnabled: Boolean(lineSettings.telegramEnabled),
         telegramBotToken: (lineSettings.telegramBotToken || '').trim(),
         telegramChatId: (lineSettings.telegramChatId || '').trim(),
+        telegramDeliveryMode: lineSettings.telegramDeliveryMode || 'photo_card',
         telegramStyle: lineSettings.telegramStyle || 'executive_card',
         telegramHeaderTitle: lineSettings.telegramHeaderTitle || '',
         telegramShowStats: lineSettings.telegramShowStats !== false,
-        telegramShowButtons: lineSettings.telegramShowButtons !== false,
+        telegramShowButtons: Boolean(lineSettings.telegramShowButtons),
       }),
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -803,6 +804,7 @@ export default function App() {
               action: 'set_config',
               telegramBotToken: (lineSettings.telegramBotToken || '').trim(),
               telegramChatId: (lineSettings.telegramChatId || '').trim(),
+              telegramDeliveryMode: lineSettings.telegramDeliveryMode || 'photo_card',
               telegramHeaderTitle: (lineSettings.telegramHeaderTitle || '').trim(),
               reminderTimings:
                 lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
@@ -811,7 +813,7 @@ export default function App() {
               dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
               dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
               telegramShowStats: lineSettings.telegramShowStats !== false,
-              telegramShowButtons: lineSettings.telegramShowButtons !== false,
+              telegramShowButtons: Boolean(lineSettings.telegramShowButtons),
             }),
           }).catch(() => {});
         }, 1200);

@@ -895,7 +895,8 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
       dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
       showStats: lineSettings.telegramShowStats !== false,
-      showButtons: lineSettings.telegramShowButtons !== false,
+      showButtons: Boolean(lineSettings.telegramShowButtons),
+      deliveryMode: lineSettings.telegramDeliveryMode || 'photo_card',
     }
   );
 
@@ -1033,6 +1034,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             action: 'set_config',
             telegramBotToken: token,
             telegramChatId: chatId,
+            telegramDeliveryMode: lineSettings.telegramDeliveryMode || 'photo_card',
             telegramHeaderTitle: activeHeader,
             reminderTimings:
               lineSettings.reminderTimings && lineSettings.reminderTimings.length > 0
@@ -1041,7 +1043,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
             dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
             dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
             telegramShowStats: lineSettings.telegramShowStats !== false,
-            telegramShowButtons: lineSettings.telegramShowButtons !== false,
+            telegramShowButtons: Boolean(lineSettings.telegramShowButtons),
           }),
         }).catch(() => {});
       }
@@ -1075,6 +1077,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           action: 'set_config',
           telegramBotToken: token,
           telegramChatId: chatId,
+          telegramDeliveryMode: lineSettings.telegramDeliveryMode || 'photo_card',
           telegramHeaderTitle: (
             lineSettings.telegramHeaderTitle || DEFAULT_TELEGRAM_HEADER_TITLE
           ).trim(),
@@ -1082,20 +1085,20 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           dailyDigestEnabled: lineSettings.dailyDigestEnabled !== false,
           dailyDigestTime: lineSettings.dailyDigestTime || '08:00',
           telegramShowStats: lineSettings.telegramShowStats !== false,
-          telegramShowButtons: lineSettings.telegramShowButtons !== false,
+          telegramShowButtons: Boolean(lineSettings.telegramShowButtons),
         }),
       });
       const data = JSON.parse((await res.text()) || '{}');
-      if (data && data.mode === 'gas_set_config' && data.version === '3.3-telegram-24x7-reminders') {
+      if (data && data.mode === 'gas_set_config' && data.version === '3.4-telegram-photo-cards-24x7') {
         setTgGasSyncStatus({
           ok: true,
-          message: `ซิงก์เวลาเตือนล่วงหน้า (${timings.map(formatRemindMinutesLabel).join(', ')}) และสรุปเช้า ${lineSettings.dailyDigestTime || '08:00'} น. เข้า Apps Script สำเร็จแล้ว!`,
+          message: `ซิงก์โหมดการ์ดภาพ + เวลาเตือนล่วงหน้า (${timings.map(formatRemindMinutesLabel).join(', ')}) และสรุปเช้า ${lineSettings.dailyDigestTime || '08:00'} น. เข้า Apps Script สำเร็จแล้ว!`,
         });
       } else {
         setTgGasSyncStatus({
           ok: false,
           message:
-            'Apps Script ของคุณยังเป็นเวอร์ชันก่อนหน้า — กรุณากด "คัดลอกโค้ด Apps Script" ด้านบน ไปวางทับแล้วกด Deploy > Edit > New version จากนั้นรัน setupTelegramAutoTriggers 1 ครั้งครับ',
+            'Apps Script ของคุณยังเป็นเวอร์ชันเก่า (ซึ่งส่งแจ้งเตือนอัตโนมัติเป็นข้อความ) — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับ กด Deploy > Edit > New version แล้วกด Run ฟังก์ชัน setupTelegramAutoTriggers 1 ครั้ง เพื่อเปิดส่งเป็นการ์ดภาพอัตโนมัติ 24 ชม.ครับ',
         });
       }
     } catch {
