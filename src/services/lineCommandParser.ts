@@ -1786,7 +1786,7 @@ export function generateGoogleAppsScriptCode(
 
   return `/**
  * ============================================================================
- * ระบบน้องเลขา (v2.7) — โค้ดเชื่อมต่อแอป LINE จริง + เว็บปฏิทินทีม Apps Script (ซิงค์ 2 ทาง 100%)
+ * ระบบน้องเลขา (v3.4) — การ์ดภาพ Telegram 24 ชม. + LINE การ์ดผู้บริหาร + ซิงค์ 2 ทาง 100%
  * ============================================================================
  * วิธีติดตั้ง / อัปเดตโค้ด:
  * 1. เปิดไฟล์ Google Sheets > Extensions (ส่วนขยาย) > Apps Script
@@ -2936,13 +2936,13 @@ function doGet(e) {
     return ContentService
       .createTextOutput(JSON.stringify({
         status: 'verified',
-        version: '3.0-executive-card',
-        cardDesignVersion: '3.0-executive-card',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3'],
+        version: '3.4-telegram-photo-cards-24x7',
+        cardDesignVersion: '3.4-telegram-photo-cards-24x7',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3', 'telegram_photo_cards_24x7'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         tasks: tasks,
-        message: 'ระบบน้องเลขา Webhook & Executive Card Ready (v3.0)'
+        message: 'ระบบน้องเลขา Webhook & Telegram Photo Cards 24/7 Ready (v3.4)'
       }))
       .setMimeType(ContentService.MimeType.JSON);
   }
@@ -3466,9 +3466,9 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({
         status: 'ok',
         mode: 'gas_bridge_ready',
-        version: '3.0-executive-card',
-        cardDesignVersion: '3.0-executive-card',
-        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3'],
+        version: '3.4-telegram-photo-cards-24x7',
+        cardDesignVersion: '3.4-telegram-photo-cards-24x7',
+        capabilities: ['webhook', 'push_line', 'get_tasks', 'sync_tasks', 'clear_richmenu', 'group_chat', 'team_portal', 'executive_card_v3', 'telegram_photo_cards_24x7'],
         detectedGroupId: getSavedGroupId(),
         detectedUserId: getSavedUserId(),
         hasToken: Boolean(getSavedLineToken()),

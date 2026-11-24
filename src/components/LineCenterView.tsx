@@ -809,16 +809,15 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
       const sep = urlToCheck.includes('?') ? '&' : '?';
       const res = await fetch(`${urlToCheck}${sep}format=json&_t=${Date.now()}`);
       const data = await res.json();
-      const ver = String(data?.cardDesignVersion || data?.version || '').trim();
+      const ver = String(data?.version || data?.cardDesignVersion || '').trim();
       const caps = Array.isArray(data?.capabilities) ? data.capabilities : [];
-      const isV3 =
-        ver === '3.0-executive-card' ||
-        ver.startsWith('3.') ||
-        caps.includes('executive_card_v3');
+      const isV34 =
+        ver === '3.4-telegram-photo-cards-24x7' ||
+        caps.includes('telegram_photo_cards_24x7');
       setGasCardVersionInfo({
         checking: false,
-        status: isV3 ? 'up_to_date' : 'outdated',
-        detectedVersion: ver || 'เวอร์ชันเก่า (ก่อน v3.0)',
+        status: isV34 ? 'up_to_date' : 'outdated',
+        detectedVersion: ver || 'เวอร์ชันเก่า (ก่อน v3.4)',
       });
     } catch {
       setGasCardVersionInfo({
@@ -1088,18 +1087,28 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           telegramShowButtons: Boolean(lineSettings.telegramShowButtons),
         }),
       });
-      const data = JSON.parse((await res.text()) || '{}');
-      if (data && data.mode === 'gas_set_config' && data.version === '3.4-telegram-photo-cards-24x7') {
+      const rawBody = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(rawBody || '{}');
+      } catch {
+        data = {};
+      }
+      const detectedVer = String(data?.version || data?.cardDesignVersion || '').trim();
+      const shortGasTail = trimmedGas.length > 18 ? `...${trimmedGas.slice(-18)}` : trimmedGas;
+      if (data && data.mode === 'gas_set_config' && detectedVer === '3.4-telegram-photo-cards-24x7') {
         setTgGasSyncStatus({
           ok: true,
-          message: `ซิงก์โหมดการ์ดภาพ + เวลาเตือนล่วงหน้า (${timings.map(formatRemindMinutesLabel).join(', ')}) และสรุปเช้า ${lineSettings.dailyDigestTime || '08:00'} น. เข้า Apps Script สำเร็จแล้ว!`,
+          message: `ซิงก์โหมดการ์ดภาพ (v3.4) + เวลาเตือนล่วงหน้า (${timings.map(formatRemindMinutesLabel).join(', ')}) และสรุปเช้า ${lineSettings.dailyDigestTime || '08:00'} น. เข้า Apps Script สำเร็จแล้ว!`,
         });
+        checkLiveGasCardVersion(trimmedGas);
       } else {
         setTgGasSyncStatus({
           ok: false,
           message:
-            'Apps Script ของคุณยังเป็นเวอร์ชันเก่า (ซึ่งส่งแจ้งเตือนอัตโนมัติเป็นข้อความ) — กรุณากด "คัดลอกโค้ด Apps Script" ไปวางทับ กด Deploy > Edit > New version แล้วกด Run ฟังก์ชัน setupTelegramAutoTriggers 1 ครั้ง เพื่อเปิดส่งเป็นการ์ดภาพอัตโนมัติ 24 ชม.ครับ',
+            `ลิงก์ที่ทดสอบ (${shortGasTail}) ยังตอบกลับเป็นเวอร์ชัน "${detectedVer || 'เก่า (ก่อน v3.4)'}" — สาเหตุที่พบบ่อย: (1) ตอน Deploy กด "New deployment" แล้วได้ลิงก์ /exec ใหม่ แต่ยังไม่ได้เอาลิงก์ใหม่มาวางในช่อง Web App URL ด้านล่าง หรือ (2) กด Deploy โดยยังไม่ได้เปลี่ยนช่อง Version เป็น "New version" (กด Manage deployments > ดินสอ Edit > Version: New version > Deploy)`,
         });
+        checkLiveGasCardVersion(trimmedGas);
       }
     } catch {
       setTgGasSyncStatus({
@@ -1181,12 +1190,37 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
   };
 
   const handleCopyScript = async () => {
+    let copied = false;
     try {
-      await navigator.clipboard.writeText(appsScriptCode);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(appsScriptCode);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (!copied) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = appsScriptCode;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        copied = false;
+      }
+    }
+    if (copied) {
       setCopiedScript(true);
       setTimeout(() => setCopiedScript(false), 2500);
-    } catch {
-      // Fallback
+    } else {
+      setShowScriptPanel(true);
     }
   };
 
@@ -1281,10 +1315,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
           }
 
           const realVer = String(
-            parsed.cardDesignVersion || parsed.version || ''
+            parsed.version || parsed.cardDesignVersion || ''
           ).trim();
-          const isLatestV3 =
-            realVer === '3.0-executive-card' || realVer.startsWith('3.');
+          const parsedCaps = Array.isArray(parsed.capabilities) ? parsed.capabilities : [];
+          const isLatestV34 =
+            realVer === '3.4-telegram-photo-cards-24x7' ||
+            parsedCaps.includes('telegram_photo_cards_24x7');
 
           if (withSampleTask && sampleText) {
             onSendChatCommand(sampleText);
@@ -1297,23 +1333,23 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
               ok: true,
               message: `ส่งข้อความ "${sampleText}" ไปยัง Google Apps Script และเพิ่มงานเข้าปฏิทินเรียบร้อยแล้ว!`,
             });
-          } else if (isLatestV3) {
+          } else if (isLatestV34) {
             setGasVerifyResult({
               ok: true,
-              message: `✅ ลิงก์ Google Apps Script พร้อมใช้งาน 100% (โค้ดเวอร์ชันล่าสุด ${realVer} — ดีไซน์การ์ดผู้บริหาร v3.0)`,
+              message: `✅ ลิงก์ Google Apps Script พร้อมใช้งาน 100% (โค้ดเวอร์ชันล่าสุด ${realVer} — การ์ดภาพ Telegram 24 ชม. + การ์ดผู้บริหาร)`,
             });
-          } else if (parsed.mode === 'gas_bridge_ready' || realVer.startsWith('2.')) {
+          } else if (parsed.mode === 'gas_bridge_ready' || realVer.startsWith('2.') || realVer.startsWith('3.')) {
             setGasVerifyResult({
               ok: false,
               message: `⚠️ ลิงก์เชื่อมต่อได้ แต่ลิงก์ /exec นี้ยังรันโค้ดเวอร์ชันเก่า (${
-                realVer || 'ก่อน v3.0'
-              }) ยังไม่ใช่ v3.0! 💡 หากคุณกดอัปเดตหลายรอบแล้วแต่ยังไม่เปลี่ยน แปลว่าเผลอกด "Deploy > New deployment" (ซึ่งจะได้ลิงก์ /exec อันใหม่คนละรหัส) — ให้นำลิงก์ /exec อันใหม่ล่าสุดมาวางทับในช่องนี้ หรือกด "Deploy > Manage deployments > รูปดินสอ (Edit) > เลือก New version > กด Deploy" บนลิงก์เดิมครับ`,
+                realVer || 'ก่อน v3.4'
+              }) ยังไม่ใช่ v3.4! 💡 หากอัปเดตโค้ดแล้วยังเป็นเวอร์ชันเดิม ให้ตรวจ 2 ข้อ: (1) ถ้ากด "New deployment" ให้นำลิงก์ /exec ใหม่มาวางในช่องนี้ หรือ (2) กด "Deploy > Manage deployments > รูปดินสอ (Edit) > เลือก Version: New version > กด Deploy" บนลิงก์เดิมครับ`,
             });
           } else if (parsed.status === 'verified') {
             setGasVerifyResult({
               ok: false,
               message:
-                '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ด Apps Script เวอร์ชันเก่า" — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script ล่าสุด (v3.0)" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
+                '⚠️ ลิงก์เชื่อมต่อได้ แต่ยังเป็น "โค้ด Apps Script เวอร์ชันเก่า" — กรุณากดปุ่ม "คัดลอกโค้ด Apps Script ล่าสุด (v3.4)" ด้านล่าง ไปวางทับใน Apps Script แล้วกด Deploy > Manage deployments > แก้ไข (รูปดินสอ) > เลือก Version: New version > กด Deploy',
             });
           } else {
             setGasVerifyResult({
@@ -5171,12 +5207,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 </div>
                 {gasCardVersionInfo.status === 'up_to_date' && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[11px] font-bold">
-                    ✓ เวอร์ชันล่าสุด: {gasCardVersionInfo.detectedVersion || '3.0-executive-card'}
+                    ✓ เวอร์ชันล่าสุด: {gasCardVersionInfo.detectedVersion || '3.4-telegram-photo-cards-24x7'}
                   </span>
                 )}
                 {gasCardVersionInfo.status === 'outdated' && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[11px] font-bold">
-                    ! ลิงก์นี้ยังเป็น: {gasCardVersionInfo.detectedVersion} (รออัปเดตเป็น v3.0)
+                    ! ลิงก์นี้ยังเป็น: {gasCardVersionInfo.detectedVersion} (รออัปเดตเป็น v3.4)
                   </span>
                 )}
               </div>
@@ -5227,12 +5263,12 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
                 {copiedScript ? (
                   <>
                     <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>คัดลอกโค้ด v3.0 แล้ว!</span>
+                    <span>คัดลอกโค้ด v3.4 แล้ว!</span>
                   </>
                 ) : (
                   <>
                     <Copy className="h-3.5 w-3.5 text-amber-400" />
-                    <span>คัดลอกโค้ด Apps Script ล่าสุด (v3.0 ดีไซน์ผู้บริหาร)</span>
+                    <span>คัดลอกโค้ด Apps Script ล่าสุด (v3.4 การ์ดภาพ 24 ชม.)</span>
                   </>
                 )}
               </button>
