@@ -340,6 +340,8 @@ export default function App() {
   });
 
   const [lastCollabSyncAt, setLastCollabSyncAt] = useState<string | null>(null);
+  const [lastBoardSyncSuccessAt, setLastBoardSyncSuccessAt] = useState<number | null>(null);
+  const [boardSyncFailureCount, setBoardSyncFailureCount] = useState<number>(0);
   const lastSyncedTimestampRef = useRef<string>('');
   const lastLocalMutationMsRef = useRef<number>(0);
   const lastRemoteRealtimeMsRef = useRef<number>(0);
@@ -3254,6 +3256,7 @@ export default function App() {
       try {
         // 0. First try Collaborative Workspace endpoint if running on Full-Stack Server
         let workspaceHandled = false;
+        let anyRemoteSourceSucceeded = false;
         let wsTaskCount = 0;
         if (!isStaticHostRef.current) {
           try {
@@ -3263,6 +3266,7 @@ export default function App() {
             );
             const wsCt = wsRes.headers.get('content-type') || '';
             if (wsRes.ok && wsCt.includes('application/json')) {
+              anyRemoteSourceSucceeded = true;
               const wsData = await wsRes.json();
               if (wsData.exists && wsData.workspace) {
                 if (wsData.workspace.updatedAt) {
@@ -3509,6 +3513,8 @@ export default function App() {
           }
 
           if (data) {
+            anyRemoteSourceSucceeded = true;
+            setLastCollabSyncAt(new Date().toISOString());
             if (Array.isArray(data.deletedTaskIds) && data.deletedTaskIds.length > 0) {
               recordDeletedTaskIds(data.deletedTaskIds);
             }
@@ -3704,13 +3710,23 @@ export default function App() {
           }
         }
 
+        if (anyRemoteSourceSucceeded) {
+          setLastBoardSyncSuccessAt(Date.now());
+          setBoardSyncFailureCount(0);
+        } else {
+          setBoardSyncFailureCount((prev) => prev + 1);
+        }
+
         if (showFeedback) {
           showNotice(
-            'success',
-            'ดึงตารางงานและหมวดหมู่สีล่าสุดจากปฏิทินกลางของแอดมินและทีมเรียบร้อยแล้ว!'
+            anyRemoteSourceSucceeded ? 'success' : 'error',
+            anyRemoteSourceSucceeded
+              ? 'ดึงตารางงานและหมวดหมู่สีล่าสุดจากปฏิทินกลางของแอดมินและทีมเรียบร้อยแล้ว!'
+              : 'ไม่สามารถเชื่อมต่อฐานข้อมูลกลางได้ในขณะนี้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'
           );
         }
       } catch {
+        setBoardSyncFailureCount((prev) => prev + 1);
         if (showFeedback) {
           showNotice(
             'error',
@@ -3746,8 +3762,15 @@ export default function App() {
         ev.type === 'tv:ping' ||
         ev.type === 'tv:pong'
       ) {
-        if (ev.type !== 'connection:status') {
+        if (ev.type === 'connection:status') {
+          if (ev.connected) {
+            setLastBoardSyncSuccessAt(Date.now());
+            setBoardSyncFailureCount(0);
+          }
+        } else {
           lastRemoteRealtimeMsRef.current = Date.now();
+          setLastBoardSyncSuccessAt(Date.now());
+          setBoardSyncFailureCount(0);
         }
         return;
       }
@@ -6426,6 +6449,9 @@ export default function App() {
             onForceRefreshFromCloud={() => {
               void pullLatestTeamCalendar(true);
             }}
+            isCloudSyncing={isSyncing}
+            lastCloudSyncAt={lastBoardSyncSuccessAt}
+            cloudSyncFailureCount={boardSyncFailureCount}
           />
         )}
 

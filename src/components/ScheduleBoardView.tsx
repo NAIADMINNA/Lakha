@@ -36,6 +36,7 @@ import {
   Tv,
   Users,
   Wifi,
+  WifiOff,
   X,
 } from 'lucide-react';
 import QRCode from 'qrcode';
@@ -101,6 +102,9 @@ interface ScheduleBoardViewProps {
   onPresenceStaticSync?: () => void;
   onForcePushRealtimeToTv?: (currentBoardSettings: BoardRemoteSettings) => void;
   onForceRefreshFromCloud?: () => void;
+  isCloudSyncing?: boolean;
+  lastCloudSyncAt?: number | null;
+  cloudSyncFailureCount?: number;
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
@@ -126,6 +130,136 @@ const THAI_WEEKDAY_FULL = [
   'วันศุกร์',
   'วันเสาร์',
 ];
+
+const THAI_WEEKDAY_SHORT = [
+  'อาทิตย์',
+  'จันทร์',
+  'อังคาร',
+  'พุธ',
+  'พฤหัสฯ',
+  'ศุกร์',
+  'เสาร์',
+];
+
+const THAI_MONTHS_FULL = [
+  'มกราคม',
+  'กุมภาพันธ์',
+  'มีนาคม',
+  'เมษายน',
+  'พฤษภาคม',
+  'มิถุนายน',
+  'กรกฎาคม',
+  'สิงหาคม',
+  'กันยายน',
+  'ตุลาคม',
+  'พฤศจิกายน',
+  'ธันวาคม',
+];
+
+interface ThaiWeekdayPalette {
+  headerBg: string;
+  headerText: string;
+  borderLight: string;
+  borderDark: string;
+  accentTextLight: string;
+  accentTextDark: string;
+}
+
+const THAI_WEEKDAY_PALETTES: ThaiWeekdayPalette[] = [
+  // 0: อาทิตย์ (แดงสุภาพ)
+  {
+    headerBg: 'bg-rose-600',
+    headerText: 'text-white',
+    borderLight: 'border-rose-200',
+    borderDark: 'border-rose-400/50',
+    accentTextLight: 'text-rose-700',
+    accentTextDark: 'text-rose-300',
+  },
+  // 1: จันทร์ (เหลืองทองสุภาพ)
+  {
+    headerBg: 'bg-amber-500',
+    headerText: 'text-slate-950',
+    borderLight: 'border-amber-300',
+    borderDark: 'border-amber-400/55',
+    accentTextLight: 'text-amber-700',
+    accentTextDark: 'text-amber-300',
+  },
+  // 2: อังคาร (ชมพูกุหลาบสุภาพ)
+  {
+    headerBg: 'bg-pink-600',
+    headerText: 'text-white',
+    borderLight: 'border-pink-200',
+    borderDark: 'border-pink-400/50',
+    accentTextLight: 'text-pink-700',
+    accentTextDark: 'text-pink-300',
+  },
+  // 3: พุธ (เขียวมรกตสุภาพ)
+  {
+    headerBg: 'bg-emerald-600',
+    headerText: 'text-white',
+    borderLight: 'border-emerald-200',
+    borderDark: 'border-emerald-400/50',
+    accentTextLight: 'text-emerald-700',
+    accentTextDark: 'text-emerald-300',
+  },
+  // 4: พฤหัสบดี (ส้มแสดสุภาพ)
+  {
+    headerBg: 'bg-orange-600',
+    headerText: 'text-white',
+    borderLight: 'border-orange-200',
+    borderDark: 'border-orange-400/50',
+    accentTextLight: 'text-orange-700',
+    accentTextDark: 'text-orange-300',
+  },
+  // 5: ศุกร์ (ฟ้าครามสุภาพ)
+  {
+    headerBg: 'bg-sky-600',
+    headerText: 'text-white',
+    borderLight: 'border-sky-200',
+    borderDark: 'border-sky-400/50',
+    accentTextLight: 'text-sky-700',
+    accentTextDark: 'text-sky-300',
+  },
+  // 6: เสาร์ (ม่วงสุภาพ)
+  {
+    headerBg: 'bg-violet-600',
+    headerText: 'text-white',
+    borderLight: 'border-violet-200',
+    borderDark: 'border-violet-400/50',
+    accentTextLight: 'text-violet-700',
+    accentTextDark: 'text-violet-300',
+  },
+];
+
+function getThaiExecutiveDateParts(ymd: string): {
+  weekdayFull: string;
+  weekdayShort: string;
+  dayNum: string;
+  monthYear: string;
+  palette: ThaiWeekdayPalette;
+} {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) {
+    return {
+      weekdayFull: '',
+      weekdayShort: 'วันที่',
+      dayNum: '--',
+      monthYear: formatThaiDateDisplay(ymd, 'long'),
+      palette: THAI_WEEKDAY_PALETTES[5],
+    };
+  }
+  const dt = new Date(y, m - 1, d);
+  const dowIdx = dt.getDay();
+  const monthName = THAI_MONTHS_FULL[m - 1] || '';
+  const beYear = y + 543;
+  return {
+    weekdayFull: THAI_WEEKDAY_FULL[dowIdx] || '',
+    weekdayShort: THAI_WEEKDAY_SHORT[dowIdx] || '',
+    dayNum: String(d),
+    monthYear: `${monthName} ${beYear}`,
+    palette: THAI_WEEKDAY_PALETTES[dowIdx] || THAI_WEEKDAY_PALETTES[5],
+  };
+}
 
 function formatFullThaiDayHeader(ymd: string): string {
   const [y, m, d] = ymd.split('-').map(Number);
@@ -472,7 +606,30 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   onPresenceStaticSync,
   onForcePushRealtimeToTv,
   onForceRefreshFromCloud,
+  isCloudSyncing = false,
+  lastCloudSyncAt = null,
+  cloudSyncFailureCount = 0,
 }) => {
+  // Real browser connectivity tracking + automatic cloud sync on reconnect
+  const [isBrowserOnline, setIsBrowserOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsBrowserOnline(true);
+      onForceRefreshFromCloud?.();
+    };
+    const handleOffline = () => {
+      setIsBrowserOnline(false);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [onForceRefreshFromCloud]);
   // Update minute-level state from Internet Standard Time only when HH:mm or YYYY-MM-DD changes
   const [nowDate, setNowDate] = useState<Date>(() => getInternetNow());
   const todayStr = useMemo(() => formatLocalDateYMD(nowDate), [nowDate]);
@@ -2796,54 +2953,118 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
               : 'bg-slate-50 border-slate-200/90'
           }`}
         >
-          <div className="flex flex-nowrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
-            <CalendarIcon
-              className={`h-5 w-5 shrink-0 ${
-                isTodayGroup
-                  ? isEmeraldExec
-                    ? 'text-emerald-700'
-                    : 'text-indigo-600'
-                  : 'text-slate-600'
-              }`}
-            />
-            <h2
-              className={`font-extrabold text-slate-900 whitespace-nowrap truncate ${
-                isTvStageActive
-                  ? isLargeText
-                    ? 'text-2xl'
-                    : 'text-lg'
-                  : isLargeText
-                  ? 'text-lg sm:text-xl xl:text-2xl'
-                  : 'text-sm sm:text-base lg:text-lg'
-              }`}
-            >
-              {!expandMultiDay && !isTodayGroup && layoutMode !== 'single_day'
-                ? formatSummaryCardHeaderDate(
-                    group.date,
-                    group.items.map((i) => i.task)
-                  )
-                : formatFullThaiDayHeader(group.date)}
-            </h2>
-            <span
-              className={`whitespace-nowrap shrink-0 ${
-                isTvStageActive
-                  ? isLargeText
-                    ? 'text-lg'
-                    : 'text-sm'
-                  : isLargeText
-                  ? 'text-sm sm:text-base xl:text-lg'
-                  : 'text-xs sm:text-sm'
-              } font-bold ${
-                rel.tone === 'today'
-                  ? 'text-emerald-600'
-                  : rel.tone === 'tomorrow'
-                  ? 'text-indigo-600'
-                  : 'text-slate-600'
-              }`}
-            >
-              · {rel.text}
-            </span>
-          </div>
+          {(() => {
+            const dp = getThaiExecutiveDateParts(group.date);
+            const useMultiDaySummary =
+              !expandMultiDay && !isTodayGroup && layoutMode !== 'single_day';
+            const summaryRangeText = useMultiDaySummary
+              ? formatSummaryCardHeaderDate(
+                  group.date,
+                  group.items.map((i) => i.task)
+                )
+              : null;
+            const isMultiDayRange =
+              Boolean(summaryRangeText) &&
+              summaryRangeText !== formatFullThaiDayHeader(group.date) &&
+              summaryRangeText !== formatThaiDateDisplay(group.date, 'long');
+
+            return (
+              <div className="flex flex-nowrap items-center gap-3 min-w-0 flex-1">
+                {/* Executive Thai Weekday Calendar Tile */}
+                <div
+                  className={`shrink-0 rounded-xl overflow-hidden border bg-white shadow-2xs flex flex-col items-center justify-center text-center select-none ${
+                    dp.palette.borderLight
+                  } ${
+                    isTvStageActive
+                      ? isLargeText
+                        ? 'w-[58px]'
+                        : 'w-[50px]'
+                      : isLargeText
+                      ? 'w-14'
+                      : 'w-12'
+                  }`}
+                >
+                  <div
+                    className={`w-full py-0.5 font-extrabold leading-tight tracking-tight ${
+                      dp.palette.headerBg
+                    } ${dp.palette.headerText} ${
+                      isTvStageActive
+                        ? isLargeText
+                          ? 'text-[11px]'
+                          : 'text-[10px]'
+                        : 'text-[10px]'
+                    }`}
+                  >
+                    {dp.weekdayShort}
+                  </div>
+                  <div
+                    className={`w-full py-0.5 font-black tabular-nums leading-none text-slate-900 ${
+                      isTvStageActive
+                        ? isLargeText
+                          ? 'text-[26px]'
+                          : 'text-[21px]'
+                        : isLargeText
+                        ? 'text-2xl'
+                        : 'text-xl'
+                    }`}
+                  >
+                    {dp.dayNum}
+                  </div>
+                </div>
+
+                {/* Month/Year + Relative Day + Official Weekday */}
+                <div className="min-w-0 flex flex-col justify-center">
+                  <div className="flex flex-nowrap items-baseline gap-2 min-w-0">
+                    <h2
+                      className={`font-extrabold text-slate-900 whitespace-nowrap truncate leading-tight ${
+                        isTvStageActive
+                          ? isLargeText
+                            ? 'text-2xl'
+                            : 'text-xl'
+                          : isLargeText
+                          ? 'text-lg sm:text-xl xl:text-2xl'
+                          : 'text-base sm:text-lg'
+                      }`}
+                    >
+                      {isMultiDayRange ? summaryRangeText : dp.monthYear}
+                    </h2>
+                    <span
+                      className={`whitespace-nowrap shrink-0 font-bold ${
+                        isTvStageActive
+                          ? isLargeText
+                            ? 'text-lg'
+                            : 'text-sm'
+                          : isLargeText
+                          ? 'text-sm sm:text-base xl:text-lg'
+                          : 'text-xs sm:text-sm'
+                      } ${
+                        rel.tone === 'today'
+                          ? 'text-emerald-600'
+                          : rel.tone === 'tomorrow'
+                          ? 'text-indigo-600'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      · {rel.text}
+                    </span>
+                  </div>
+                  <div
+                    className={`font-semibold whitespace-nowrap truncate leading-snug ${
+                      isTvStageActive
+                        ? isLargeText
+                          ? 'text-sm'
+                          : 'text-xs'
+                        : isLargeText
+                        ? 'text-xs sm:text-sm'
+                        : 'text-[11px] sm:text-xs'
+                    } ${dp.palette.accentTextLight}`}
+                  >
+                    {dp.weekdayFull}ที่ {dp.dayNum}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           <div
             className={`flex flex-nowrap items-center gap-2.5 sm:gap-3 shrink-0 whitespace-nowrap ${
@@ -3133,38 +3354,111 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     : 'bg-white border-indigo-200/90 text-slate-900'
                 }`}
               >
-                <div
-                  className={`flex items-center justify-center gap-2.5 px-6 sm:px-8 py-2.5 border-b font-bold tracking-tight text-center whitespace-nowrap ${
-                    isTvStageActive
-                      ? isLargeText
-                        ? 'text-[25px]'
-                        : 'text-[21px]'
-                      : isLargeText
-                      ? 'text-lg sm:text-2xl md:text-[26px]'
-                      : 'text-base sm:text-xl md:text-[22px]'
-                  } ${
-                    isNavyGold
-                      ? 'bg-amber-400/12 border-amber-400/25 text-amber-200'
-                      : isDarkDisplay
-                      ? 'bg-slate-900/95 border-slate-800 text-sky-200'
-                      : isEmeraldExec
-                      ? 'bg-emerald-50/85 border-emerald-100 text-emerald-950'
-                      : 'bg-indigo-50/80 border-indigo-100 text-indigo-950'
-                }`}
-                >
-                  <CalendarIcon
-                    className={`h-4 w-4 sm:h-5 sm:w-5 shrink-0 ${
-                      isNavyGold
-                        ? 'text-amber-300'
-                        : isDarkDisplay
-                        ? 'text-sky-400'
-                        : isEmeraldExec
-                        ? 'text-emerald-700'
-                        : 'text-indigo-700'
-                    }`}
-                  />
-                  <span>{formatFullThaiDayHeader(todayStr)}</span>
-                </div>
+                {(() => {
+                  const todayParts = getThaiExecutiveDateParts(todayStr);
+                  const isClockDark = isNavyGold || isDarkDisplay;
+                  return (
+                    <div
+                      className={`flex items-center justify-center gap-3.5 px-5 sm:px-7 py-2.5 border-b whitespace-nowrap ${
+                        isNavyGold
+                          ? 'bg-amber-400/12 border-amber-400/25 text-amber-100'
+                          : isDarkDisplay
+                          ? 'bg-slate-900/95 border-slate-800 text-sky-100'
+                          : isEmeraldExec
+                          ? 'bg-emerald-50/85 border-emerald-100 text-emerald-950'
+                          : 'bg-indigo-50/80 border-indigo-100 text-indigo-950'
+                      }`}
+                    >
+                      {/* Executive Thai Weekday Calendar Tile */}
+                      <div
+                        className={`shrink-0 rounded-xl overflow-hidden border flex flex-col items-center justify-center text-center select-none shadow-2xs ${
+                          isClockDark
+                            ? `bg-slate-950/95 ${todayParts.palette.borderDark}`
+                            : `bg-white ${todayParts.palette.borderLight}`
+                        } ${
+                          isTvStageActive
+                            ? isLargeText
+                              ? 'w-[58px]'
+                              : 'w-[50px]'
+                            : isLargeText
+                            ? 'w-14'
+                            : 'w-12'
+                        }`}
+                      >
+                        <div
+                          className={`w-full py-0.5 font-extrabold leading-tight tracking-tight ${
+                            todayParts.palette.headerBg
+                          } ${todayParts.palette.headerText} ${
+                            isTvStageActive
+                              ? isLargeText
+                                ? 'text-[11px]'
+                                : 'text-[10px]'
+                              : 'text-[10px]'
+                          }`}
+                        >
+                          {todayParts.weekdayShort}
+                        </div>
+                        <div
+                          className={`w-full py-0.5 font-black tabular-nums leading-none ${
+                            isClockDark ? 'text-white' : 'text-slate-900'
+                          } ${
+                            isTvStageActive
+                              ? isLargeText
+                                ? 'text-[26px]'
+                                : 'text-[22px]'
+                              : isLargeText
+                              ? 'text-2xl'
+                              : 'text-xl'
+                          }`}
+                        >
+                          {todayParts.dayNum}
+                        </div>
+                      </div>
+
+                      {/* Official Thai Weekday + Month/BE Year */}
+                      <div className="flex flex-col items-start justify-center text-left min-w-0">
+                        <span
+                          className={`font-bold leading-snug tracking-wide ${
+                            isTvStageActive
+                              ? isLargeText
+                                ? 'text-[15px]'
+                                : 'text-[13px]'
+                              : isLargeText
+                              ? 'text-xs sm:text-sm'
+                              : 'text-[11px] sm:text-xs'
+                          } ${
+                            isClockDark
+                              ? todayParts.palette.accentTextDark
+                              : todayParts.palette.accentTextLight
+                          }`}
+                        >
+                          {todayParts.weekdayFull}ที่ {todayParts.dayNum}
+                        </span>
+                        <span
+                          className={`font-extrabold tracking-tight leading-tight ${
+                            isTvStageActive
+                              ? isLargeText
+                                ? 'text-[25px]'
+                                : 'text-[21px]'
+                              : isLargeText
+                              ? 'text-lg sm:text-2xl md:text-[25px]'
+                              : 'text-base sm:text-xl md:text-[22px]'
+                          } ${
+                            isNavyGold
+                              ? 'text-amber-100'
+                              : isDarkDisplay
+                              ? 'text-white'
+                              : isEmeraldExec
+                              ? 'text-emerald-950'
+                              : 'text-indigo-950'
+                          }`}
+                        >
+                          {todayParts.monthYear}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="px-6 sm:px-8 py-3 flex items-baseline justify-center gap-2">
                   <LiveBangkokClockDisplay
@@ -3196,6 +3490,140 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     น.
                   </span>
                 </div>
+
+                {/* Live Online & Cloud Sync Status Footer Strip (Always visible in TV Signage & Desktop modes) */}
+                {(() => {
+                  const isDisconnected = !isBrowserOnline;
+                  const isSyncDegraded =
+                    !isDisconnected &&
+                    cloudSyncFailureCount >= 2 &&
+                    !isRealtimeBusConnected;
+                  const statusTone: 'offline' | 'syncing' | 'online' =
+                    isDisconnected || isSyncDegraded
+                      ? 'offline'
+                      : isCloudSyncing
+                      ? 'syncing'
+                      : 'online';
+
+                  const lastSyncTimeText = lastCloudSyncAt
+                    ? new Intl.DateTimeFormat('th-TH', {
+                        timeZone: 'Asia/Bangkok',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                      }).format(new Date(lastCloudSyncAt))
+                    : null;
+
+                  const primaryLabel = isDisconnected
+                    ? 'ออฟไลน์'
+                    : isSyncDegraded
+                    ? 'เชื่อมต่อข้อมูลไม่ได้'
+                    : statusTone === 'syncing'
+                    ? 'กำลังอัปเดตข้อมูล...'
+                    : 'ออนไลน์';
+
+                  const secondaryLabel = isDisconnected
+                    ? lastSyncTimeText
+                      ? `ขาดการเชื่อมต่อ · ข้อมูลเมื่อ ${lastSyncTimeText} น.`
+                      : 'ขาดการเชื่อมต่ออินเทอร์เน็ต'
+                    : isSyncDegraded
+                    ? lastSyncTimeText
+                      ? `ข้อมูลล่าสุด ${lastSyncTimeText} น.`
+                      : 'กำลังลองเชื่อมต่อใหม่'
+                    : statusTone === 'syncing'
+                    ? lastSyncTimeText
+                      ? `ล่าสุด ${lastSyncTimeText} น.`
+                      : 'กำลังซิงก์ตารางงาน'
+                    : lastSyncTimeText
+                    ? `ซิงก์ล่าสุด ${lastSyncTimeText} น.`
+                    : isRealtimeBusConnected
+                    ? 'เชื่อมต่อเรียลไทม์'
+                    : 'พร้อมรับข้อมูลอัตโนมัติ';
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => onForceRefreshFromCloud?.()}
+                      title="สถานะการเชื่อมต่อระบบ (คลิกเพื่ออัปเดตข้อมูลล่าสุดทันที)"
+                      aria-live="polite"
+                      className={`w-full px-5 sm:px-6 py-2 border-t flex items-center justify-center gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-400/70 ${
+                        isTvStageActive
+                          ? isLargeText
+                            ? 'text-[16px]'
+                            : 'text-[14px]'
+                          : isLargeText
+                          ? 'text-xs sm:text-sm'
+                          : 'text-[11px] sm:text-xs'
+                      } ${
+                        statusTone === 'offline'
+                          ? isNavyGold || isDarkDisplay
+                            ? 'bg-rose-950/65 border-rose-500/35 text-rose-200 hover:bg-rose-950/85'
+                            : 'bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100/70'
+                          : statusTone === 'syncing'
+                          ? isNavyGold
+                            ? 'bg-amber-400/10 border-amber-400/25 text-amber-200 hover:bg-amber-400/15'
+                            : isDarkDisplay
+                            ? 'bg-amber-500/10 border-slate-800 text-amber-200 hover:bg-amber-500/15'
+                            : 'bg-amber-50/85 border-amber-200/80 text-amber-900 hover:bg-amber-100/70'
+                          : isNavyGold
+                          ? 'bg-[#0B182C]/90 border-amber-400/25 text-slate-200 hover:bg-[#10223D]'
+                          : isDarkDisplay
+                          ? 'bg-slate-900/80 border-slate-800 text-slate-300 hover:bg-slate-800/80'
+                          : isEmeraldExec
+                          ? 'bg-emerald-50/55 border-emerald-100 text-slate-700 hover:bg-emerald-50'
+                          : 'bg-slate-50/90 border-indigo-100 text-slate-600 hover:bg-indigo-50/60'
+                      }`}
+                    >
+                      <span className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center">
+                        {statusTone === 'online' && (
+                          <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping motion-reduce:animate-none" />
+                        )}
+                        <span
+                          className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
+                            statusTone === 'offline'
+                              ? 'bg-rose-500'
+                              : statusTone === 'syncing'
+                              ? 'bg-amber-400 animate-pulse motion-reduce:animate-none'
+                              : 'bg-emerald-500'
+                          }`}
+                        />
+                      </span>
+
+                      <span
+                        className={`font-bold whitespace-nowrap shrink-0 ${
+                          statusTone === 'offline'
+                            ? isNavyGold || isDarkDisplay
+                              ? 'text-rose-300'
+                              : 'text-rose-700'
+                            : statusTone === 'syncing'
+                            ? isNavyGold || isDarkDisplay
+                              ? 'text-amber-300'
+                              : 'text-amber-800'
+                            : isNavyGold || isDarkDisplay
+                            ? 'text-emerald-400'
+                            : 'text-emerald-700'
+                        }`}
+                      >
+                        {primaryLabel}
+                      </span>
+
+                      <span aria-hidden="true" className="opacity-45 shrink-0">
+                        ·
+                      </span>
+
+                      <span className="inline-flex items-center gap-1.5 font-medium tabular-nums truncate">
+                        {statusTone === 'offline' ? (
+                          <WifiOff className="h-3.5 w-3.5 shrink-0 opacity-85" />
+                        ) : statusTone === 'syncing' ? (
+                          <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none opacity-85" />
+                        ) : (
+                          <Wifi className="h-3.5 w-3.5 shrink-0 opacity-75" />
+                        )}
+                        <span className="truncate">{secondaryLabel}</span>
+                      </span>
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           </div>
