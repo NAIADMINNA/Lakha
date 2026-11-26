@@ -832,6 +832,7 @@ export const LineCenterView: React.FC<LineCenterViewProps> = ({
     try {
       if (gasUrl.trim()) {
         localStorage.setItem('sheetcal_gas_url_v1', gasUrl.trim());
+        localStorage.setItem('sheetcal_gas_webapp_url_v1', gasUrl.trim());
       }
     } catch {
       // Ignore storage error

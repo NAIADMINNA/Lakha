@@ -352,8 +352,8 @@ function base64ToBytes(b64: string): Uint8Array {
 function resolveWorkspaceGasSeed(): string {
   try {
     const rawUrl =
-      window.localStorage.getItem('sheetcal_gas_webapp_url_v1') ||
       window.localStorage.getItem('sheetcal_gas_url_v1') ||
+      window.localStorage.getItem('sheetcal_gas_webapp_url_v1') ||
       '';
     const match = rawUrl.match(/\/macros\/s\/([A-Za-z0-9_-]{20,})/);
     if (

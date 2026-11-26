@@ -23,11 +23,20 @@ export function isLegacyGasUrl(url?: string | null): boolean {
 
 export function getEffectiveGasUrl(): string {
   try {
-    const saved = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
-    if (!isLegacyGasUrl(saved)) {
-      return saved;
+    const primary = (localStorage.getItem('sheetcal_gas_url_v1') || '').trim();
+    const secondary = (localStorage.getItem('sheetcal_gas_webapp_url_v1') || '').trim();
+    const resolved = !isLegacyGasUrl(primary)
+      ? primary
+      : !isLegacyGasUrl(secondary)
+      ? secondary
+      : DEFAULT_GAS_WEB_APP_URL;
+    if (primary !== resolved) {
+      localStorage.setItem('sheetcal_gas_url_v1', resolved);
     }
-    localStorage.setItem('sheetcal_gas_url_v1', DEFAULT_GAS_WEB_APP_URL);
+    if (secondary !== resolved) {
+      localStorage.setItem('sheetcal_gas_webapp_url_v1', resolved);
+    }
+    return resolved;
   } catch {
     // Ignore storage access errors
   }

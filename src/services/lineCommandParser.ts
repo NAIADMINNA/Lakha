@@ -2635,7 +2635,9 @@ function readSheetTasksForWeb() {
               remindMinutesBefore: Number(r[8] || 1),
               lineNotified: String(r[9]).toUpperCase() === 'TRUE',
               source: rawSourceStr,
-              updatedAt: String(r[11] || new Date().toISOString())
+              updatedAt: String(r[11] || new Date().toISOString()),
+              assigneeId: String(r[12] || '').trim() || undefined,
+              assigneeName: String(r[13] || '').trim() || undefined
             };
           }).filter(function(t) { return Boolean(t.title && t.date); });
         } else {
@@ -3476,86 +3478,99 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // บันทึก/อัปเดตรายการงานลง Google Sheets ผ่าน Apps Script โดยผสานข้อมูลเดิมและตัดรายการซ้ำซ้อนอัตโนมัติ
+    // บันทึก/อัปเดตรายการงานลง Google Sheets ผ่าน Apps Script โดยผสานข้อมูลเดิมและตัดรายการซ้ำซ้อนอัตโนมัติ (ใช้ ScriptLock กันสมาชิกเขียนทับกัน)
     if (payload.action === 'sync_tasks') {
-      var incomingTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-      var delIdsList = Array.isArray(payload.deletedTaskIds) ? payload.deletedTaskIds : [];
-      var delSet = {};
-      for (var di = 0; di < delIdsList.length; di++) {
-        if (delIdsList[di]) delSet[String(delIdsList[di]).trim()] = true;
+      var syncLock = null;
+      try {
+        syncLock = LockService.getScriptLock();
+        syncLock.tryLock(8000);
+      } catch (lockErr) {
+        syncLock = null;
       }
-      var incomingHasCatsMeta = incomingTasks.some(function(it) {
-        return it && typeof it.source === 'string' && it.source.indexOf('#SCMETA#') !== -1 && it.source.indexOf('"c":') !== -1;
-      });
-      var currentSheetTasks = (readSheetTasksForWeb() || []).map(function(st) {
-        if (!incomingHasCatsMeta || !st || typeof st.source !== 'string' || st.source.indexOf('#SCMETA#') === -1) return st;
-        var parts = st.source.split('#SCMETA#');
-        try {
-          var metaObj = JSON.parse(parts[1] || '{}');
-          delete metaObj.c;
-          delete metaObj.cu;
-          delete metaObj.dc;
-          delete metaObj.dt;
-          delete metaObj.dp;
-          delete metaObj.m;
-          var cleanSrc = Object.keys(metaObj).length > 0 ? (parts[0] + '#SCMETA#' + JSON.stringify(metaObj)) : parts[0];
-          var copySt = {};
-          for (var k in st) copySt[k] = st[k];
-          copySt.source = cleanSrc;
-          return copySt;
-        } catch (errMeta) {
-          return st;
+      try {
+        var incomingTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+        var delIdsList = Array.isArray(payload.deletedTaskIds) ? payload.deletedTaskIds : [];
+        var delSet = {};
+        for (var di = 0; di < delIdsList.length; di++) {
+          if (delIdsList[di]) delSet[String(delIdsList[di]).trim()] = true;
         }
-      });
-      var byIdMap = {};
-      var combinedList = currentSheetTasks.concat(incomingTasks);
-      for (var ci = 0; ci < combinedList.length; ci++) {
-        var item = combinedList[ci];
-        if (!item || !item.id || !item.title) continue;
-        var itemId = String(item.id).trim();
-        if (!itemId || delSet[itemId]) continue;
-        var prevItem = byIdMap[itemId];
-        if (!prevItem) {
-          byIdMap[itemId] = item;
-        } else {
-          var prevMs = prevItem.updatedAt ? new Date(String(prevItem.updatedAt)).getTime() : 0;
-          var nextMs = item.updatedAt ? new Date(String(item.updatedAt)).getTime() : 0;
-          if (nextMs >= prevMs) {
-            if (!item.endDate && prevItem.endDate) item.endDate = prevItem.endDate;
+        var incomingHasCatsMeta = incomingTasks.some(function(it) {
+          return it && typeof it.source === 'string' && it.source.indexOf('#SCMETA#') !== -1 && it.source.indexOf('"c":') !== -1;
+        });
+        var currentSheetTasks = (readSheetTasksForWeb() || []).map(function(st) {
+          if (!incomingHasCatsMeta || !st || typeof st.source !== 'string' || st.source.indexOf('#SCMETA#') === -1) return st;
+          var parts = st.source.split('#SCMETA#');
+          try {
+            var metaObj = JSON.parse(parts[1] || '{}');
+            delete metaObj.c;
+            delete metaObj.cu;
+            delete metaObj.dc;
+            delete metaObj.dt;
+            delete metaObj.dp;
+            delete metaObj.m;
+            var cleanSrc = Object.keys(metaObj).length > 0 ? (parts[0] + '#SCMETA#' + JSON.stringify(metaObj)) : parts[0];
+            var copySt = {};
+            for (var k in st) copySt[k] = st[k];
+            copySt.source = cleanSrc;
+            return copySt;
+          } catch (errMeta) {
+            return st;
+          }
+        });
+        var byIdMap = {};
+        var combinedList = currentSheetTasks.concat(incomingTasks);
+        for (var ci = 0; ci < combinedList.length; ci++) {
+          var item = combinedList[ci];
+          if (!item || !item.id || !item.title) continue;
+          var itemId = String(item.id).trim();
+          if (!itemId || delSet[itemId]) continue;
+          var prevItem = byIdMap[itemId];
+          if (!prevItem) {
             byIdMap[itemId] = item;
+          } else {
+            var prevMs = prevItem.updatedAt ? new Date(String(prevItem.updatedAt)).getTime() : 0;
+            var nextMs = item.updatedAt ? new Date(String(item.updatedAt)).getTime() : 0;
+            if (nextMs >= prevMs) {
+              if (!item.endDate && prevItem.endDate) item.endDate = prevItem.endDate;
+              byIdMap[itemId] = item;
+            }
           }
         }
-      }
-      var bySigMap = {};
-      var idKeys = Object.keys(byIdMap);
-      for (var ki = 0; ki < idKeys.length; ki++) {
-        var tObj = byIdMap[idKeys[ki]];
-        var normTitle = String(tObj.title || '').trim().toLowerCase().replace(/\\s+/g, ' ');
-        var normDate = String(tObj.date || '').trim().slice(0, 10);
-        var normTime = String(tObj.time || '09:00').trim().slice(0, 5);
-        var sigKey = normTitle + '|' + normDate + '|' + normTime;
-        var existingSig = bySigMap[sigKey];
-        if (!existingSig) {
-          bySigMap[sigKey] = tObj;
-        } else {
-          var exMs = existingSig.updatedAt ? new Date(String(existingSig.updatedAt)).getTime() : 0;
-          var nwMs = tObj.updatedAt ? new Date(String(tObj.updatedAt)).getTime() : 0;
-          if (nwMs >= exMs) {
-            if (!tObj.endDate && existingSig.endDate) tObj.endDate = existingSig.endDate;
+        var bySigMap = {};
+        var idKeys = Object.keys(byIdMap);
+        for (var ki = 0; ki < idKeys.length; ki++) {
+          var tObj = byIdMap[idKeys[ki]];
+          var normTitle = String(tObj.title || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+          var normDate = String(tObj.date || '').trim().slice(0, 10);
+          var normTime = String(tObj.time || '09:00').trim().slice(0, 5);
+          var sigKey = normTitle + '|' + normDate + '|' + normTime;
+          var existingSig = bySigMap[sigKey];
+          if (!existingSig) {
             bySigMap[sigKey] = tObj;
+          } else {
+            var exMs = existingSig.updatedAt ? new Date(String(existingSig.updatedAt)).getTime() : 0;
+            var nwMs = tObj.updatedAt ? new Date(String(tObj.updatedAt)).getTime() : 0;
+            if (nwMs >= exMs) {
+              if (!tObj.endDate && existingSig.endDate) tObj.endDate = existingSig.endDate;
+              bySigMap[sigKey] = tObj;
+            }
           }
         }
+        var mergedToSave = Object.keys(bySigMap).map(function(sk) { return bySigMap[sk]; });
+        var savedOk = writeSheetTasksFromWeb(mergedToSave);
+        return ContentService.createTextOutput(JSON.stringify({
+          status: savedOk ? 'ok' : 'error',
+          mode: 'gas_sync_tasks',
+          version: '3.4-telegram-photo-cards-24x7',
+          detectedGroupId: getSavedGroupId(),
+          ok: savedOk,
+          count: mergedToSave.length
+        })).setMimeType(ContentService.MimeType.JSON);
+      } finally {
+        if (syncLock) {
+          try { syncLock.releaseLock(); } catch (relErr) {}
+        }
       }
-      var mergedToSave = Object.keys(bySigMap).map(function(sk) { return bySigMap[sk]; });
-      var savedOk = writeSheetTasksFromWeb(mergedToSave);
-      return ContentService.createTextOutput(JSON.stringify({
-        status: savedOk ? 'ok' : 'error',
-        mode: 'gas_sync_tasks',
-        version: '3.0-executive-card',
-        detectedGroupId: getSavedGroupId(),
-        ok: savedOk,
-        count: mergedToSave.length
-      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // ตรวจสอบโควต้าข้อความรายเดือนของ LINE OA (GET /v2/bot/message/quota ไม่เสียโควต้า)

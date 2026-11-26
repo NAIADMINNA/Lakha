@@ -2332,6 +2332,16 @@ async function startServer() {
       sharedWorkspaces.get('team-default') ||
       Array.from(sharedWorkspaces.values())[0];
 
+    const reqGasUrl =
+      typeof req.query.gasUrl === 'string' ? req.query.gasUrl.trim() : '';
+    if (
+      reqGasUrl.startsWith('https://script.google.com/macros/s/') &&
+      !reqGasUrl.includes('AKfycby0gvQ') &&
+      !reqGasUrl.includes('AKfycbxIf9k')
+    ) {
+      runtimeGasUrl = resolveCleanGasUrl(reqGasUrl);
+    }
+
     const nowMs = Date.now();
     const cleanGas = resolveCleanGasUrl(runtimeGasUrl);
     if (
@@ -2494,12 +2504,22 @@ async function startServer() {
       deletedCategoryIds: incomingDeletedCategoryIds,
       categoriesUpdatedAt: incomingCategoriesUpdatedAt,
       updatedBy,
+      gasUrl: incomingGasUrl,
       spreadsheetId,
       spreadsheetUrl,
       tasks,
       categories,
       teamMembers,
     } = req.body || {};
+
+    if (
+      typeof incomingGasUrl === 'string' &&
+      incomingGasUrl.trim().startsWith('https://script.google.com/macros/s/') &&
+      !incomingGasUrl.includes('AKfycby0gvQ') &&
+      !incomingGasUrl.includes('AKfycbxIf9k')
+    ) {
+      runtimeGasUrl = resolveCleanGasUrl(incomingGasUrl);
+    }
 
     const existing =
       sharedWorkspaces.get(workspaceId) ||

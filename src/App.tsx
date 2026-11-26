@@ -315,6 +315,7 @@ export default function App() {
         existingGas.includes('AKfycbxIf9k')
       ) {
         localStorage.setItem('sheetcal_gas_url_v1', DEFAULT_GAS_WEB_APP_URL);
+        localStorage.setItem('sheetcal_gas_webapp_url_v1', DEFAULT_GAS_WEB_APP_URL);
       }
       const params = new URLSearchParams(window.location.search);
       const gasFromUrl = params.get('gas');
@@ -325,6 +326,7 @@ export default function App() {
         !gasFromUrl.includes('AKfycbxIf9k')
       ) {
         localStorage.setItem('sheetcal_gas_url_v1', gasFromUrl.trim());
+        localStorage.setItem('sheetcal_gas_webapp_url_v1', gasFromUrl.trim());
       }
       const fromUrl = params.get('workspace');
       if (fromUrl && fromUrl.trim()) {
@@ -1496,6 +1498,7 @@ export default function App() {
               body: JSON.stringify({
                 clientOriginId: getClientTabId(),
                 updatedBy: user?.email || 'สมาชิกทีม',
+                gasUrl: getEffectiveGasUrl(),
                 spreadsheetId: sheetMeta?.spreadsheetId,
                 spreadsheetUrl: sheetMeta?.spreadsheetUrl,
                 deletedTaskId:
@@ -1617,16 +1620,33 @@ export default function App() {
             deletedCategoryIds:
               allDeletedCatIds.length > 0 ? allDeletedCatIds : undefined,
           });
-          try {
-            const directGasRes = await fetch(activeGasUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: gasBodyStr,
-            });
-            if (!directGasRes.ok) {
-              throw new Error(`GAS HTTP ${directGasRes.status}`);
+          const canKeepAlive = gasBodyStr.length < 58000;
+          let directGasOk = false;
+          for (let attempt = 0; attempt < 2 && !directGasOk; attempt++) {
+            try {
+              const directGasRes = await fetch(activeGasUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: gasBodyStr,
+                keepalive: canKeepAlive,
+              });
+              if (directGasRes.ok) {
+                const rawTxt = await directGasRes.text().catch(() => '');
+                if (!rawTxt || rawTxt.includes('"ok":true') || rawTxt.includes('"status":"ok"')) {
+                  directGasOk = true;
+                  setLastBoardSyncSuccessAt(Date.now());
+                  setBoardSyncFailureCount(0);
+                  break;
+                }
+              }
+            } catch {
+              // Retry once before no-cors fallback
             }
-          } catch {
+            if (!directGasOk && attempt === 0) {
+              await new Promise((resolve) => setTimeout(resolve, 700));
+            }
+          }
+          if (!directGasOk) {
             // Fallback to no-cors so Google Apps Script 302 redirect still persists tasks reliably from GitHub Pages
             try {
               await fetch(activeGasUrl, {
@@ -1634,9 +1654,10 @@ export default function App() {
                 mode: 'no-cors',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: gasBodyStr,
+                keepalive: canKeepAlive,
               });
             } catch {
-              // Silent fallback
+              setBoardSyncFailureCount((c) => c + 1);
             }
           }
         }
@@ -3260,8 +3281,9 @@ export default function App() {
         let wsTaskCount = 0;
         if (!isStaticHostRef.current) {
           try {
+            const activeGasParam = encodeURIComponent(getEffectiveGasUrl());
             const wsRes = await fetch(
-              `/api/collab/workspace/${encodeURIComponent(workspaceId)}`,
+              `/api/collab/workspace/${encodeURIComponent(workspaceId)}?gasUrl=${activeGasParam}`,
               { cache: 'no-store' }
             );
             const wsCt = wsRes.headers.get('content-type') || '';
@@ -3607,7 +3629,6 @@ export default function App() {
             }
 
             if (
-              !workspaceHandled &&
               Array.isArray(data.tasks) &&
               (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
             ) {
@@ -3768,7 +3789,7 @@ export default function App() {
             setBoardSyncFailureCount(0);
           }
         } else {
-          lastRemoteRealtimeMsRef.current = Date.now();
+          // Do NOT bump lastRemoteRealtimeMsRef on TV heartbeats/presence/settings so background task sync is never starved
           setLastBoardSyncSuccessAt(Date.now());
           setBoardSyncFailureCount(0);
         }
