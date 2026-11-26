@@ -24,6 +24,8 @@ import {
   Tv,
   Unlock,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
@@ -126,6 +128,14 @@ import {
   renderDailyDigestTelegramCardPng,
   renderSingleTaskTelegramCardPng,
 } from './services/telegramCardRenderer';
+import {
+  getBrowserNotificationPermission,
+  playExecutiveNewTaskChime,
+  readAlertSoundEnabled,
+  requestBrowserNotificationPermission,
+  saveAlertSoundEnabled,
+  showBrowserNewTaskNotification,
+} from './services/teamAlertSound';
 
 type ActiveSection =
   | 'dashboard'
@@ -706,6 +716,169 @@ export default function App() {
   const closeConfirmDialog = () => {
     setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
   };
+
+  // Real-time Incoming Team Task Notification State (notifies other team members + Presentation TV Board)
+  const [incomingTeamAlert, setIncomingTeamAlert] = useState<{
+    id: string;
+    tasks: Task[];
+    receivedAt: number;
+  } | null>(null);
+  const [unreadIncomingTasks, setUnreadIncomingTasks] = useState<Task[]>([]);
+  const [recentlyAddedTaskIds, setRecentlyAddedTaskIds] = useState<Record<string, number>>({});
+  const [alertSoundEnabled, setAlertSoundEnabled] = useState<boolean>(() =>
+    readAlertSoundEnabled()
+  );
+  const alertSoundEnabledRef = useRef<boolean>(alertSoundEnabled);
+  const [browserNotifPermission, setBrowserNotifPermission] = useState<
+    NotificationPermission | 'unsupported'
+  >(() => getBrowserNotificationPermission());
+
+  const knownTaskIdsRef = useRef<Set<string>>(new Set(tasks.map((t) => t.id)));
+  const locallyCreatedTaskIdsRef = useRef<Set<string>>(new Set());
+  const hasHydratedRemoteTasksRef = useRef<boolean>(false);
+  const incomingAlertTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    alertSoundEnabledRef.current = alertSoundEnabled;
+  }, [alertSoundEnabled]);
+
+  useEffect(() => {
+    const hydrateTimer = window.setTimeout(() => {
+      hasHydratedRemoteTasksRef.current = true;
+    }, 2500);
+    return () => {
+      window.clearTimeout(hydrateTimer);
+      if (incomingAlertTimerRef.current !== null) {
+        window.clearTimeout(incomingAlertTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Object.keys(recentlyAddedTaskIds).length === 0) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setRecentlyAddedTaskIds((prev) => {
+        const next: Record<string, number> = {};
+        let changed = false;
+        for (const [id, exp] of Object.entries(prev)) {
+          if (exp > now) {
+            next[id] = exp;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [recentlyAddedTaskIds]);
+
+  const handleToggleAlertSound = useCallback(() => {
+    setAlertSoundEnabled((prev) => {
+      const next = !prev;
+      alertSoundEnabledRef.current = next;
+      saveAlertSoundEnabled(next);
+      if (next) {
+        playExecutiveNewTaskChime();
+      }
+      return next;
+    });
+  }, []);
+
+  const handleRequestBrowserNotifications = useCallback(async () => {
+    const perm = await requestBrowserNotificationPermission();
+    setBrowserNotifPermission(perm);
+  }, []);
+
+  const handleDismissIncomingTeamAlert = useCallback(() => {
+    if (incomingAlertTimerRef.current !== null) {
+      window.clearTimeout(incomingAlertTimerRef.current);
+      incomingAlertTimerRef.current = null;
+    }
+    setIncomingTeamAlert(null);
+  }, []);
+
+  const detectAndAnnounceRemoteNewTasks = useCallback((incomingTasks: Task[]) => {
+    if (!Array.isArray(incomingTasks) || incomingTasks.length === 0) return;
+    const known = knownTaskIdsRef.current;
+
+    if (!hasHydratedRemoteTasksRef.current) {
+      for (const t of incomingTasks) {
+        if (t?.id) known.add(t.id);
+      }
+      return;
+    }
+
+    const existingIds = new Set(tasksRef.current.map((t) => t.id));
+    const trulyNew: Task[] = [];
+    for (const t of incomingTasks) {
+      if (!t || !t.id || !t.title || !t.date) continue;
+      const alreadyKnown =
+        known.has(t.id) ||
+        existingIds.has(t.id) ||
+        locallyCreatedTaskIdsRef.current.has(t.id) ||
+        deletedTaskIdsRef.current.has(t.id);
+      known.add(t.id);
+      if (!alreadyKnown && t.status !== TaskStatus.COMPLETED) {
+        trulyNew.push(t);
+      }
+    }
+
+    if (trulyNew.length === 0) return;
+
+    const now = Date.now();
+    const expiry = now + 45000;
+    setRecentlyAddedTaskIds((prev) => {
+      const next = { ...prev };
+      for (const nt of trulyNew) {
+        next[nt.id] = expiry;
+      }
+      return next;
+    });
+
+    setUnreadIncomingTasks((prev) => {
+      const seen = new Set<string>();
+      const merged: Task[] = [];
+      for (const item of [...trulyNew, ...prev]) {
+        if (!item?.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        merged.push(item);
+        if (merged.length >= 10) break;
+      }
+      return merged;
+    });
+
+    setIncomingTeamAlert((prev) => {
+      const recentWindow = prev && now - prev.receivedAt < 10000 ? prev.tasks : [];
+      const seen = new Set<string>();
+      const combined: Task[] = [];
+      for (const item of [...trulyNew, ...recentWindow]) {
+        if (!item?.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        combined.push(item);
+        if (combined.length >= 5) break;
+      }
+      return {
+        id: `incoming-${now}`,
+        tasks: combined,
+        receivedAt: now,
+      };
+    });
+
+    if (incomingAlertTimerRef.current !== null) {
+      window.clearTimeout(incomingAlertTimerRef.current);
+    }
+    incomingAlertTimerRef.current = window.setTimeout(() => {
+      setIncomingTeamAlert(null);
+      incomingAlertTimerRef.current = null;
+    }, 18000);
+
+    if (alertSoundEnabledRef.current) {
+      playExecutiveNewTaskChime();
+    }
+    showBrowserNewTaskNotification(trulyNew, orgSettingsRef.current.agencyName);
+  }, []);
 
   // Save local backup whenever state changes (DO NOT push to server/GAS on initial mount so a team member's stale cache never overwrites Admin's calendar!)
   useEffect(() => {
@@ -3331,6 +3504,7 @@ export default function App() {
                   );
                   wsTaskCount = cleanWsTasks.length;
                   workspaceHandled = true;
+                  detectAndAnnounceRemoteNewTasks(cleanWsTasks);
                   if (
                     showFeedback ||
                     Date.now() - lastLocalMutationMsRef.current > 2000
@@ -3633,6 +3807,10 @@ export default function App() {
               (showFeedback || Date.now() - lastLocalMutationMsRef.current > 1500)
             ) {
               const gasDelSet = new Set<string>(deletedTaskIdsRef.current);
+              const cleanGasIncoming = decodedGas.tasks.filter(
+                (rt) => rt && rt.id && rt.title && rt.date && !isTaskPurgedOrDeleted(rt, gasDelSet)
+              );
+              detectAndAnnounceRemoteNewTasks(cleanGasIncoming);
               setTasks((prev) => {
                 const prevById = new Map<string, Task>(prev.map((p) => [p.id, p]));
                 const nextRemoteTasks: Task[] = [];
@@ -3732,6 +3910,7 @@ export default function App() {
         }
 
         if (anyRemoteSourceSucceeded) {
+          hasHydratedRemoteTasksRef.current = true;
           setLastBoardSyncSuccessAt(Date.now());
           setBoardSyncFailureCount(0);
         } else {
@@ -3762,6 +3941,7 @@ export default function App() {
     [
       areTaskListsEqual,
       deduplicateAndMergeTasks,
+      detectAndAnnounceRemoteNewTasks,
       extractGasMetadataFromTasks,
       isDefaultCategoryList,
       isTaskPurgedOrDeleted,
@@ -3849,6 +4029,7 @@ export default function App() {
           : [];
         if (upserts.length > 0) {
           markLiveTasksProtected(upserts);
+          detectAndAnnounceRemoteNewTasks(upserts);
         }
         if (ev.updatedAt) {
           lastSyncedTimestampRef.current = ev.updatedAt;
@@ -3934,6 +4115,14 @@ export default function App() {
           applyRemoteOrgSettingsIfNewer(decoded.orgSettings);
         }
         const cleanRemoteTasks = decoded.tasks.filter((t) => !isTaskPurgedOrDeleted(t, delSet));
+        if (ev.type === 'sync:init') {
+          for (const rt of cleanRemoteTasks) {
+            if (rt?.id) knownTaskIdsRef.current.add(rt.id);
+          }
+          hasHydratedRemoteTasksRef.current = true;
+        } else {
+          detectAndAnnounceRemoteNewTasks(cleanRemoteTasks);
+        }
         if (delSet.size > 0) {
           clearLiveTasksProtected(Array.from(delSet));
         }
@@ -4013,6 +4202,7 @@ export default function App() {
     bumpCategoriesUpdatedAt,
     clearLiveTasksProtected,
     deduplicateAndMergeTasks,
+    detectAndAnnounceRemoteNewTasks,
     extractGasMetadataFromTasks,
     isTaskPurgedOrDeleted,
     markLiveTasksProtected,
@@ -4130,7 +4320,8 @@ export default function App() {
   // Save (Create or Edit) Task
   const handleSaveTask = (
     taskData: Omit<Task, 'id' | 'updatedAt' | 'lineNotified'>,
-    existingId?: string
+    existingId?: string,
+    options?: { notifyTelegramNow?: boolean }
   ) => {
     lastLocalMutationMsRef.current = Date.now();
     const currentList = tasksRef.current;
@@ -4229,6 +4420,12 @@ export default function App() {
         }
       }
       markLiveTasksProtected([newTask]);
+      locallyCreatedTaskIdsRef.current.add(newTask.id);
+      knownTaskIdsRef.current.add(newTask.id);
+      setRecentlyAddedTaskIds((prev) => ({
+        ...prev,
+        [newTask.id]: Date.now() + 20000,
+      }));
       const nextTasks = existingSameTask
         ? currentList.map((t) => (t.id === existingSameTask.id ? newTask : t))
         : [newTask, ...currentList];
@@ -4258,6 +4455,83 @@ export default function App() {
           `เพิ่มงาน "${newTask.title}" ลงปฏิทินเรียบร้อยแล้ว`,
           newTask.date
         );
+      }
+
+      // Optional instant Telegram photo-card broadcast to the team group when a brand-new task is added
+      if (
+        !existingSameTask &&
+        options?.notifyTelegramNow &&
+        isTelegramConfigured(lineSettings)
+      ) {
+        void (async () => {
+          try {
+            const cat = categoriesRef.current.find((c) => c.id === newTask.categoryId);
+            const categoryName = cat?.name || 'ทั่วไป';
+            const catColor = cat?.color || '#0284C7';
+            const remindLabel = 'ภารกิจใหม่เข้าตาราง';
+            const pendingCount = nextTasks.filter((t) => t.status !== TaskStatus.COMPLETED).length;
+            const completedCount = nextTasks.length - pendingCount;
+            const summaryStats = {
+              total: nextTasks.length,
+              pending: pendingCount,
+              completed: completedCount,
+            };
+            const tgFormat = {
+              style: lineSettings.telegramStyle || 'executive_card',
+              headerTitle: lineSettings.telegramHeaderTitle,
+              showStats: lineSettings.telegramShowStats !== false,
+              showButtons: false,
+              cardFontSize: lineSettings.cardFontSize,
+              cardTitleWeight: lineSettings.cardTitleWeight,
+              cardLineSpacing: lineSettings.cardLineSpacing,
+            };
+            const includeDesc = lineSettings.includeDescriptionInNotification !== false;
+            const tgHtml = formatSingleTaskTelegramHtml({
+              task: newTask,
+              categoryName,
+              remindLabel,
+              includeDescription: includeDesc,
+              summaryStats,
+              isManualTrigger: true,
+              format: tgFormat,
+            });
+            if (lineSettings.telegramDeliveryMode !== 'text_html') {
+              const photoDataUrl = await renderSingleTaskTelegramCardPng({
+                task: newTask,
+                categoryName,
+                categoryColor: catColor,
+                remindLabel,
+                includeDescription: includeDesc,
+                summaryStats,
+                isManualTrigger: true,
+                format: tgFormat,
+              });
+              await sendTelegramPhotoCard({
+                botToken: lineSettings.telegramBotToken || '',
+                chatId: lineSettings.telegramChatId || '',
+                photoDataUrl,
+                captionHtml: buildShortTaskPhotoCaption({
+                  task: newTask,
+                  categoryName,
+                  remindLabel,
+                }),
+                fallbackHtmlText: tgHtml,
+                buttons: [],
+                dedupKey: `tg-new-task-${newTask.id}`,
+              });
+            } else {
+              await sendTelegramNotification({
+                botToken: lineSettings.telegramBotToken || '',
+                chatId: lineSettings.telegramChatId || '',
+                htmlText: tgHtml,
+                buttons: [],
+                dedupKey: `tg-new-task-${newTask.id}`,
+              });
+            }
+          } catch {
+            // Silently ignore Telegram broadcast failure so saving never breaks
+          }
+        })();
       }
     }
   };
@@ -5460,6 +5734,30 @@ export default function App() {
                   : 'ดีไซน์: Minimal Clean'}
               </span>
             </button>
+            <span aria-hidden="true" className="text-slate-300">
+              ·
+            </span>
+            <button
+              type="button"
+              onClick={handleToggleAlertSound}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[11px] font-semibold border transition-colors ${
+                alertSoundEnabled
+                  ? 'bg-emerald-50 border-emerald-200/90 text-emerald-800 hover:bg-emerald-100'
+                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-100'
+              }`}
+              title={
+                alertSoundEnabled
+                  ? 'เปิดเสียงแจ้งเตือนเมื่อสมาชิกในทีมเพิ่มตารางงานใหม่ (คลิกเพื่อปิดเสียง)'
+                  : 'ปิดเสียงแจ้งเตือนงานใหม่อยู่ (คลิกเพื่อเปิดเสียง)'
+              }
+            >
+              {alertSoundEnabled ? (
+                <Volume2 className="h-3.5 w-3.5 text-emerald-600" />
+              ) : (
+                <VolumeX className="h-3.5 w-3.5 text-slate-400" />
+              )}
+              <span>{alertSoundEnabled ? 'เสียงเตือนงานใหม่: เปิด' : 'เสียงเตือนงานใหม่: ปิด'}</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -5604,6 +5902,49 @@ export default function App() {
                 className="text-xs font-semibold underline shrink-0"
               >
                 ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Persistent Unread Incoming Team Tasks Strip (when members return to tab) */}
+      {unreadIncomingTasks.length > 0 && activeSection !== 'schedule' && (
+        <div className="max-w-[1360px] w-full mx-auto px-4 sm:px-6 pt-3">
+          <div className="rounded-xl border border-emerald-200/90 bg-emerald-50/85 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-emerald-950 shadow-2xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-white shrink-0">
+                <Bell className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <span className="font-bold">
+                  ทีมเพิ่มตารางงานใหม่ {unreadIncomingTasks.length} รายการ
+                </span>
+                <span className="mx-1.5 text-emerald-400">·</span>
+                <span className="text-emerald-900 font-medium truncate">
+                  {unreadIncomingTasks[0].title} ({formatTaskDateRangeLabel(unreadIncomingTasks[0], 'short')} · {unreadIncomingTasks[0].time} น.)
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  handleOpenDateInCalendar(unreadIncomingTasks[0].date);
+                  setUnreadIncomingTasks([]);
+                  handleDismissIncomingTeamAlert();
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold transition-colors"
+              >
+                <CalendarIcon className="h-3.5 w-3.5" />
+                <span>ดูในปฏิทิน</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setUnreadIncomingTasks([])}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300/80 bg-white hover:bg-emerald-100/70 text-emerald-900 font-semibold transition-colors"
+              >
+                รับทราบแล้ว
               </button>
             </div>
           </div>
@@ -6473,6 +6814,14 @@ export default function App() {
             isCloudSyncing={isSyncing}
             lastCloudSyncAt={lastBoardSyncSuccessAt}
             cloudSyncFailureCount={boardSyncFailureCount}
+            incomingTeamAlert={incomingTeamAlert}
+            onDismissIncomingTeamAlert={() => {
+              handleDismissIncomingTeamAlert();
+              setUnreadIncomingTasks([]);
+            }}
+            recentlyAddedTaskIds={recentlyAddedTaskIds}
+            alertSoundEnabled={alertSoundEnabled}
+            onToggleAlertSound={handleToggleAlertSound}
           />
         )}
 
@@ -6867,6 +7216,112 @@ export default function App() {
         </button>
       </nav>
 
+      {/* Live Floating Team New-Task Alert Toast (shown on Dashboard / Calendar / Team / Settings; Presentation Board renders its own TV overlay) */}
+      {incomingTeamAlert &&
+        incomingTeamAlert.tasks.length > 0 &&
+        activeSection !== 'schedule' && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-[85] w-[calc(100vw-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
+          >
+            <div
+              aria-hidden="true"
+              className="h-1.5 w-full bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500"
+            />
+            <div className="p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="h-9 w-9 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                    <Bell className="h-4.5 w-4.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+                      อัปเดตจากทีมแบบเรียลไทม์
+                    </p>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      {incomingTeamAlert.tasks.length === 1
+                        ? 'มีภารกิจใหม่เพิ่มเข้าตารางงาน'
+                        : `มีภารกิจใหม่เพิ่มเข้าตาราง ${incomingTeamAlert.tasks.length} รายการ`}
+                    </h4>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDismissIncomingTeamAlert}
+                  aria-label="ปิดการแจ้งเตือน"
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {incomingTeamAlert.tasks.slice(0, 3).map((t) => (
+                  <div
+                    key={t.id}
+                    className="rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2"
+                  >
+                    <p className="text-sm font-bold text-slate-900 leading-snug break-words">
+                      {t.title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-600 font-medium tabular-nums">
+                      {formatTaskDateRangeLabel(t, 'short')} · เวลา {t.time} น.
+                      {t.assigneeName ? ` · ผู้รับผิดชอบ: ${t.assigneeName}` : ''}
+                    </p>
+                  </div>
+                ))}
+                {incomingTeamAlert.tasks.length > 3 && (
+                  <p className="text-xs font-semibold text-slate-500 pl-1">
+                    และอีก {incomingTeamAlert.tasks.length - 3} รายการ
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleToggleAlertSound}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    {alertSoundEnabled ? (
+                      <Volume2 className="h-3.5 w-3.5 text-emerald-600" />
+                    ) : (
+                      <VolumeX className="h-3.5 w-3.5 text-slate-400" />
+                    )}
+                    <span>{alertSoundEnabled ? 'เสียงเปิด' : 'เสียงปิด'}</span>
+                  </button>
+                  {browserNotifPermission === 'default' && (
+                    <button
+                      type="button"
+                      onClick={handleRequestBrowserNotifications}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 transition-colors"
+                    >
+                      เปิดแจ้งเตือนหน้าจอเครื่อง
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const first = incomingTeamAlert.tasks[0];
+                      handleOpenDateInCalendar(first.date);
+                      setUnreadIncomingTasks([]);
+                      handleDismissIncomingTeamAlert();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors"
+                  >
+                    <CalendarIcon className="h-3.5 w-3.5" />
+                    <span>เปิดดูในปฏิทิน</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       {/* Task Add/Edit Modal */}
       <TaskFormModal
         isOpen={isTaskModalOpen}
@@ -6880,6 +7335,7 @@ export default function App() {
         initialDate={modalInitialDate}
         editingTask={editingTask}
         defaultRemindMinutes={lineSettings.defaultRemindMinutes}
+        canNotifyTelegramOnCreate={isTelegramConfigured(lineSettings)}
       />
 
       {/* Mandatory Confirmation Dialog for Mutating/Destructive Google Sheets Actions */}

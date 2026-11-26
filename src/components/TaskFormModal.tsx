@@ -12,12 +12,17 @@ import {
 interface TaskFormModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (taskData: Omit<Task, 'id' | 'updatedAt' | 'lineNotified'>, existingId?: string) => void;
+  onSave: (
+    taskData: Omit<Task, 'id' | 'updatedAt' | 'lineNotified'>,
+    existingId?: string,
+    options?: { notifyTelegramNow?: boolean }
+  ) => void;
   categories: Category[];
   existingTasks?: Task[];
   initialDate?: string;
   editingTask?: Task | null;
   defaultRemindMinutes: number;
+  canNotifyTelegramOnCreate?: boolean;
 }
 
 const QUICK_TIME_PRESETS = ['08:30', '09:00', '09:30', '10:00', '13:30', '14:00', '15:00'];
@@ -68,6 +73,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   initialDate,
   editingTask,
   defaultRemindMinutes,
+  canNotifyTelegramOnCreate = false,
 }) => {
   const [title, setTitle] = useState('');
   const [location, setLocation] = useState('');
@@ -79,6 +85,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   const [priority, setPriority] = useState<TaskPriority>(TaskPriority.MEDIUM);
   const [status, setStatus] = useState<TaskStatus>(TaskStatus.PENDING);
   const [remindMinutesBefore, setRemindMinutesBefore] = useState<number>(defaultRemindMinutes);
+  const [notifyTelegramNow, setNotifyTelegramNow] = useState<boolean>(true);
 
   const prevOpenSessionKeyRef = useRef<string>('');
   const isSubmittingRef = useRef<boolean>(false);
@@ -122,6 +129,7 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
       setPriority(TaskPriority.MEDIUM);
       setStatus(TaskStatus.PENDING);
       setRemindMinutesBefore(defaultRemindMinutes);
+      setNotifyTelegramNow(true);
     }
   }, [isOpen, editingTask, initialDate, categories, defaultRemindMinutes]);
 
@@ -187,7 +195,10 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
         remindMinutesBefore,
         source: editingTask?.source || 'web',
       },
-      editingTask?.id
+      editingTask?.id,
+      {
+        notifyTelegramNow: !editingTask && canNotifyTelegramOnCreate && notifyTelegramNow,
+      }
     );
     onClose();
   };
@@ -514,6 +525,24 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
               <span>{time}</span>
             </div>
           </div>
+
+          {/* Instant Team & Telegram Broadcast Option (for newly added tasks) */}
+          {!editingTask && canNotifyTelegramOnCreate && (
+            <label className="flex items-start gap-2.5 rounded-xl border border-sky-200/80 bg-sky-50/70 px-3.5 py-2.5 text-xs text-sky-950 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={notifyTelegramNow}
+                onChange={(e) => setNotifyTelegramNow(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-sky-300 text-sky-600 focus:ring-sky-500"
+              />
+              <span className="leading-relaxed">
+                <strong className="font-bold">แจ้งเตือนสมาชิกในกลุ่ม Telegram ทันที</strong>{' '}
+                <span className="text-sky-800">
+                  (ส่งเป็นการ์ดภาพพร้อมแสดงประกาศบนหน้าตารางนำเสนอและเครื่องของสมาชิกอื่นอัตโนมัติ)
+                </span>
+              </span>
+            </label>
+          )}
 
           {/* Submit Actions */}
           <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">

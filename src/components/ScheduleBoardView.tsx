@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Ban,
+  Bell,
   Building2,
   Calendar as CalendarIcon,
   Check,
@@ -35,6 +36,8 @@ import {
   Sunset,
   Tv,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   X,
@@ -105,6 +108,11 @@ interface ScheduleBoardViewProps {
   isCloudSyncing?: boolean;
   lastCloudSyncAt?: number | null;
   cloudSyncFailureCount?: number;
+  incomingTeamAlert?: { id: string; tasks: Task[]; receivedAt: number } | null;
+  onDismissIncomingTeamAlert?: () => void;
+  recentlyAddedTaskIds?: Record<string, number>;
+  alertSoundEnabled?: boolean;
+  onToggleAlertSound?: () => void;
 }
 
 type BoardRangeMode = 'upcoming' | 'today' | 'week7' | 'all';
@@ -609,6 +617,11 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
   isCloudSyncing = false,
   lastCloudSyncAt = null,
   cloudSyncFailureCount = 0,
+  incomingTeamAlert = null,
+  onDismissIncomingTeamAlert,
+  recentlyAddedTaskIds,
+  alertSoundEnabled = true,
+  onToggleAlertSound,
 }) => {
   // Real browser connectivity tracking + automatic cloud sync on reconnect
   const [isBrowserOnline, setIsBrowserOnline] = useState<boolean>(() =>
@@ -2494,6 +2507,7 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
         !isDone &&
         !isInProgress &&
         todayTasksSummary.nextUpcoming?.id === task.id;
+      const isRecentlyAdded = Boolean(recentlyAddedTaskIds?.[task.id]) && !isDone;
       const detectedVenue = extractLocationFromText(task.title, task.description);
       const displayDescription = task.description
         ? detectedVenue
@@ -2511,7 +2525,13 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
           className={`px-6 py-4 flex ${
             isTvStageActive ? 'flex-row items-center' : 'flex-col md:flex-row md:items-center'
           } justify-between gap-4 transition-colors ${
-            isNextUpcomingRow
+            isRecentlyAdded
+              ? isNavyGold
+                ? 'bg-amber-400/12 border-l-4 border-l-amber-400 hover:bg-amber-400/16'
+                : isDarkDisplay
+                ? 'bg-emerald-500/15 border-l-4 border-l-emerald-400 hover:bg-emerald-500/20'
+                : 'bg-emerald-50/90 border-l-4 border-l-emerald-600 hover:bg-emerald-50'
+              : isNextUpcomingRow
               ? isDarkDisplay
                 ? 'bg-amber-500/10 hover:bg-amber-500/15'
                 : 'bg-amber-50/70 hover:bg-amber-50'
@@ -2593,6 +2613,21 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                     }`}
                   >
                     · ด่วนมาก
+                  </span>
+                )}
+                {isRecentlyAdded && (
+                  <span
+                    className={`${
+                      isLargeText ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+                    } font-bold ${
+                      isNavyGold
+                        ? 'text-amber-300'
+                        : isDarkDisplay
+                        ? 'text-emerald-300'
+                        : 'text-emerald-700'
+                    }`}
+                  >
+                    · เพิ่มใหม่
                   </span>
                 )}
                 {isNextUpcomingRow && (
@@ -4163,6 +4198,38 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                   {isLargeText ? 'ตัวอักษรใหญ่ (TV)' : 'ขยายตัวอักษรใหญ่'}
                 </button>
 
+                {onToggleAlertSound && (
+                  <button
+                    type="button"
+                    onClick={onToggleAlertSound}
+                    title={
+                      alertSoundEnabled
+                        ? 'เปิดเสียงแจ้งเตือนเมื่อสมาชิกเพิ่มตารางงานใหม่ (คลิกเพื่อปิดเสียง)'
+                        : 'ปิดเสียงแจ้งเตือนงานใหม่อยู่ (คลิกเพื่อเปิดเสียง)'
+                    }
+                    className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap shrink-0 ${
+                      alertSoundEnabled
+                        ? isNavyGold
+                          ? 'bg-amber-400/18 text-amber-200 border-amber-400/55 hover:bg-amber-400/25'
+                          : isDarkDisplay
+                          ? 'bg-emerald-500/20 text-emerald-200 border-emerald-400/55 hover:bg-emerald-500/30'
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                        : isNavyGold
+                        ? 'bg-[#091526]/80 text-slate-300 border-amber-400/25 hover:border-amber-400/50'
+                        : isDarkDisplay
+                        ? 'bg-slate-800/90 text-slate-400 border-slate-700 hover:bg-slate-700'
+                        : 'bg-white text-slate-500 border-slate-200/90 hover:bg-slate-50'
+                    }`}
+                  >
+                    {alertSoundEnabled ? (
+                      <Volume2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <VolumeX className="h-3.5 w-3.5" />
+                    )}
+                    <span>{alertSoundEnabled ? 'เสียงเตือน: เปิด' : 'เสียงเตือน: ปิด'}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleCycleTheme}
@@ -4968,6 +5035,21 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
                           >
                             {task.title}
                           </button>
+                          {Boolean(recentlyAddedTaskIds?.[task.id]) && !isDone && (
+                            <span
+                              className={`ml-2 font-bold ${
+                                isLargeText ? 'text-sm' : 'text-xs'
+                              } ${
+                                isNavyGold
+                                  ? 'text-amber-300'
+                                  : isDarkDisplay
+                                  ? 'text-emerald-300'
+                                  : 'text-emerald-700'
+                              }`}
+                            >
+                              · เพิ่มใหม่
+                            </span>
+                          )}
                           {totalSpanDays > 1 && (
                             <div
                               className={`text-xs font-semibold mt-0.5 ${
@@ -5769,6 +5851,169 @@ export const ScheduleBoardView: React.FC<ScheduleBoardViewProps> = ({
       {tvRemoteToast && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[70] pointer-events-none rounded-xl border border-emerald-400/50 bg-slate-950/92 px-4 py-2 text-xs sm:text-sm font-bold text-white shadow-2xl backdrop-blur-md">
           {tvRemoteToast}
+        </div>
+      )}
+      {/* Executive Broadcast New-Task Alert Overlay — Visible in Normal, Fullscreen, and TV Clean Signage Mode */}
+      {incomingTeamAlert && incomingTeamAlert.tasks.length > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-6 right-5 left-5 sm:left-auto z-[75] rounded-2xl border shadow-2xl overflow-hidden backdrop-blur-md transition-all ${
+            isTvStageActive || isLargeText ? 'sm:w-[520px]' : 'sm:w-[440px]'
+          } ${
+            isNavyGold
+              ? 'bg-[#091526]/95 border-amber-400/70 text-white'
+              : isDarkDisplay
+              ? 'bg-slate-900/95 border-emerald-400/60 text-white'
+              : isEmeraldExec
+              ? 'bg-white/97 border-emerald-500/80 text-slate-900'
+              : 'bg-white/97 border-indigo-400/70 text-slate-900'
+          }`}
+        >
+          <div
+            aria-hidden="true"
+            className={`h-1.5 w-full ${
+              isNavyGold
+                ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-emerald-400'
+                : 'bg-gradient-to-r from-emerald-500 via-teal-400 to-amber-400'
+            }`}
+          />
+          <div className={`${isTvStageActive || isLargeText ? 'p-5 space-y-3.5' : 'p-4 space-y-3'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div
+                  className={`rounded-xl flex items-center justify-center shrink-0 ${
+                    isTvStageActive || isLargeText ? 'h-12 w-12' : 'h-10 w-10'
+                  } ${
+                    isNavyGold
+                      ? 'bg-amber-400/20 border border-amber-400/50 text-amber-300'
+                      : isDarkDisplay
+                      ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-300'
+                      : 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                  }`}
+                >
+                  <Bell className={isTvStageActive || isLargeText ? 'h-6 w-6' : 'h-5 w-5'} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="motion-reduce:animate-none animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                    </span>
+                    <p
+                      className={`font-bold uppercase tracking-wider ${
+                        isTvStageActive || isLargeText ? 'text-xs' : 'text-[11px]'
+                      } ${
+                        isNavyGold
+                          ? 'text-amber-300'
+                          : isDarkDisplay
+                          ? 'text-emerald-300'
+                          : 'text-emerald-700'
+                      }`}
+                    >
+                      อัปเดตตารางงานใหม่จากทีม
+                    </p>
+                  </div>
+                  <h4
+                    className={`font-extrabold leading-tight mt-0.5 ${
+                      isTvStageActive || isLargeText ? 'text-xl' : 'text-base'
+                    }`}
+                  >
+                    {incomingTeamAlert.tasks.length === 1
+                      ? 'มีภารกิจใหม่เข้าตารางนำเสนอ'
+                      : `มีภารกิจใหม่เข้าตาราง ${incomingTeamAlert.tasks.length} รายการ`}
+                  </h4>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {onToggleAlertSound && (
+                  <button
+                    type="button"
+                    onClick={onToggleAlertSound}
+                    aria-label={alertSoundEnabled ? 'ปิดเสียงแจ้งเตือน' : 'เปิดเสียงแจ้งเตือน'}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      isDarkDisplay
+                        ? 'text-slate-300 hover:bg-white/10 hover:text-white'
+                        : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                    }`}
+                  >
+                    {alertSoundEnabled ? (
+                      <Volume2 className="h-4 w-4" />
+                    ) : (
+                      <VolumeX className="h-4 w-4" />
+                    )}
+                  </button>
+                )}
+                {onDismissIncomingTeamAlert && (
+                  <button
+                    type="button"
+                    onClick={onDismissIncomingTeamAlert}
+                    aria-label="ปิดการแจ้งเตือน"
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      isDarkDisplay
+                        ? 'text-slate-300 hover:bg-white/10 hover:text-white'
+                        : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                    }`}
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {incomingTeamAlert.tasks.slice(0, 3).map((t) => (
+                <div
+                  key={t.id}
+                  className={`rounded-xl border px-3.5 py-2.5 ${
+                    isNavyGold
+                      ? 'bg-[#0F233F]/90 border-amber-400/25'
+                      : isDarkDisplay
+                      ? 'bg-slate-800/90 border-slate-700'
+                      : 'bg-slate-50 border-slate-200/90'
+                  }`}
+                >
+                  <p
+                    className={`font-bold leading-snug break-words ${
+                      isTvStageActive || isLargeText ? 'text-lg' : 'text-sm sm:text-base'
+                    }`}
+                  >
+                    {t.title}
+                  </p>
+                  <div
+                    className={`mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 tabular-nums font-semibold ${
+                      isTvStageActive || isLargeText ? 'text-sm' : 'text-xs'
+                    } ${
+                      isNavyGold
+                        ? 'text-amber-200'
+                        : isDarkDisplay
+                        ? 'text-emerald-300'
+                        : 'text-indigo-800'
+                    }`}
+                  >
+                    <span>{formatTaskDateRangeLabel(t, 'short')}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>เวลา {t.time} น.</span>
+                    {t.assigneeName && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>ผู้รับผิดชอบ: {t.assigneeName}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {incomingTeamAlert.tasks.length > 3 && (
+                <p
+                  className={`text-xs font-semibold pl-1 ${
+                    isDarkDisplay ? 'text-slate-300' : 'text-slate-600'
+                  }`}
+                >
+                  และอีก {incomingTeamAlert.tasks.length - 3} รายการที่เพิ่มเข้ามาใหม่
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
       {/* 1-Tap / Remote OK Native Fullscreen Prompt when TV browser blocks auto-fullscreen on load */}
